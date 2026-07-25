@@ -1,5 +1,13 @@
-// TODO(Bloque 2): implementar MCP server con tools search_properties,
-// get_property, search_leads, get_lead, log_activity contra la API real de
-// Tokko. Sin credenciales confirmadas todavia -> mockear y marcar cada tool
-// con // TODO: validar contra API real de Tokko.
-export {};
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer } from "./server.js";
+
+async function main() {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((error) => {
+  console.error("mcp-tokko no pudo iniciar:", error);
+  process.exit(1);
+});

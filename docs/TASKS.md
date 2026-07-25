@@ -27,20 +27,32 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       va a consumir en el Bloque 3.
 
 ## Bloque 2 — MCP servers (en este orden: weather, gcal, tokko)
-- [ ] `mcp-servers/mcp-weather`: tool `get_forecast(lat, lng, date)`.
-      Es el más simple, sirve para fijar el patrón de MCP server del
-      proyecto (estructura de carpeta, cómo se testea, cómo se declara un
-      tool) antes de meterse con integraciones más complejas.
-- [ ] `mcp-servers/mcp-gcal`: tools `freebusy`, `create_event`,
-      `patch_event`, `delete_event`, `list_events`. Partir de un server
-      MCP de referencia de Google Calendar existente y adaptarlo, no
-      escribirlo desde cero.
-- [ ] `mcp-servers/mcp-tokko`: tools `search_properties`, `get_property`,
-      `search_leads`, `get_lead`, `log_activity`. Si no hay credenciales
-      reales todavía, implementar con mocks y dejar marcado
-      `// TODO: validar contra API real de Tokko` en cada tool.
-- [ ] Cada MCP server tiene al menos un test que lo ejercita de forma
-      aislada.
+- [x] `mcp-servers/mcp-weather`: tool `get_forecast(lat, lng, date)` contra
+      el endpoint gratuito de OpenWeatherMap (5 day/3 hour forecast).
+      Patrón fijado: `config.ts` (env), `openWeatherMapClient.ts` (cliente
+      HTTP + parseo, inyectable para tests), `tools/getForecast.ts`
+      (handler MCP puro, nunca inventa datos si el provider falla),
+      `server.ts` (registro del tool), `index.ts` (entrypoint stdio).
+      7 tests aislados (sin red real) en `openWeatherMapClient.test.ts` y
+      `tools/getForecast.test.ts`.
+- [x] `mcp-servers/mcp-gcal`: tools `freebusy`, `create_event`,
+      `patch_event`, `delete_event`, `list_events` — más `get_event`
+      (no estaba en esta lista pero lo usan `reprogramar_cancelar_visita`
+      y `consulta_clima_visita` en `docs/intent_catalog.yaml`, que manda
+      sobre este resumen). Adaptado del patrón de nspady/google-calendar-mcp
+      (referencia pública en TS) pero simplificado a un solo calendario/
+      cuenta vía OAuth refresh token (`GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN
+      /CALENDAR_ID`), sin multi-account. 11 tests aislados (transforms
+      puros + handlers con un `CalendarClient` stub, sin red real).
+- [x] `mcp-servers/mcp-tokko`: tools `search_properties`, `get_property`,
+      `search_leads`, `get_lead`, `log_activity` contra `MockTokkoClient`
+      (en memoria, con 2 propiedades/2 leads de ejemplo). Sin credenciales
+      reales todavía — marcado `// TODO: reemplazar por credenciales reales
+      de Tokko` en `server.ts` y `tokkoClient.ts`. Reutiliza `Property`/
+      `Lead` de `shared-types`. 12 tests aislados.
+- [x] Cada MCP server tiene al menos un test que lo ejercita de forma
+      aislada (mcp-weather 7, mcp-gcal 11, mcp-tokko 12 — todos sin red
+      real ni dependencia del orchestrator).
 
 ## Bloque 3 — Orchestrator: loop mínimo end-to-end
 - [ ] Webhook handler de WhatsApp Cloud API (`channels/whatsapp`):

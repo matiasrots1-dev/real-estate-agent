@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=shared-types && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "dev:orchestrator": "npm run dev --workspace=apps/orchestrator"
   },

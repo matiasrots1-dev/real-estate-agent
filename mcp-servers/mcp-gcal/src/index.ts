@@ -1,3 +1,13 @@
-// TODO(Bloque 2): implementar MCP server con tools freebusy, create_event,
-// patch_event, delete_event, list_events (partir de un server de referencia).
-export {};
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer } from "./server.js";
+
+async function main() {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((error) => {
+  console.error("mcp-gcal no pudo iniciar:", error);
+  process.exit(1);
+});

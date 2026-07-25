@@ -1,2 +1,13 @@
-// TODO(Bloque 2): implementar MCP server con tool get_forecast(lat, lng, date).
-export {};
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer } from "./server.js";
+
+async function main() {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((error) => {
+  console.error("mcp-weather no pudo iniciar:", error);
+  process.exit(1);
+});
