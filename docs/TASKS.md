@@ -17,12 +17,14 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       found"; se reemplazan en los bloques 1-3).
 
 ## Bloque 1 — Tipos compartidos
-- [ ] `packages/shared-types`: definir `Intent`, `IntentCatalog`,
+- [x] `packages/shared-types`: definir `Intent`, `IntentCatalog`,
       `ConversationState`, `Property`, `Lead`, `Appointment`,
       `AuditLogEntry` a partir de `docs/intent_catalog.yaml` y `docs/SOW.md`.
-- [ ] Un loader/parser de `docs/intent_catalog.yaml` con validación de
-      schema (usar zod o similar) — este loader lo va a usar el
-      orchestrator en runtime.
+- [x] Un loader/parser de `docs/intent_catalog.yaml` con validación de
+      schema (zod) — `loadIntentCatalogFromFile` / `parseIntentCatalog` en
+      `packages/shared-types/src/loader.ts`. Testeado contra el YAML real
+      del proyecto (`src/loader.test.ts`, 4 tests OK). El orchestrator lo
+      va a consumir en el Bloque 3.
 
 ## Bloque 2 — MCP servers (en este orden: weather, gcal, tokko)
 - [ ] `mcp-servers/mcp-weather`: tool `get_forecast(lat, lng, date)`.

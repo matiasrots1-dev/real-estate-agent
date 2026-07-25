@@ -1,3 +1,7 @@
-// TODO(Bloque 1): definir Intent, IntentCatalog, ConversationState, Property,
-// Lead, Appointment, AuditLogEntry a partir de docs/intent_catalog.yaml y docs/SOW.md.
-export {};
+export * from "./schemas/intentCatalog.js";
+export * from "./loader.js";
+export * from "./types/property.js";
+export * from "./types/lead.js";
+export * from "./types/appointment.js";
+export * from "./types/conversation.js";
+export * from "./types/auditLog.js";
