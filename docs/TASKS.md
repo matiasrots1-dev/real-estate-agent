@@ -4,13 +4,17 @@ Orden sugerido. Marcá cada una al completarla. No saltes al bloque 3 sin
 haber cerrado el bloque 2 con un test que lo pruebe.
 
 ## Bloque 0 — Setup del monorepo
-- [ ] Completar `package.json` raíz con npm/pnpm workspaces apuntando a
+- [x] Completar `package.json` raíz con npm/pnpm workspaces apuntando a
       `apps/*`, `mcp-servers/*`, `packages/*`.
-- [ ] Configurar `tsconfig.base.json` y que cada paquete lo extienda.
-- [ ] `docker-compose.yml`: levantar Postgres local (Redis se agrega en
-      fase 2, no antes).
-- [ ] Confirmar que `npm run build` corre sin errores en todo el monorepo
-      aunque los paquetes estén vacíos.
+- [x] Configurar `tsconfig.base.json` y que cada paquete lo extienda.
+- [~] `docker-compose.yml`: Postgres local configurado (Redis comentado,
+      se agrega en fase 2). Config lista pero no verificada corriendo en
+      este entorno — no hay Docker instalado en esta máquina. Confirmar
+      `docker compose up -d postgres` localmente.
+- [x] Confirmar que `npm run build` corre sin errores en todo el monorepo
+      aunque los paquetes estén vacíos (se agregaron placeholders `src/*.ts`
+      mínimos en cada paquete para que `tsc` no falle con "no inputs were
+      found"; se reemplazan en los bloques 1-3).
 
 ## Bloque 1 — Tipos compartidos
 - [ ] `packages/shared-types`: definir `Intent`, `IntentCatalog`,
