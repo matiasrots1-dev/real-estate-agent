@@ -1,0 +1,404 @@
+# intent_catalog.yaml
+#
+# Catálogo de intents del agente inmobiliario. Es la fuente de verdad de reglas
+# de negocio: qué reconoce el agente, qué tools dispara, y cuándo escala a vos.
+# El router (LLM o clasificador liviano) matchea el mensaje entrante contra
+# `triggers.examples` (few-shot / embeddings), no contra keywords exactas.
+#
+# Cómo leer cada intent:
+#   id                        -> identificador único, usado en logs/audit_log
+#   channel                   -> "cliente" | "broker" | "any"
+#   triggers.examples         -> frases de referencia para el matcher (agregá las
+#                                 reales que veas en producción, son más valiosas
+#                                 que las inventadas acá)
+#   tools                     -> lista de tools MCP que el agente puede invocar
+#   requires_client_confirmation -> si antes de ejecutar hay que confirmar con el cliente
+#   requires_broker            -> true | false | "conditional"
+#   escalation_reason          -> por qué escala (solo si requires_broker != false)
+#   confidence_threshold       -> por debajo de esto, cae a fallback_low_confidence
+#   response.style              -> "template" (texto fijo con variables) |
+#                                   "generative_grounded" (LLM redacta, pero solo con
+#                                   datos que vinieron de un tool, nunca inventa)
+#   response.template           -> solo si style = template
+#
+# Reglas globales de escalamiento (ver docs/escalation_policy.md):
+#   1. requires_broker = true en el intent matcheado
+#   2. confianza del match < confidence_threshold del intent (o < default_confidence_threshold)
+#   3. señales de negociación de precio / monto fuera de lo publicado
+#   4. señales de disconformidad / reclamo
+#   5. términos legales/contractuales
+#   6. acción irreversible de alto impacto (ej. cancelar visita ya confirmada 2 veces)
+#   7. el cliente pide explícitamente hablar con una persona
+
+version: 1
+
+meta:
+  default_confidence_threshold: 0.75
+  escalation_channel: "broker_whatsapp"     # a dónde se manda la notificación de escalamiento
+  audit_log: true                            # loguear siempre intent + confianza + tools llamadas
+  language: "es-AR"
+
+# ---------------------------------------------------------------------------
+# INTENTS — CANAL CLIENTE
+# ---------------------------------------------------------------------------
+intents:
+
+  - id: consulta_disponibilidad
+    description: "El cliente pregunta si una propiedad sigue disponible."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "¿el depto de Palermo sigue disponible?"
+        - "¿todavía está el 2 ambientes de Av. Cabildo?"
+        - "quería saber si se alquiló ya la casa de Nuñez"
+        - "sigue en pie la propiedad que vi en el portal?"
+    tools:
+      - tokko.search_properties
+      - tokko.get_property
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.7
+    response:
+      style: generative_grounded
+      grounding_fields: [estado, direccion, tipo, precio]
+      fallback_if_not_found: "No encontré esa propiedad con esos datos, ¿me pasás la dirección o el link del aviso?"
+
+  - id: consulta_precio_condiciones
+    description: "Precio, expensas, requisitos, garantías, forma de pago publicados."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "¿cuánto sale el alquiler?"
+        - "¿qué garantía piden?"
+        - "¿cuánto son las expensas?"
+        - "¿aceptan garantía propietaria?"
+        - "¿cuánto es el depósito?"
+    tools:
+      - tokko.get_property
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.75
+    response:
+      style: generative_grounded
+      grounding_fields: [precio, expensas, requisitos, garantias_aceptadas]
+      # importante: si el campo no está cargado en Tokko, el agente NO debe inventar
+      fallback_if_missing_field: "Ese dato no lo tengo cargado, te confirmo en breve."
+
+  - id: pedido_ficha_multimedia
+    description: "Cliente pide fotos, planos, video o más info visual de una propiedad."
+    channel: cliente
+    priority: normal
+    triggers:
+      examples:
+        - "mandame fotos"
+        - "tenés el plano?"
+        - "hay video del depto?"
+        - "pasame más fotos de la cocina"
+    tools:
+      - tokko.get_property
+      - whatsapp.send_media
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.75
+    response:
+      style: template
+      template: "Te paso el material de {direccion_corta}:"
+
+  - id: agendar_visita
+    description: "Cliente quiere coordinar una visita presencial."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "quiero ir a verlo"
+        - "¿puedo pasar el sábado a la tarde?"
+        - "me gustaría coordinar una visita"
+        - "cuándo lo puedo ir a ver"
+    tools:
+      - gcal.freebusy
+      - gcal.create_event
+      - tokko.log_activity
+      - weather.get_forecast   # se agrega al recordatorio, no a la confirmación inicial
+    requires_client_confirmation: true   # el cliente debe confirmar el horario propuesto
+    requires_broker: "conditional"
+    escalation_reason: "Solo si no hay disponibilidad compatible en las próximas 72hs o el cliente pide un horario fuera de rango habitual (antes de 9am, después de 20hs, domingo)."
+    confidence_threshold: 0.75
+    response:
+      style: generative_grounded
+      grounding_fields: [horarios_disponibles]
+
+  - id: reprogramar_cancelar_visita
+    description: "Cliente quiere cambiar o cancelar una visita ya agendada."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "no voy a poder el sábado, ¿lo pasamos?"
+        - "cancelame la visita de mañana"
+        - "¿puedo ir más tarde en vez de a las 11?"
+    tools:
+      - gcal.get_event
+      - gcal.patch_event
+      - gcal.delete_event
+      - tokko.log_activity
+    requires_client_confirmation: true
+    requires_broker: "conditional"
+    escalation_reason: "Si es la 2da reprogramación de la misma visita, escalar (posible señal de desinterés o cliente problemático) en vez de reprogramar automáticamente de nuevo."
+    confidence_threshold: 0.75
+    response:
+      style: template
+      template: "Listo, {accion} tu visita de {direccion_corta}. {detalle_nuevo_horario}"
+
+  - id: consulta_clima_visita
+    description: "Cliente (o vos) pregunta por el clima de una visita agendada."
+    channel: any
+    priority: low
+    triggers:
+      examples:
+        - "¿va a llover el sábado?"
+        - "¿cómo va a estar el clima para la visita?"
+    tools:
+      - gcal.get_event
+      - weather.get_forecast
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.7
+    response:
+      style: generative_grounded
+      grounding_fields: [pronostico, temperatura]
+
+  - id: negociacion_precio
+    description: "Cliente propone un monto distinto al publicado o pide descuento/condiciones especiales."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "¿hacen descuento por pago contado?"
+        - "te ofrezco 10% menos, ¿cerramos?"
+        - "¿aceptarían menos de expensas incluidas?"
+    tools: []   # no ejecuta nada solo, únicamente recolecta contexto
+    requires_client_confirmation: false
+    requires_broker: true
+    escalation_reason: "Cualquier apartamiento de precio/condiciones publicadas requiere criterio comercial del broker."
+    confidence_threshold: 0.8
+    response:
+      style: template
+      template: "Dejame confirmar esa condición con el asesor y te respondo a la brevedad."
+
+  - id: reclamo_queja
+    description: "Cualquier mensaje con tono de disconformidad, enojo o reclamo."
+    channel: cliente
+    priority: critical
+    triggers:
+      examples:
+        - "esto es un desastre, nadie me atiende"
+        - "llevo dos semanas esperando una respuesta"
+        - "quiero hablar con alguien ya"
+        - "no es lo que me habían dicho"
+    tools: []
+    requires_client_confirmation: false
+    requires_broker: true
+    escalation_reason: "No usar respuesta genérica frente a disconformidad; siempre pasa a revisión humana con prioridad alta."
+    confidence_threshold: 0.6   # umbral más bajo a propósito: mejor sobre-escalar acá
+    response:
+      style: template
+      template: "Entiendo, te voy a poner en contacto directo con el asesor para resolverlo cuanto antes."
+
+  - id: consulta_legal_contractual
+    description: "Preguntas sobre rescisión, cláusulas contractuales, plazos legales."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "¿qué pasa si rescindo antes de tiempo?"
+        - "¿cuál es la multa por salir antes del contrato?"
+        - "¿qué dice la ley de alquileres sobre esto?"
+    tools: []
+    requires_client_confirmation: false
+    requires_broker: true
+    escalation_reason: "Temas legales/contractuales siempre requieren respuesta del broker, no del agente."
+    confidence_threshold: 0.75
+    response:
+      style: template
+      template: "Es un tema para consultarlo puntualmente, te contacto con el asesor."
+
+  - id: hablar_con_persona
+    description: "Pedido explícito de hablar con un humano."
+    channel: cliente
+    priority: critical
+    triggers:
+      examples:
+        - "quiero hablar con una persona"
+        - "pasame con el agente"
+        - "no quiero hablar con un bot"
+    tools: []
+    requires_client_confirmation: false
+    requires_broker: true
+    escalation_reason: "Pedido explícito, se respeta siempre sin excepción."
+    confidence_threshold: 0.6
+    response:
+      style: template
+      template: "Por supuesto, te contacto con el asesor en breve."
+
+  - id: fallback_low_confidence
+    description: "Intent no matcheado con confianza suficiente contra ningún otro intent."
+    channel: any
+    priority: normal
+    triggers:
+      examples: []   # es el catch-all, no tiene ejemplos propios
+    tools: []
+    requires_client_confirmation: false
+    requires_broker: true
+    escalation_reason: "Mensaje ambiguo o fuera del catálogo. Se manda transcripción completa + borrador de respuesta sugerido al broker."
+    confidence_threshold: null
+    response:
+      style: template
+      template: "Dejame confirmarlo con el asesor y te respondo enseguida."
+
+  # -------------------------------------------------------------------------
+  # INTENTS PROACTIVOS (disparados por reglas temporales, no por mensaje entrante)
+  # -------------------------------------------------------------------------
+
+  - id: recordatorio_visita
+    description: "Recordatorio automático antes de una visita agendada."
+    channel: cliente
+    priority: normal
+    trigger_type: scheduled
+    schedule_rules:
+      - offset: "-24h"
+      - offset: "-2h"
+    tools:
+      - gcal.get_event
+      - weather.get_forecast
+      - whatsapp.send_template
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: null
+    response:
+      style: template
+      template: "Te recuerdo tu visita a {direccion_corta} el {fecha_hora}. {info_clima}"
+      whatsapp_template_name: "recordatorio_visita_v1"   # debe existir aprobada en Meta
+
+  - id: recontacto_lead_frio
+    description: "Lead sin respuesta después de N días de la última interacción."
+    channel: cliente
+    priority: low
+    trigger_type: scheduled
+    schedule_rules:
+      - condition: "dias_sin_respuesta >= 5"
+      - condition: "dias_sin_respuesta >= 15"
+      - condition: "dias_sin_respuesta >= 30"
+    tools:
+      - tokko.get_lead
+      - tokko.search_properties   # para ofrecer alternativas similares si la original ya no está
+      - whatsapp.send_template
+    requires_client_confirmation: false
+    requires_broker: "conditional"
+    escalation_reason: "El 3er intento de recontacto (30 días) se envía a revisión del broker antes de mandarse, no automático."
+    confidence_threshold: null
+    response:
+      style: generative_grounded
+      whatsapp_template_name: "recontacto_lead_v1"
+
+  - id: seguimiento_post_visita
+    description: "Feedback después de una visita ya realizada."
+    channel: cliente
+    priority: normal
+    trigger_type: scheduled
+    schedule_rules:
+      - offset: "+3h"   # mismo día, unas horas después de la visita
+    tools:
+      - tokko.log_activity
+      - whatsapp.send_template
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: null
+    response:
+      style: template
+      template: "¿Qué te pareció la propiedad de {direccion_corta}? Cualquier duda quedo atento."
+      whatsapp_template_name: "seguimiento_post_visita_v1"
+
+  # -------------------------------------------------------------------------
+  # INTENTS — CANAL BROKER (vos hablándole al agente)
+  # -------------------------------------------------------------------------
+
+  - id: broker_resumen_agenda
+    description: "Pedís un resumen de tu agenda de visitas."
+    channel: broker
+    priority: normal
+    triggers:
+      examples:
+        - "resumen de mañana"
+        - "¿cómo viene mi agenda de la semana?"
+        - "qué visitas tengo hoy"
+    tools:
+      - gcal.list_events
+      - tokko.get_lead
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.7
+    response:
+      style: generative_grounded
+
+  - id: broker_resumen_leads
+    description: "Pedís estado de leads (nuevos, fríos, en negociación)."
+    channel: broker
+    priority: normal
+    triggers:
+      examples:
+        - "resumen de leads de esta semana"
+        - "¿qué leads están sin respuesta?"
+        - "dame el estado de los leads fríos"
+    tools:
+      - tokko.search_leads
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.7
+    response:
+      style: generative_grounded
+
+  - id: broker_accion_directa
+    description: "Le das una orden compuesta al agente para que ejecute sobre un cliente puntual."
+    channel: broker
+    priority: high
+    triggers:
+      examples:
+        - "mandale la ficha del depto de Palermo a Juan y ofrecele el sábado a las 11"
+        - "cancelale la visita a María y decile que la reprogramamos"
+        - "avisale a todos los leads fríos de más de 30 días que bajamos el precio del depto de Nuñez"
+    tools:
+      - tokko.get_property
+      - tokko.search_leads
+      - gcal.create_event
+      - gcal.patch_event
+      - whatsapp.send_message
+      - whatsapp.send_template
+    requires_client_confirmation: false
+    requires_broker: false   # ya sos vos dando la orden directamente
+    confidence_threshold: 0.8
+    response:
+      style: generative_grounded
+      # antes de ejecutar acciones masivas (ej. "a todos los leads fríos") el agente
+      # debe devolver un preview ("esto le va a llegar a 14 contactos, ¿confirmás?")
+      requires_preview_if_bulk: true
+
+  - id: broker_pausar_agente
+    description: "Pausás temporalmente las respuestas automáticas a un cliente puntual o en general."
+    channel: broker
+    priority: high
+    triggers:
+      examples:
+        - "no le respondas más al bot a Juan, lo manejo yo"
+        - "pausá el agente por hoy"
+        - "reactivá el agente"
+    tools:
+      - state.set_conversation_flag
+      - state.set_global_flag
+    requires_client_confirmation: false
+    requires_broker: false
+    confidence_threshold: 0.75
+    response:
+      style: template
+      template: "Listo, {accion} para {alcance}."

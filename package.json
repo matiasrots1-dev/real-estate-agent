@@ -1,0 +1,19 @@
+{
+  "name": "real-estate-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agente de IA para automatizar tareas repetitivas de un broker inmobiliario, vía WhatsApp, Tokko Broker y Google Calendar.",
+  "workspaces": [
+    "apps/*",
+    "mcp-servers/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev:orchestrator": "npm run dev --workspace=apps/orchestrator"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
