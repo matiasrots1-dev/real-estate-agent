@@ -9,6 +9,17 @@ describe("MockTokkoClient", () => {
     expect(results[0].direccionCorta).toBe("Depto Palermo");
   });
 
+  it("busca por dirección con frase libre extraída por el classifier (ej. \"depto Palermo\", no solo \"Palermo\")", async () => {
+    // Regresión: el orchestrator real le pide a Claude que extraiga un
+    // search_query del mensaje del cliente, y devuelve frases como "depto
+    // Palermo", no el nombre pelado del barrio. Exigir substring exacto
+    // rompía este caso en producción (ver docs/TASKS.md Bloque 3).
+    const client = new MockTokkoClient();
+    const results = await client.searchProperties({ direccion: "depto Palermo" });
+    expect(results).toHaveLength(1);
+    expect(results[0].direccionCorta).toBe("Depto Palermo");
+  });
+
   it("devuelve [] si ninguna propiedad matchea el filtro", async () => {
     const client = new MockTokkoClient();
     const results = await client.searchProperties({ barrio: "Nuñez" });

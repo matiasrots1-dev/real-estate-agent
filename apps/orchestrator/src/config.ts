@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/orchestrator/src -> repo root
-const REPO_ROOT = path.resolve(__dirname, "../../..");
+export const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 export interface OrchestratorConfig {
   port: number;

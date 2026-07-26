@@ -72,6 +72,23 @@ function normalize(value: string): string {
   return value.toLowerCase().normalize("NFD").replace(DIACRITICS_REGEX, "");
 }
 
+// El classifier del orchestrator extrae `search_query` de lenguaje libre
+// (ej. "depto Palermo", no solo "Palermo") — exigir que ese string completo
+// aparezca como substring literal en la dirección es demasiado frágil.
+// Matcheamos si ALGUNA palabra significativa de la query aparece en la
+// dirección (descartamos palabras muy cortas tipo "el"/"de" para no matchear
+// cualquier cosa).
+const MIN_SIGNIFICANT_WORD_LENGTH = 3;
+
+function matchesAnyWord(haystack: string, query: string): boolean {
+  const normalizedHaystack = normalize(haystack);
+  const words = normalize(query)
+    .split(/\s+/)
+    .filter((word) => word.length >= MIN_SIGNIFICANT_WORD_LENGTH);
+  if (words.length === 0) return normalizedHaystack.includes(normalize(query));
+  return words.some((word) => normalizedHaystack.includes(word));
+}
+
 export class MockTokkoClient implements TokkoClient {
   constructor(
     private readonly properties: Property[] = MOCK_PROPERTIES,
@@ -80,10 +97,10 @@ export class MockTokkoClient implements TokkoClient {
 
   async searchProperties(filters: PropertySearchFilters): Promise<Property[]> {
     return this.properties.filter((property) => {
-      if (filters.barrio && !normalize(property.direccion).includes(normalize(filters.barrio))) {
+      if (filters.barrio && !matchesAnyWord(property.direccion, filters.barrio)) {
         return false;
       }
-      if (filters.direccion && !normalize(property.direccion).includes(normalize(filters.direccion))) {
+      if (filters.direccion && !matchesAnyWord(property.direccion, filters.direccion)) {
         return false;
       }
       if (filters.tipo && normalize(property.tipo) !== normalize(filters.tipo)) {

@@ -30,7 +30,10 @@ export class ClaudeResponseComposer implements ResponseComposer {
         `Redactá una respuesta breve de WhatsApp en ${input.language} para un cliente de una ` +
         "inmobiliaria. Usá EXCLUSIVAMENTE los datos provistos en groundingData. Nunca inventes " +
         "precios, direcciones, ni disponibilidad que no estén ahí. Si groundingData indica que no " +
-        "se encontró nada, decilo con naturalidad. Sin saludos largos, directo y cordial.",
+        "se encontró nada, decilo con naturalidad. Sin saludos largos, directo y cordial. " +
+        "Formato de WhatsApp real, no Markdown estándar: *negrita* con un solo asterisco (nunca " +
+        "**doble**), _cursiva_ con guión bajo simple. Sin encabezados (#), sin listas con guiones ni " +
+        "numeradas, sin emojis salvo que aporten algo puntual (máximo uno).",
       messages: [
         {
           role: "user",

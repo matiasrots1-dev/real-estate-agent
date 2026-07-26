@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
+import path from "node:path";
+import { config as loadDotenv } from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
-import { loadConfigFromEnv } from "./config.js";
+import { loadConfigFromEnv, REPO_ROOT } from "./config.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { ClaudeIntentClassifier } from "./agent/classifier.js";
 import { ClaudeResponseComposer } from "./agent/composer.js";
@@ -8,6 +10,12 @@ import { FileAuditLogStore } from "./agent/auditLog.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
 import { createRequestListener } from "./app.js";
+
+// Ruta absoluta al `.env` de la raíz del repo: `npm run dev --workspace=...`
+// (y por lo tanto `npm run dev:orchestrator` desde la raíz) corre este
+// script con cwd = apps/orchestrator, no la raíz. Un `dotenv.config()` sin
+// path buscaría apps/orchestrator/.env y nunca encontraría el de la raíz.
+loadDotenv({ path: path.join(REPO_ROOT, ".env") });
 
 async function main() {
   const config = loadConfigFromEnv();
