@@ -55,18 +55,44 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       real ni dependencia del orchestrator).
 
 ## Bloque 3 — Orchestrator: loop mínimo end-to-end
-- [ ] Webhook handler de WhatsApp Cloud API (`channels/whatsapp`):
-      recibe, valida firma, parsea mensaje entrante.
-- [ ] Loader del `intent_catalog.yaml` integrado (del bloque 1).
-- [ ] Loop de tool-use con Claude API: dado un mensaje + catálogo,
-      devuelve intent matcheado + confianza + tools a llamar.
-- [ ] Implementar **un solo intent de punta a punta**:
-      `consulta_disponibilidad` contra el mock/real de `mcp-tokko`.
-- [ ] `audit_log`: cada respuesta del agente queda registrada con intent,
-      confianza, tools llamadas.
-- [ ] **Hito de validación**: mandar un mensaje de prueba tipo "¿el depto
-      de Palermo sigue disponible?" contra el webhook y verificar que el
-      loop completo responde correctamente y loguea en `audit_log`.
+- [x] Webhook handler de WhatsApp Cloud API (`channels/whatsapp`):
+      recibe, valida firma (`X-Hub-Signature-256` con `WHATSAPP_APP_SECRET`,
+      agregado a `.env.example`), responde el handshake GET de Meta, y
+      parsea el mensaje de texto entrante (zod).
+- [x] Loader del `intent_catalog.yaml` integrado (del bloque 1) —
+      `agent/intentCatalog.ts` reusa `loadIntentCatalogFromFile` de
+      `shared-types`.
+- [x] Loop de tool-use con Claude API: `agent/classifier.ts`
+      (`ClaudeIntentClassifier`, tool-use forzado devuelve intent + confianza
+      + búsqueda extraída) y `agent/composer.ts` (`ClaudeResponseComposer`,
+      redacción final grounded). **Nota**: no hay `ANTHROPIC_API_KEY` en este
+      entorno todavía, así que estas dos clases están implementadas contra
+      la API real pero los tests automatizados las stubean (interfaces
+      `IntentClassifier`/`ResponseComposer`, mismo patrón que mcp-tokko con
+      Tokko). Falta correr un test manual con la clave real puesta.
+- [x] Implementado **un solo intent de punta a punta**:
+      `consulta_disponibilidad` (`agent/consultaDisponibilidad.ts`) contra
+      `mcp-tokko` real — el orchestrator lo levanta como proceso hijo real
+      por stdio (`mcp/mcpToolClient.ts` + `mcp/tokkoMcpClient.ts`, protocolo
+      MCP real, no una llamada simulada) y usa su `MockTokkoClient` interno
+      hasta que haya credenciales reales de Tokko.
+- [x] `audit_log`: cada respuesta queda registrada con intent, confianza y
+      tools llamadas (`agent/auditLog.ts`). Implementado como pidió el
+      usuario: `FileAuditLogStore` (JSONL en `apps/orchestrator/data/`,
+      gitignoreado por posibles datos de clientes) detrás de una interfaz
+      `AuditLogStore` — migrar a Postgres (bloque 4+) es swap de
+      implementación, no reescritura. **Esto es lo que se vuelve
+      bloqueante instalar Docker de verdad**: en cuanto se necesite
+      auditoría consultable entre procesos/concurrencia real, o se empiece
+      el scheduler de recordatorios (fase 2), hay que migrar de archivo a
+      Postgres.
+- [x] **Hito de validación**: `src/app.test.ts` levanta un servidor HTTP
+      efímero real, manda un POST de webhook con el mensaje "¿el depto de
+      Palermo sigue disponible?" (firma HMAC real incluida), y verifica que
+      el loop completo (parseo → classifier stub → mcp-tokko real →
+      composer stub grounded → audit_log) responde 200 y audita
+      correctamente. 27 tests en `apps/orchestrator` (7 archivos), 2 de
+      ellos contra el proceso real de `mcp-tokko`.
 
 ## Bloque 4 — Escalamiento
 - [ ] Implementar `agent/escalation.ts` según `docs/escalation_policy.md`.

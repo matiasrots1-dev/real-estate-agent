@@ -6,3 +6,7 @@ dist/
 coverage/
 *.sqlite
 *.sqlite3
+
+# Datos locales (audit_log JSONL, etc.) — pueden contener datos de clientes
+# (Ley 25.326), nunca commitear.
+apps/orchestrator/data/
