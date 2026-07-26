@@ -6,6 +6,8 @@ import { loadConfigFromEnv, REPO_ROOT } from "./config.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { ClaudeIntentClassifier } from "./agent/classifier.js";
 import { ClaudeResponseComposer } from "./agent/composer.js";
+import { ClaudeDraftReplyComposer } from "./agent/draftComposer.js";
+import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
@@ -45,13 +47,25 @@ async function main() {
     );
   }
 
+  const brokerNotifier =
+    sender && config.whatsapp.brokerWhatsappNumber
+      ? new WhatsAppBrokerNotifier(sender, config.whatsapp.brokerWhatsappNumber)
+      : undefined;
+  if (!brokerNotifier) {
+    console.warn(
+      "BROKER_WHATSAPP_NUMBER no configurado (o falta el sender): los mensajes escalados se auditan pero no se notifican por WhatsApp al broker."
+    );
+  }
+
   const listener = createRequestListener({
     catalog,
     classifier: new ClaudeIntentClassifier(anthropic),
     composer: new ClaudeResponseComposer(anthropic),
+    draftComposer: new ClaudeDraftReplyComposer(anthropic),
     auditLog: new FileAuditLogStore(config.auditLogPath),
     tokko,
     sender,
+    brokerNotifier,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     whatsappAppSecret: config.whatsapp.appSecret,
   });

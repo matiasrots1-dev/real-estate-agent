@@ -11,6 +11,8 @@ export interface AuditLogEntry {
   confidence: number | null;
   toolsCalled: string[];
   escalatedToBroker: boolean;
+  /** Cuál regla de docs/escalation_policy.md disparó el escalamiento (si hubo). */
+  escalationRule?: "requires_broker" | "low_confidence";
   escalationReason?: string;
   responseSent?: string;
 }

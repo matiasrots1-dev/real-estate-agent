@@ -21,6 +21,8 @@ import { InMemoryAuditLogStore } from "./agent/auditLog.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import type { IntentClassifier } from "./agent/classifier.js";
 import type { ResponseComposer } from "./agent/composer.js";
+import type { DraftReplyComposer } from "./agent/draftComposer.js";
+import type { BrokerNotifier, BrokerNotification } from "./agent/brokerNotifier.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -57,9 +59,21 @@ function metaTextMessagePayload(from: string, text: string) {
   });
 }
 
-/** Stub: reemplaza la clasificación real de Claude (requiere ANTHROPIC_API_KEY). */
-function stubClassifierFor(intentId: string, confidence: number, searchQuery?: string): IntentClassifier {
-  return { classify: vi.fn(async () => ({ intentId, confidence, searchQuery })) };
+/**
+ * Stub: reemplaza la clasificación real de Claude (requiere ANTHROPIC_API_KEY).
+ * Rama por contenido del mensaje para poder ejercitar tanto el camino de
+ * consulta_disponibilidad (Bloque 3) como el de escalamiento (Bloque 4)
+ * contra el mismo server de test.
+ */
+function smartStubClassifier(): IntentClassifier {
+  return {
+    classify: vi.fn(async (message: string) => {
+      if (message.includes("desastre")) {
+        return { intentId: "reclamo_queja", confidence: 0.9 };
+      }
+      return { intentId: "consulta_disponibilidad", confidence: 0.92, searchQuery: "Palermo" };
+    }),
+  };
 }
 
 /** Stub: reemplaza la redacción final de Claude, pero la mantiene grounded (refleja groundingData). */
@@ -69,11 +83,26 @@ function groundedStubComposer(): ResponseComposer {
   };
 }
 
+function stubDraftComposer(): DraftReplyComposer {
+  return { composeDraft: vi.fn(async () => "[borrador] Hola! Dejame confirmarte eso en breve.") };
+}
+
+function recordingBrokerNotifier(): BrokerNotifier & { notifications: BrokerNotification[] } {
+  const notifications: BrokerNotification[] = [];
+  return {
+    notifications,
+    notify: vi.fn(async (n: BrokerNotification) => {
+      notifications.push(n);
+    }),
+  };
+}
+
 describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real -> audit_log", () => {
   let server: Server;
   let baseUrl: string;
   let tokko: TokkoMcpClient;
   let auditLog: InMemoryAuditLogStore;
+  let brokerNotifier: BrokerNotifier & { notifications: BrokerNotification[] };
 
   beforeAll(async () => {
     const catalog = loadCatalog(path.join(repoRoot, "docs/intent_catalog.yaml"));
@@ -84,13 +113,16 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
     await tokko.connect();
 
     auditLog = new InMemoryAuditLogStore();
+    brokerNotifier = recordingBrokerNotifier();
 
     const listener = createRequestListener({
       catalog,
-      classifier: stubClassifierFor("consulta_disponibilidad", 0.92, "Palermo"),
+      classifier: smartStubClassifier(),
       composer: groundedStubComposer(),
+      draftComposer: stubDraftComposer(),
       auditLog,
       tokko,
+      brokerNotifier,
       whatsappWebhookVerifyToken: WEBHOOK_VERIFY_TOKEN,
       whatsappAppSecret: APP_SECRET,
     });
@@ -149,5 +181,30 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
     // (proceso real, MockTokkoClient adentro), no inventados por el stub.
     expect(entry?.responseSent).toContain("disponible");
     expect(entry?.responseSent).toContain("Santa Fe");
+  });
+
+  it("Bloque 4: un mensaje que escala responde con el template y notifica al broker con el borrador", async () => {
+    const body = metaTextMessagePayload("5491100000003", "esto es un desastre, nadie me atiende");
+    const res = await fetch(`${baseUrl}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
+      body,
+    });
+
+    expect(res.status).toBe(200);
+
+    const entries = await auditLog.readAll();
+    const entry = entries.find((e) => e.conversationId === "5491100000003");
+    expect(entry).toMatchObject({
+      matchedIntentId: "reclamo_queja",
+      escalatedToBroker: true,
+      escalationRule: "requires_broker",
+      toolsCalled: [],
+    });
+
+    const notification = brokerNotifier.notifications.find((n) => n.conversationId === "5491100000003");
+    expect(notification).toBeDefined();
+    expect(notification?.matchedIntentId).toBe("reclamo_queja");
+    expect(notification?.draftReply).toContain("borrador");
   });
 });

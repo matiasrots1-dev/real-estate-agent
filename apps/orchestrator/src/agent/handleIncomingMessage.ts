@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import type { AuditLogEntry, IntentCatalog } from "shared-types";
+import type { AuditLogEntry, Intent, IntentCatalog } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import { effectiveConfidenceThreshold, findIntent } from "./intentCatalog.js";
 import type { IntentClassifier } from "./classifier.js";
 import type { ResponseComposer } from "./composer.js";
+import type { DraftReplyComposer } from "./draftComposer.js";
+import type { BrokerNotifier } from "./brokerNotifier.js";
 import type { AuditLogStore } from "./auditLog.js";
+import { decideEscalation } from "./escalation.js";
 import { runConsultaDisponibilidad } from "./consultaDisponibilidad.js";
 
 /**
- * El intent matcheó pero Bloque 3 todavía no tiene handler para él (ver
- * docs/TASKS.md Bloque 4/5). Se lanza en vez de improvisar una respuesta o
- * inventar datos — server.ts la atrapa y no manda nada al cliente.
+ * El intent matcheó pero no hay handler para él todavía: ni escala (no es
+ * `requires_broker: true` ni cae por baja confianza) ni es
+ * `consulta_disponibilidad` (ver docs/TASKS.md Bloque 5 — resto de intents
+ * reactivos, y Bloque 4/5 para los "conditional"). Se lanza en vez de
+ * improvisar una respuesta o inventar datos — server.ts la atrapa y no
+ * manda nada al cliente.
  */
 export class NotImplementedIntentError extends Error {
   constructor(public readonly intentId: string) {
@@ -24,8 +30,11 @@ export interface HandleMessageDeps {
   catalog: IntentCatalog;
   classifier: IntentClassifier;
   composer: ResponseComposer;
+  draftComposer: DraftReplyComposer;
   tokko: TokkoQueries;
   auditLog: AuditLogStore;
+  /** Si no está configurado (sin BROKER_WHATSAPP_NUMBER), se escala igual pero no se notifica a nadie. */
+  brokerNotifier?: BrokerNotifier;
 }
 
 export interface HandleMessageResult {
@@ -47,21 +56,19 @@ export async function handleIncomingMessage(
   }
 
   const threshold = effectiveConfidenceThreshold(deps.catalog, intent);
-  // Reglas 1 y 3 de docs/escalation_policy.md. Las reglas 2 (conditional),
-  // 4-8 (señales de negociación/reclamo/legal/irreversibilidad ya
-  // codificadas como requires_broker:true por intent en el catálogo, salvo
-  // "conditional") quedan para agent/escalation.ts en el Bloque 4.
-  const shouldEscalate = intent.requires_broker === true || classification.confidence < threshold;
+  const decision = decideEscalation(intent, classification.confidence, threshold);
 
   let responseText: string;
   const toolsCalled: string[] = [];
 
-  if (shouldEscalate) {
-    // TODO(Bloque 4): notificar al broker con contexto + borrador de
-    // respuesta (docs/escalation_policy.md). Por ahora solo se sostiene la
-    // conversación con el cliente con la plantilla del intent.
+  if (decision.shouldEscalate) {
+    // docs/escalation_policy.md: el agente nunca queda mudo — responde al
+    // cliente con la plantilla de espera del intent, y por separado
+    // notifica al broker con contexto + borrador. Un fallo notificando al
+    // broker no debe impedir que el cliente reciba su respuesta.
     responseText =
       intent.response.template ?? "Dejame confirmarlo con el asesor y te respondo enseguida.";
+    await notifyBrokerBestEffort(deps, message, intent, classification.confidence, decision.reason);
   } else if (intent.id === "consulta_disponibilidad") {
     const result = await runConsultaDisponibilidad(
       classification,
@@ -84,8 +91,9 @@ export async function handleIncomingMessage(
     matchedIntentId: intent.id,
     confidence: classification.confidence,
     toolsCalled,
-    escalatedToBroker: shouldEscalate,
-    escalationReason: shouldEscalate ? intent.escalation_reason : undefined,
+    escalatedToBroker: decision.shouldEscalate,
+    escalationRule: decision.rule,
+    escalationReason: decision.reason,
     responseSent: responseText,
   };
   await deps.auditLog.append(auditEntry);
@@ -94,6 +102,29 @@ export async function handleIncomingMessage(
     responseText,
     intentId: intent.id,
     confidence: classification.confidence,
-    escalatedToBroker: shouldEscalate,
+    escalatedToBroker: decision.shouldEscalate,
   };
+}
+
+async function notifyBrokerBestEffort(
+  deps: HandleMessageDeps,
+  message: IncomingWhatsAppMessage,
+  intent: Intent,
+  confidence: number,
+  escalationReason: string | undefined
+): Promise<void> {
+  if (!deps.brokerNotifier) return;
+  try {
+    const draftReply = await deps.draftComposer.composeDraft(message.text, intent.description);
+    await deps.brokerNotifier.notify({
+      conversationId: message.from,
+      incomingMessage: message.text,
+      matchedIntentId: intent.id,
+      confidence,
+      escalationReason,
+      draftReply,
+    });
+  } catch (error) {
+    console.error("No se pudo notificar al broker (el cliente igual recibe su respuesta):", error);
+  }
 }

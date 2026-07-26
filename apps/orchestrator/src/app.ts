@@ -5,6 +5,8 @@ import { verifyWebhookChallenge, verifyWebhookSignature } from "./channels/whats
 import type { WhatsAppSender } from "./channels/whatsapp/sender.js";
 import type { IntentClassifier } from "./agent/classifier.js";
 import type { ResponseComposer } from "./agent/composer.js";
+import type { DraftReplyComposer } from "./agent/draftComposer.js";
+import type { BrokerNotifier } from "./agent/brokerNotifier.js";
 import type { AuditLogStore } from "./agent/auditLog.js";
 import type { TokkoQueries } from "./mcp/tokkoMcpClient.js";
 import { handleIncomingMessage } from "./agent/handleIncomingMessage.js";
@@ -13,9 +15,11 @@ export interface AppDeps {
   catalog: IntentCatalog;
   classifier: IntentClassifier;
   composer: ResponseComposer;
+  draftComposer: DraftReplyComposer;
   auditLog: AuditLogStore;
   tokko: TokkoQueries;
   sender?: WhatsAppSender;
+  brokerNotifier?: BrokerNotifier;
   whatsappWebhookVerifyToken?: string;
   whatsappAppSecret?: string;
 }
@@ -132,8 +136,10 @@ async function handleIncomingWebhook(
         catalog: deps.catalog,
         classifier: deps.classifier,
         composer: deps.composer,
+        draftComposer: deps.draftComposer,
         tokko: deps.tokko,
         auditLog: deps.auditLog,
+        brokerNotifier: deps.brokerNotifier,
       });
       if (deps.sender) {
         await deps.sender.sendText(message.from, result.responseText);

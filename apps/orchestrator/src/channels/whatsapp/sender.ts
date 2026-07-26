@@ -4,8 +4,24 @@
 
 const GRAPH_API_BASE_URL = "https://graph.facebook.com/v21.0";
 
+// Forma de la respuesta 200 de POST /{phone_number_id}/messages. Un 200 acá
+// significa "Meta aceptó encolarlo", no "el destinatario lo recibió" — la
+// entrega real solo se confirma vía los webhooks de status (delivered/read)
+// que este proyecto todavía no procesa.
+interface GraphApiSendMessageResponse {
+  messaging_product: string;
+  contacts?: Array<{ input: string; wa_id: string }>;
+  messages?: Array<{ id: string; message_status?: string }>;
+}
+
+export interface WhatsAppSendResult {
+  messageId?: string;
+  waId?: string;
+  raw: GraphApiSendMessageResponse;
+}
+
 export interface WhatsAppSender {
-  sendText(to: string, body: string): Promise<void>;
+  sendText(to: string, body: string): Promise<WhatsAppSendResult>;
 }
 
 export class GraphApiWhatsAppSender implements WhatsAppSender {
@@ -15,7 +31,7 @@ export class GraphApiWhatsAppSender implements WhatsAppSender {
     private readonly fetchFn: typeof fetch = fetch
   ) {}
 
-  async sendText(to: string, body: string): Promise<void> {
+  async sendText(to: string, body: string): Promise<WhatsAppSendResult> {
     const res = await this.fetchFn(`${GRAPH_API_BASE_URL}/${this.phoneNumberId}/messages`, {
       method: "POST",
       headers: {
@@ -33,5 +49,13 @@ export class GraphApiWhatsAppSender implements WhatsAppSender {
     if (!res.ok) {
       throw new Error(`WhatsApp Cloud API respondió ${res.status}: ${await res.text()}`);
     }
+
+    const raw = (await res.json()) as GraphApiSendMessageResponse;
+    const messageId = raw.messages?.[0]?.id;
+    const waId = raw.contacts?.[0]?.wa_id;
+    console.log(
+      `WhatsApp Cloud API aceptó el mensaje a ${to}: messageId=${messageId ?? "?"} wa_id=${waId ?? "?"} status=${raw.messages?.[0]?.message_status ?? "?"}`
+    );
+    return { messageId, waId, raw };
   }
 }

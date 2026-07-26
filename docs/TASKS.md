@@ -95,13 +95,51 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       ellos contra el proceso real de `mcp-tokko`.
 
 ## Bloque 4 — Escalamiento
-- [ ] Implementar `agent/escalation.ts` según `docs/escalation_policy.md`.
-- [ ] Implementar los intents `negociacion_precio`, `reclamo_queja`,
+- [x] `agent/escalation.ts` — `decideEscalation(intent, confidence, threshold)`,
+      función pura. Implementa las reglas 1 y 3 de `docs/escalation_policy.md`
+      explícitamente; documenta por qué las reglas 4/5/6/8 ya están cubiertas
+      por la regla 1 (el catálogo las codifica como `requires_broker: true`
+      por intent) y por qué las reglas 2 ("conditional") y 7 (irreversibilidad)
+      quedan afuera a propósito — necesitan estado de conversación que recién
+      llega con la máquina de estados del Bloque 5.
+- [x] Los 5 intents que siempre escalan (`negociacion_precio`, `reclamo_queja`,
       `consulta_legal_contractual`, `hablar_con_persona`,
-      `fallback_low_confidence` — todos escalan, ninguno ejecuta tools de
-      negocio.
-- [ ] Notificación al broker (mensaje de WhatsApp al canal broker con el
-      contexto + borrador sugerido).
+      `fallback_low_confidence`) — ya funcionaban estructuralmente desde el
+      Bloque 3 (branch `requires_broker: true` → responde con el template del
+      catálogo, cero tools de negocio), pero ahora hay un test por cada uno
+      contra el catálogo real (`handleIncomingMessage.test.ts`, `it.each`)
+      que lo deja explícito y a prueba de que alguien cambie el YAML.
+- [x] Notificación al broker: `agent/draftComposer.ts`
+      (`ClaudeDraftReplyComposer`, redacta un borrador — nunca se manda tal
+      cual, marca `[CONFIRMAR: ...]` lo que no puede saber) +
+      `agent/brokerNotifier.ts` (`WhatsAppBrokerNotifier`, arma el mensaje
+      con intent + confianza + transcripción + motivo + borrador y lo manda
+      por WhatsApp al `BROKER_WHATSAPP_NUMBER`). Best-effort: si falla la
+      notificación al broker, el cliente igual recibe su respuesta (no
+      revienta el loop) — testeado explícitamente.
+      **Nota de alcance**: el "contexto de la conversación (últimos N
+      mensajes)" que pide `docs/escalation_policy.md` todavía es solo el
+      mensaje entrante — el historial multi-turno llega con la máquina de
+      estados del Bloque 5.
+      `AuditLogEntry` ganó un campo `escalationRule` (`shared-types`) para
+      auditar explícitamente qué regla disparó el escalamiento, tal como
+      pide la sección "Auditoría" de `docs/escalation_policy.md`.
+      Bug real encontrado y corregido de paso al probar Bloque 3 con la API
+      real de Claude: `MockTokkoClient` exigía substring exacto para
+      `direccion`/`barrio`, pero el classifier extrae frases libres (ej.
+      "depto Palermo", no "Palermo") — se cambió a matching por palabra
+      significativa, con test de regresión. También se corrigió el prompt
+      del composer para usar el formato real de WhatsApp (`*negrita*` con
+      un asterisco, no `**doble**`), y se agregó `dotenv` al orchestrator
+      (nada cargaba `.env` antes) apuntando explícitamente a la raíz del
+      repo, porque `npm run dev:orchestrator` corre con cwd en
+      `apps/orchestrator`.
+      79 tests en todo el monorepo (44 en orchestrator). Verificado además
+      con 2 mensajes reales contra la API de Claude del usuario
+      (clasificación + redacción grounded reales, sin stub) — no se probó
+      el envío real del mensaje al broker por WhatsApp porque
+      `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID`/
+      `BROKER_WHATSAPP_NUMBER` no están configurados todavía.
 
 ## Bloque 5 — Resto de intents reactivos de fase 1
 - [ ] `consulta_precio_condiciones`, `pedido_ficha_multimedia`,
