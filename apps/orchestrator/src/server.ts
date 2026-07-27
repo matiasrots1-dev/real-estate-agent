@@ -9,11 +9,13 @@ import { ClaudeResponseComposer } from "./agent/composer.js";
 import { ClaudeDraftReplyComposer } from "./agent/draftComposer.js";
 import { ClaudeSlotConfirmationClassifier } from "./agent/slotConfirmation.js";
 import { ClaudeReprogramActionClassifier } from "./agent/reprogramActionClassifier.js";
+import { ClaudePausarAgenteActionClassifier } from "./agent/pausarAgenteClassifier.js";
 import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
 import { FileAppointmentStore } from "./agent/appointmentStore.js";
 import { FileConversationStateStore } from "./agent/conversationStateStore.js";
 import { FileRecontactStateStore } from "./agent/recontactStateStore.js";
+import { FileGlobalPauseStore } from "./agent/globalPauseStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
 import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
@@ -78,6 +80,8 @@ async function main() {
     draftComposer: new ClaudeDraftReplyComposer(anthropic),
     slotConfirmationClassifier: new ClaudeSlotConfirmationClassifier(anthropic),
     reprogramActionClassifier: new ClaudeReprogramActionClassifier(anthropic),
+    pausarAgenteActionClassifier: new ClaudePausarAgenteActionClassifier(anthropic),
+    globalPauseStore: new FileGlobalPauseStore(config.globalPauseStorePath),
     auditLog,
     appointmentStore,
     conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),

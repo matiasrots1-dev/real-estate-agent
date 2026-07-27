@@ -33,6 +33,7 @@ export interface OrchestratorConfig {
   appointmentStorePath: string;
   conversationStateStorePath: string;
   recontactStateStorePath: string;
+  globalPauseStorePath: string;
   /**
    * Coordenadas por defecto para consulta_clima_visita cuando la propiedad
    * no tiene lat/lng cargados en Tokko. Centro de CABA — ajustar si el
@@ -85,6 +86,8 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
       path.join(REPO_ROOT, "apps/orchestrator/data/conversations.json"),
     recontactStateStorePath:
       env.RECONTACT_STATE_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/recontacts.json"),
+    globalPauseStorePath:
+      env.GLOBAL_PAUSE_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/global_pause.json"),
     defaultLat: env.DEFAULT_LAT ? Number(env.DEFAULT_LAT) : -34.6037,
     defaultLng: env.DEFAULT_LNG ? Number(env.DEFAULT_LNG) : -58.3816,
     schedulerIntervalMs: env.SCHEDULER_INTERVAL_MS ? Number(env.SCHEDULER_INTERVAL_MS) : 5 * 60 * 1000,

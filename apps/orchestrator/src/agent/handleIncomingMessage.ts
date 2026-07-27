@@ -29,6 +29,12 @@ import {
 import { continueConversationIfActive } from "./stateMachine.js";
 import { runBrokerResumenAgenda } from "./brokerResumenAgenda.js";
 import { runBrokerResumenLeads } from "./brokerResumenLeads.js";
+import { runBrokerPausarAgente } from "./brokerPausarAgente.js";
+import type { GlobalPauseStore } from "./globalPauseStore.js";
+import type { PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
+
+/** No es un id real del catálogo — marca en `audit_log` los mensajes que se recibieron pero no se procesaron por pausa (docs/TASKS.md Bloque 9). */
+const PAUSED_SENTINEL_INTENT_ID = "agente_pausado";
 
 /**
  * El intent matcheó pero no hay handler para él: ni escala, ni es uno de los
@@ -57,6 +63,8 @@ export interface HandleMessageDeps {
   conversationStateStore: ConversationStateStore;
   slotConfirmationClassifier: SlotConfirmationClassifier;
   reprogramActionClassifier: ReprogramActionClassifier;
+  globalPauseStore: GlobalPauseStore;
+  pausarAgenteActionClassifier: PausarAgenteActionClassifier;
   defaultLat: number;
   defaultLng: number;
   /** Si no está configurado, se escala igual pero no se notifica a nadie. */
@@ -66,7 +74,8 @@ export interface HandleMessageDeps {
 }
 
 export interface HandleMessageResult {
-  responseText: string;
+  /** `null` cuando el agente está pausado para este cliente (docs/TASKS.md Bloque 9) — no hay nada que mandar. */
+  responseText: string | null;
   intentId: string;
   confidence: number | null;
   escalatedToBroker: boolean;
@@ -78,7 +87,25 @@ export async function handleIncomingMessage(
   message: IncomingWhatsAppMessage,
   deps: HandleMessageDeps
 ): Promise<HandleMessageResult> {
+  // docs/TASKS.md Bloque 8: el classifier solo ve los intents del canal que
+  // corresponde — un cliente nunca puede matchear un intent `channel:
+  // broker` ni viceversa. Nota conocida: esto asume que `message.from`
+  // llega exactamente igual a `BROKER_WHATSAPP_NUMBER`; Meta a veces
+  // normaliza números argentinos de forma inconsistente (ver Bloque 4/6),
+  // así que un desfasaje de formato haría que el broker sea tratado como
+  // cliente en vez de fallar ruidosamente — a revisar con uso real.
+  const channel = message.from === deps.brokerWhatsappNumber ? "broker" : "cliente";
   const state = (await deps.conversationStateStore.get(message.from)) ?? idleState(message.from, message.from);
+
+  // docs/TASKS.md Bloque 9: la pausa (puntual o global) corta el flujo antes
+  // de gastar ninguna llamada a Claude — ni el classifier del mensaje nuevo
+  // ni el clasificador de continuación de un flujo multi-turno ya en curso.
+  // Nunca aplica al canal broker: el broker siempre tiene que poder hablar
+  // con el agente, aunque sea para reactivarlo.
+  if (channel === "cliente" && (state.pausedByBroker || (await deps.globalPauseStore.isPaused()))) {
+    await appendAudit(deps, message, PAUSED_SENTINEL_INTENT_ID, null, [], false, undefined, undefined, undefined);
+    return { responseText: null, intentId: PAUSED_SENTINEL_INTENT_ID, confidence: null, escalatedToBroker: false };
+  }
 
   if (state.step !== "idle" && state.currentIntentId) {
     const continuation = await continueConversationIfActive(message, state, {
@@ -98,14 +125,6 @@ export async function handleIncomingMessage(
     await deps.conversationStateStore.save(idleState(message.from, message.from));
   }
 
-  // docs/TASKS.md Bloque 8: el classifier solo ve los intents del canal que
-  // corresponde — un cliente nunca puede matchear un intent `channel:
-  // broker` ni viceversa. Nota conocida: esto asume que `message.from`
-  // llega exactamente igual a `BROKER_WHATSAPP_NUMBER`; Meta a veces
-  // normaliza números argentinos de forma inconsistente (ver Bloque 4/6),
-  // así que un desfasaje de formato haría que el broker sea tratado como
-  // cliente en vez de fallar ruidosamente — a revisar con uso real.
-  const channel = message.from === deps.brokerWhatsappNumber ? "broker" : "cliente";
   const catalogForChannel = filterCatalogByChannel(deps.catalog, channel);
 
   const classification = await deps.classifier.classify(message.text, catalogForChannel);
@@ -185,6 +204,15 @@ export async function handleIncomingMessage(
 
     case "broker_resumen_leads": {
       const result = await runBrokerResumenLeads(intent, deps.tokko, deps.composer, language);
+      return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
+    }
+
+    case "broker_pausar_agente": {
+      const result = await runBrokerPausarAgente(message.text, intent, {
+        conversationStateStore: deps.conversationStateStore,
+        globalPauseStore: deps.globalPauseStore,
+        pausarAgenteActionClassifier: deps.pausarAgenteActionClassifier,
+      });
       return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
     }
 
@@ -276,7 +304,7 @@ async function appendAudit(
   escalatedToBroker: boolean,
   escalationRule: EscalationRule | undefined,
   escalationReason: string | undefined,
-  responseText: string
+  responseText: string | undefined
 ): Promise<void> {
   const entry: AuditLogEntry = {
     id: randomUUID(),
