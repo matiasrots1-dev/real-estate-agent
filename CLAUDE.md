@@ -142,6 +142,13 @@ multi-tenant) hasta que el loop mínimo de la fase 1 esté probado.
 
 ## 7. Convenciones de trabajo
 
+- **Flujo de git: rama por bloque + Pull Request, nunca commit directo a
+  `main`.** `main` está protegida contra push directo (GitHub → Settings →
+  Branches). Al arrancar un bloque de `docs/TASKS.md`, creá una rama
+  (`bloque-N-slug-corto`); al cerrarlo con tests en verde, actualizá
+  `docs/TASKS.md` y abrí un PR contra `main` con un resumen — el dueño del
+  repo lo revisa y aprueba desde GitHub, no asumas el merge. Detalle
+  completo del flujo en `CONTRIBUTING.md`.
 - Commits chicos y descriptivos, en español o inglés (consistente con lo
   que ya haya en el repo).
 - Cada MCP server debe tener su propio test que lo ejercite de forma
