@@ -1,4 +1,4 @@
-import type { Property } from "shared-types";
+import type { Lead, LeadTemperature, Property } from "shared-types";
 import { McpToolClient, type McpServerTarget } from "./mcpToolClient.js";
 
 export interface TokkoPropertySearchFilters {
@@ -6,6 +6,11 @@ export interface TokkoPropertySearchFilters {
   direccion?: string;
   tipo?: string;
   codigo?: string;
+}
+
+export interface TokkoLeadSearchFilters {
+  temperatura?: LeadTemperature;
+  diasSinRespuestaMin?: number;
 }
 
 export interface LogActivityInput {
@@ -28,6 +33,8 @@ export interface LogActivityResult {
 export interface TokkoQueries {
   searchProperties(filters: TokkoPropertySearchFilters): Promise<Property[]>;
   getProperty(propertyId: string): Promise<Property | null>;
+  searchLeads(filters: TokkoLeadSearchFilters): Promise<Lead[]>;
+  getLead(leadId: string): Promise<Lead | null>;
   logActivity(input: LogActivityInput): Promise<LogActivityResult>;
 }
 
@@ -53,6 +60,14 @@ export class TokkoMcpClient implements TokkoQueries {
 
   getProperty(propertyId: string): Promise<Property | null> {
     return this.client.callTool<Property | null>("get_property", { propertyId });
+  }
+
+  searchLeads(filters: TokkoLeadSearchFilters): Promise<Lead[]> {
+    return this.client.callTool<Lead[]>("search_leads", filters);
+  }
+
+  getLead(leadId: string): Promise<Lead | null> {
+    return this.client.callTool<Lead | null>("get_lead", { leadId });
   }
 
   logActivity(input: LogActivityInput): Promise<LogActivityResult> {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Appointment, IntentCatalog, Property } from "shared-types";
 import { loadCatalog } from "../agent/intentCatalog.js";
 import { InMemoryAppointmentStore } from "../agent/appointmentStore.js";
+import { InMemoryAuditLogStore } from "../agent/auditLog.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
@@ -46,6 +47,8 @@ function makeDeps(overrides: Partial<ReminderJobDeps> = {}): ReminderJobDeps & {
   const tokko: TokkoQueries = {
     searchProperties: vi.fn(),
     getProperty: vi.fn(async () => property),
+    searchLeads: vi.fn(),
+    getLead: vi.fn(),
     logActivity: vi.fn(),
   };
   const weather: WeatherQueries = {
@@ -60,6 +63,7 @@ function makeDeps(overrides: Partial<ReminderJobDeps> = {}): ReminderJobDeps & {
   return {
     catalog,
     appointmentStore: new InMemoryAppointmentStore(),
+    auditLog: new InMemoryAuditLogStore(),
     tokko,
     weather,
     sender,
@@ -97,6 +101,14 @@ describe("createReminderJob", () => {
       "es_AR",
       ["Depto Palermo", expect.any(String), "cielo claro, 22°C"]
     );
+
+    const [entry] = await deps.auditLog.readAll();
+    expect(entry).toMatchObject({
+      conversationId: "5491100000001",
+      matchedIntentId: "recordatorio_visita",
+      confidence: null,
+      escalatedToBroker: false,
+    });
 
     const updated = await store.findById("appt-1");
     expect(updated?.remindersSent).toEqual(["-24h"]);

@@ -40,4 +40,19 @@ describe("TokkoMcpClient (integración real vía stdio)", () => {
   it("getProperty devuelve null (no inventa) si el id no existe", async () => {
     expect(await client.getProperty("no-existe")).toBeNull();
   });
+
+  it("searchLeads filtra por temperatura", async () => {
+    const results = await client.searchLeads({ temperatura: "frio" });
+    expect(results).toHaveLength(1);
+    expect(results[0].nombre).toBe("María Gómez");
+  });
+
+  it("getLead trae el lead por id", async () => {
+    const lead = await client.getLead("lead-1");
+    expect(lead?.nombre).toBe("Juan Pérez");
+  });
+
+  it("getLead devuelve null si no existe", async () => {
+    expect(await client.getLead("no-existe")).toBeNull();
+  });
 });

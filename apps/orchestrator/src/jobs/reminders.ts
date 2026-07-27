@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { Appointment, IntentCatalog } from "shared-types";
 import { findIntent } from "../agent/intentCatalog.js";
 import { formatSlotForHuman } from "../agent/slotProposal.js";
 import type { AppointmentStore } from "../agent/appointmentStore.js";
+import type { AuditLogStore } from "../agent/auditLog.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
@@ -11,6 +13,7 @@ import { parseOffsetToMs } from "./scheduleOffset.js";
 export interface ReminderJobDeps {
   catalog: IntentCatalog;
   appointmentStore: AppointmentStore;
+  auditLog: AuditLogStore;
   tokko: TokkoQueries;
   weather: WeatherQueries;
   sender: WhatsAppSender;
@@ -49,6 +52,20 @@ async function sendReminderFor(
 
   appointment.remindersSent.push(offset);
   await deps.appointmentStore.save(appointment);
+
+  // Auditoría desde el día 1 (CLAUDE.md secc. 3) también aplica a mensajes
+  // proactivos, no solo a respuestas a un mensaje entrante.
+  await deps.auditLog.append({
+    id: randomUUID(),
+    conversationId: appointment.leadId,
+    timestamp: new Date().toISOString(),
+    incomingMessage: `[recordatorio automático ${offset} — sin mensaje entrante]`,
+    matchedIntentId: "recordatorio_visita",
+    confidence: null,
+    toolsCalled: ["tokko.get_property", "weather.get_forecast", "whatsapp.send_template"],
+    escalatedToBroker: false,
+    responseSent: `[${templateName}] ${direccionCorta} / ${fechaHoraLabel} / ${infoClima}`,
+  });
 }
 
 /**
