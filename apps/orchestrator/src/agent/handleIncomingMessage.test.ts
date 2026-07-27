@@ -12,7 +12,9 @@ import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier, BrokerNotification } from "./brokerNotifier.js";
 import { InMemoryAuditLogStore } from "./auditLog.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
-import { InMemoryConversationStateStore } from "./conversationStateStore.js";
+import { InMemoryConversationStateStore, idleState } from "./conversationStateStore.js";
+import { InMemoryGlobalPauseStore } from "./globalPauseStore.js";
+import type { PausarAgenteAction, PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
 import { loadCatalog } from "./intentCatalog.js";
 import { handleIncomingMessage, NotImplementedIntentError, type HandleMessageDeps } from "./handleIncomingMessage.js";
 
@@ -85,6 +87,10 @@ function recordingBrokerNotifier(): BrokerNotifier & { notifications: BrokerNoti
   };
 }
 
+function stubPausarAgenteActionClassifier(action: PausarAgenteAction): PausarAgenteActionClassifier {
+  return { extractAction: vi.fn(async () => action) };
+}
+
 /** Deps completas con stubs razonables — cada test sobreescribe solo lo que le importa. */
 function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps {
   return {
@@ -100,6 +106,8 @@ function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps
     conversationStateStore: new InMemoryConversationStateStore(),
     slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
     reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
+    globalPauseStore: new InMemoryGlobalPauseStore(),
+    pausarAgenteActionClassifier: stubPausarAgenteActionClassifier({ accion: "pausar", alcance: "global" }),
     defaultLat: -34.6037,
     defaultLng: -58.3816,
     ...overrides,
@@ -371,5 +379,97 @@ describe("handleIncomingMessage — canal broker (Bloque 8)", () => {
     expect(result.responseText).toBe("No tenés leads cargados.");
     expect(result.escalatedToBroker).toBe(false);
     expect(result.intentId).toBe("broker_resumen_leads");
+  });
+});
+
+describe("handleIncomingMessage — pausa del agente (Bloque 9)", () => {
+  it("cliente con pausedByBroker=true: no clasifica, no responde, pero queda auditado", async () => {
+    const conversationStateStore = new InMemoryConversationStateStore();
+    await conversationStateStore.save({ ...idleState("5491100000001", "5491100000001"), pausedByBroker: true });
+    const classifier = stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9 });
+    const auditLog = new InMemoryAuditLogStore();
+
+    const result = await handleIncomingMessage(
+      incoming("¿algo disponible?"),
+      baseDeps({ conversationStateStore, classifier, auditLog })
+    );
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(result.responseText).toBeNull();
+    expect(result.escalatedToBroker).toBe(false);
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.incomingMessage).toBe("¿algo disponible?");
+    expect(entry.responseSent).toBeUndefined();
+    expect(entry.toolsCalled).toEqual([]);
+  });
+
+  it("pausa global activa: tampoco responde a ningún cliente, aunque su ConversationState no esté pausado puntualmente", async () => {
+    const globalPauseStore = new InMemoryGlobalPauseStore();
+    await globalPauseStore.setPaused(true);
+    const classifier = stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9 });
+
+    const result = await handleIncomingMessage(incoming("¿algo disponible?"), baseDeps({ globalPauseStore, classifier }));
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(result.responseText).toBeNull();
+  });
+
+  it("pausa global activa: el broker igual puede hablar con el agente (nunca se lo pausa a él)", async () => {
+    const globalPauseStore = new InMemoryGlobalPauseStore();
+    await globalPauseStore.setPaused(true);
+    const classifier = stubClassifier({ intentId: "broker_resumen_leads", confidence: 0.9 });
+
+    const result = await handleIncomingMessage(
+      incoming("¿cómo vienen los leads?", BROKER_NUMBER),
+      baseDeps({ globalPauseStore, classifier, brokerWhatsappNumber: BROKER_NUMBER, tokko: stubTokko() })
+    );
+
+    expect(classifier.classify).toHaveBeenCalled();
+    expect(result.intentId).toBe("broker_resumen_leads");
+  });
+
+  it("cliente sin pausa activa: sigue respondiendo normalmente", async () => {
+    const result = await handleIncomingMessage(
+      incoming("¿algo disponible?"),
+      baseDeps({ classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9, searchQuery: "Palermo" }) })
+    );
+    expect(result.responseText).not.toBeNull();
+  });
+
+  it("broker_pausar_agente (alcance global): ejecuta el handler real y prende el GlobalPauseStore", async () => {
+    const globalPauseStore = new InMemoryGlobalPauseStore();
+    const result = await handleIncomingMessage(
+      incoming("pausá el agente por hoy", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_pausar_agente", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        globalPauseStore,
+        pausarAgenteActionClassifier: stubPausarAgenteActionClassifier({ accion: "pausar", alcance: "global" }),
+      })
+    );
+
+    expect(await globalPauseStore.isPaused()).toBe(true);
+    expect(result.escalatedToBroker).toBe(false);
+    expect(result.intentId).toBe("broker_pausar_agente");
+  });
+
+  it("broker_pausar_agente (alcance conversacion): marca pausedByBroker en el ConversationState del cliente indicado", async () => {
+    const conversationStateStore = new InMemoryConversationStateStore();
+    await handleIncomingMessage(
+      incoming("no le respondas más a 5491100000001", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_pausar_agente", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        conversationStateStore,
+        pausarAgenteActionClassifier: stubPausarAgenteActionClassifier({
+          accion: "pausar",
+          alcance: "conversacion",
+          telefonoCliente: "5491100000001",
+        }),
+      })
+    );
+
+    expect((await conversationStateStore.get("5491100000001"))?.pausedByBroker).toBe(true);
   });
 });

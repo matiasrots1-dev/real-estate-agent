@@ -119,7 +119,10 @@ async function handleIncomingWebhook(
   if (message) {
     try {
       const result = await handleIncomingMessage(message, deps);
-      if (deps.sender) {
+      // responseText es null cuando el agente está pausado para este
+      // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
+      // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
+      if (deps.sender && result.responseText !== null) {
         await deps.sender.sendText(message.from, result.responseText);
         for (const mediaUrl of result.mediaUrls ?? []) {
           await deps.sender.sendImage(message.from, mediaUrl);

@@ -337,16 +337,50 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       handler real. 209 tests en todo el monorepo.
 
 ## Bloque 9 — Canal broker: pausar el agente
-- [ ] `broker_pausar_agente`: pausar/reactivar respuestas automáticas —
+- [x] `broker_pausar_agente`: pausar/reactivar respuestas automáticas —
       por conversación puntual (`ConversationState.pausedByBroker`, el
       campo ya existe desde la Fase 1 sin usar todavía) o global (flag
-      nueva, no hay dónde guardarla todavía).
-- [ ] Si `pausedByBroker` es true (puntual o global),
+      nueva: `GlobalPauseStore`, mismo patrón In-Memory/File que
+      `RecontactStateStore`). El catálogo lista `state.set_conversation_flag`
+      / `state.set_global_flag` como "tools" del intent — no son tools MCP
+      reales, son operaciones sobre nuestros propios stores, así que
+      `agent/brokerPausarAgente.ts` las resuelve directo sin pasar por
+      Tokko/Calendar.
+      Distinguir "pausar" vs "reactivar" y "puntual" vs "global" (y el
+      teléfono del cliente si el broker lo dio) necesita extraer estructura
+      de lenguaje libre — nuevo `agent/pausarAgenteClassifier.ts`
+      (`ClaudePausarAgenteActionClassifier`, mismo patrón de tool-use
+      forzado que `ReprogramActionClassifier`). Si el broker solo da un
+      nombre ("no le respondas más a Juan") sin número de teléfono, el
+      agente no inventa a quién pausar — no hay una tool de búsqueda de
+      leads por nombre en el catálogo de este intent, así que el handler le
+      responde al broker pidiendo el número en vez de arriesgar pausar (o
+      reactivar) la conversación equivocada. Documentado inline como
+      limitación conocida, no como bug.
+- [x] Si `pausedByBroker` es true (puntual o global),
       `handleIncomingMessage` no responde solo a ese cliente — se loguea
       en `audit_log` que se recibió el mensaje pero no se actuó, y se
       corta el flujo antes de clasificar (ahorra la llamada a Claude).
-- [ ] Test: un mensaje de un cliente pausado no dispara ninguna tool ni
-      respuesta, pero sí queda auditado.
+      El corte pasó a ser lo primero que hace `handleIncomingMessage`
+      (antes incluso de intentar continuar un flujo multi-turno ya en
+      curso, como `agendar_visita` a mitad de camino) — pausar tiene que
+      silenciar al agente de una, no solo bloquear intents nuevos. Nunca
+      aplica al canal `broker`: el broker tiene que poder hablar con el
+      agente siempre, aunque sea para reactivarlo. Como no hay un intent
+      real matcheado en este camino, el audit log usa un sentinel no
+      perteneciente al catálogo (`"agente_pausado"`) en `matchedIntentId`,
+      documentado inline. `HandleMessageResult.responseText` pasó a ser
+      `string | null` (`null` = no hay nada que mandar); `app.ts` ahora
+      chequea eso antes de llamar a `sender.sendText`.
+- [x] Test: un mensaje de un cliente pausado no dispara ninguna tool ni
+      respuesta, pero sí queda auditado. 16 tests nuevos (`globalPauseStore`
+      5, `brokerPausarAgente` 5, `handleIncomingMessage` 6 nuevos para el
+      gate de pausa + `broker_pausar_agente` end-to-end).
+      `ClaudePausarAgenteActionClassifier` no tiene test directo — mismo
+      criterio que `ReprogramActionClassifier`/`SlotConfirmationClassifier`,
+      es un wrapper fino de Claude, se prueba indirecto vía
+      `brokerPausarAgente.test.ts` con un stub de la interfaz. 225 tests en
+      todo el monorepo.
 
 ## Bloque 10 — Canal broker: acción directa (el más grande, al final a propósito)
 - [ ] `broker_accion_directa`: orden compuesta en lenguaje libre ("mandale
