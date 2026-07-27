@@ -242,21 +242,47 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       164 tests en todo el monorepo.
 
 ## Bloque 7 — `recontacto_lead_frio` + `seguimiento_post_visita`
-- [ ] `jobs/recontact.ts`: recorre leads (`tokko.search_leads`) y evalúa
-      `dias_sin_respuesta >= 5/15/30` (docs/intent_catalog.yaml). Con
-      `MockTokkoClient` alcanza para probar la lógica del job — el dato de
-      `Lead.diasSinRespuesta` en sí va a ser real recién cuando haya
-      `TOKKO_API_KEY`.
-- [ ] Regla de escalamiento condicional del propio catálogo: el 3er
-      intento (30 días) va a revisión del broker *antes* de mandarse
-      (`requires_broker: "conditional"`) — reusar `draftComposer`/
-      `brokerNotifier` de la Fase 1, pero acá el broker aprueba o edita el
-      mensaje de recontacto en vez de solo recibir un aviso informativo.
-- [ ] `jobs/seguimientoPostVisita.ts`: dispara +3h después de una visita.
-      Necesita poder identificar visitas ya pasadas — marcar
-      `Appointment.estado = "realizada"` automáticamente cuando
-      `fechaHora` + duración ya pasó, antes de disparar el seguimiento.
-- [ ] Tests de los dos jobs con `MockTokkoClient` / `InMemoryAppointmentStore`.
+- [x] `jobs/scheduleCondition.ts` — parser de las `condition` del catálogo
+      ("dias_sin_respuesta >= 5"), paralelo a `scheduleOffset.ts` del
+      Bloque 6 pero para condiciones sobre un campo en vez de offsets de
+      tiempo. Nunca hardcodeados los umbrales 5/15/30 (CLAUDE.md secc. 7).
+- [x] `agent/recontactStateStore.ts` (nuevo store, mismo patrón que
+      `AppointmentStore`/`ConversationStateStore`) — trackea qué
+      `condition` ya se disparó por lead. Deliberadamente separado de
+      `Lead` (que espeja lo que devuelve Tokko): esto es contabilidad
+      interna nuestra, no un dato de Tokko.
+- [x] `TokkoQueries` ganó `searchLeads`/`getLead` (ya existían como tools en
+      `mcp-tokko` desde el Bloque 2, nunca se habían expuesto en el
+      orchestrator porque ningún intent los necesitaba hasta ahora).
+- [x] `jobs/recontact.ts`: recorre leads fríos (`tokko.search_leads`) y
+      evalúa `dias_sin_respuesta >= 5/15/30` leyendo las `condition` del
+      catálogo en runtime. Arma el mensaje con `composer` (grounding: la
+      propiedad original si sigue disponible, o una alternativa del mismo
+      tipo si no — `tokko.search_properties`, nunca inventada). El umbral
+      más alto del catálogo (30 días) es "el 3er intento":
+      `requires_broker: "conditional"` — en vez de mandarse solo, se
+      manda al broker como notificación con el mensaje como borrador
+      (`brokerNotifier`). **Nota de alcance**: si el broker aprueba o edita
+      ese borrador, hoy no hay forma de que su respuesta dispare el envío
+      real — eso necesita manejo del canal broker (Bloque 8-10, todavía no
+      existe). Por ahora el 3er intento queda en "notificado", no
+      "enviado automáticamente", que es justamente el comportamiento que
+      pide el catálogo (no mandarse solo).
+- [x] `jobs/seguimientoPostVisita.ts`: dispara +3h después de la visita
+      (offset del catálogo, no hardcodeado) y de paso marca
+      `Appointment.estado = "realizada"` en el mismo paso — no hizo falta
+      un pase separado para "cerrar" la visita, +3h ya es tiempo de sobra
+      después de que terminó (una vez `realizada`,
+      `AppointmentStore.listActive()` dejar de traerla evita duplicados).
+- [x] Retrofit del Bloque 6: `jobs/reminders.ts` no auditaba nada — CLAUDE.md
+      secc. 3 dice "toda respuesta del agente" sin excepción para las
+      proactivas. Se agregó `AuditLogStore` a sus deps; los 3 jobs
+      proactivos ahora auditan con `confidence: null` (no hubo
+      clasificación, fue el scheduler el que disparó).
+- [x] Tests: 24 nuevos (`scheduleCondition` 5, `recontactStateStore` 8,
+      `recontact` 7, `seguimientoPostVisita` 4) + 2 nuevos en
+      `tokkoMcpClient` real (`searchLeads`/`getLead` contra el proceso
+      real de mcp-tokko). 191 tests en todo el monorepo.
 
 ## Bloque 8 — Canal broker: identificación + resúmenes (solo lectura)
 - [ ] Detectar el canal por número: si `message.from ===

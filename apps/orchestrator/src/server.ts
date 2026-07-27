@@ -13,6 +13,7 @@ import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
 import { FileAppointmentStore } from "./agent/appointmentStore.js";
 import { FileConversationStateStore } from "./agent/conversationStateStore.js";
+import { FileRecontactStateStore } from "./agent/recontactStateStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
 import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
@@ -20,6 +21,8 @@ import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
 import { createRequestListener } from "./app.js";
 import { Scheduler } from "./jobs/scheduler.js";
 import { createReminderJob } from "./jobs/reminders.js";
+import { createRecontactJob } from "./jobs/recontact.js";
+import { createSeguimientoPostVisitaJob } from "./jobs/seguimientoPostVisita.js";
 
 // Ruta absoluta al `.env` de la raíz del repo: `npm run dev --workspace=...`
 // (y por lo tanto `npm run dev:orchestrator` desde la raíz) corre este
@@ -65,15 +68,17 @@ async function main() {
   }
 
   const appointmentStore = new FileAppointmentStore(config.appointmentStorePath);
+  const auditLog = new FileAuditLogStore(config.auditLogPath);
+  const composer = new ClaudeResponseComposer(anthropic);
 
   const listener = createRequestListener({
     catalog,
     classifier: new ClaudeIntentClassifier(anthropic),
-    composer: new ClaudeResponseComposer(anthropic),
+    composer,
     draftComposer: new ClaudeDraftReplyComposer(anthropic),
     slotConfirmationClassifier: new ClaudeSlotConfirmationClassifier(anthropic),
     reprogramActionClassifier: new ClaudeReprogramActionClassifier(anthropic),
-    auditLog: new FileAuditLogStore(config.auditLogPath),
+    auditLog,
     appointmentStore,
     conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),
     tokko,
@@ -98,11 +103,32 @@ async function main() {
       createReminderJob({
         catalog,
         appointmentStore,
+        auditLog,
         tokko,
         weather,
         sender,
         defaultLat: config.defaultLat,
         defaultLng: config.defaultLng,
+      })
+    );
+    scheduler.register(
+      createRecontactJob({
+        catalog,
+        tokko,
+        composer,
+        sender,
+        recontactStateStore: new FileRecontactStateStore(config.recontactStateStorePath),
+        auditLog,
+        brokerNotifier,
+      })
+    );
+    scheduler.register(
+      createSeguimientoPostVisitaJob({
+        catalog,
+        appointmentStore,
+        auditLog,
+        tokko,
+        sender,
       })
     );
     scheduler.start();
