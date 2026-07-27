@@ -31,7 +31,7 @@ describe("formatBrokerNotificationText", () => {
 describe("WhatsAppBrokerNotifier", () => {
   it("manda el texto formateado al número del broker", async () => {
     const sendText = vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } }));
-    const sender: WhatsAppSender = { sendText };
+    const sender: WhatsAppSender = { sendText, sendImage: vi.fn(), sendTemplate: vi.fn() };
     const notifier = new WhatsAppBrokerNotifier(sender, "5491199999999");
 
     await notifier.notify(notification);

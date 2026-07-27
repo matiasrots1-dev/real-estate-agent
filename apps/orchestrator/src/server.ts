@@ -18,6 +18,8 @@ import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
 import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
 import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
 import { createRequestListener } from "./app.js";
+import { Scheduler } from "./jobs/scheduler.js";
+import { createReminderJob } from "./jobs/reminders.js";
 
 // Ruta absoluta al `.env` de la raíz del repo: `npm run dev --workspace=...`
 // (y por lo tanto `npm run dev:orchestrator` desde la raíz) corre este
@@ -62,6 +64,8 @@ async function main() {
     );
   }
 
+  const appointmentStore = new FileAppointmentStore(config.appointmentStorePath);
+
   const listener = createRequestListener({
     catalog,
     classifier: new ClaudeIntentClassifier(anthropic),
@@ -70,7 +74,7 @@ async function main() {
     slotConfirmationClassifier: new ClaudeSlotConfirmationClassifier(anthropic),
     reprogramActionClassifier: new ClaudeReprogramActionClassifier(anthropic),
     auditLog: new FileAuditLogStore(config.auditLogPath),
-    appointmentStore: new FileAppointmentStore(config.appointmentStorePath),
+    appointmentStore,
     conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),
     tokko,
     gcal,
@@ -88,8 +92,27 @@ async function main() {
     console.log(`orchestrator escuchando en :${config.port}`);
   });
 
+  const scheduler = new Scheduler({ intervalMs: config.schedulerIntervalMs });
+  if (sender) {
+    scheduler.register(
+      createReminderJob({
+        catalog,
+        appointmentStore,
+        tokko,
+        weather,
+        sender,
+        defaultLat: config.defaultLat,
+        defaultLng: config.defaultLng,
+      })
+    );
+    scheduler.start();
+  } else {
+    console.warn("Scheduler de jobs (recordatorios, etc) sin arrancar: no hay WhatsAppSender configurado.");
+  }
+
   const shutdown = async () => {
     httpServer.close();
+    scheduler.stop();
     await Promise.all([tokko.close(), gcal.close(), weather.close()]);
     process.exit(0);
   };

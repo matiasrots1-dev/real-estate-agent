@@ -57,6 +57,17 @@ function runSharedTests(makeStore: () => AppointmentStore) {
     await store.save(sampleAppointment({ estado: "cancelada" }));
     expect((await store.findById("appt-1"))?.estado).toBe("cancelada");
   });
+
+  it("listActive devuelve todas las citas activas de todos los leads, sin las canceladas/realizadas", async () => {
+    const store = makeStore();
+    await store.save(sampleAppointment({ id: "appt-1", leadId: "lead-1" }));
+    await store.save(sampleAppointment({ id: "appt-2", leadId: "lead-2" }));
+    await store.save(sampleAppointment({ id: "appt-cancelada", leadId: "lead-3", estado: "cancelada" }));
+    await store.save(sampleAppointment({ id: "appt-realizada", leadId: "lead-4", estado: "realizada" }));
+
+    const active = await store.listActive();
+    expect(active.map((a) => a.id).sort()).toEqual(["appt-1", "appt-2"]);
+  });
 }
 
 describe("InMemoryAppointmentStore", () => {
