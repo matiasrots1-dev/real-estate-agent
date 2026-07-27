@@ -14,6 +14,8 @@ export interface AppointmentStore {
   findActiveByLead(leadId: string): Promise<Appointment | null>;
   /** Todas las citas activas de todos los leads — para jobs que escanean todo (recordatorios, seguimiento post-visita). */
   listActive(): Promise<Appointment[]>;
+  /** Búsqueda inversa evento de Calendar -> cita — para cruzar gcal.list_events con el lead dueño (broker_resumen_agenda). */
+  findByGcalEventId(gcalEventId: string): Promise<Appointment | null>;
 }
 
 function isActive(appointment: Appointment): boolean {
@@ -44,6 +46,10 @@ export class InMemoryAppointmentStore implements AppointmentStore {
 
   async listActive(): Promise<Appointment[]> {
     return [...this.appointments.values()].filter(isActive);
+  }
+
+  async findByGcalEventId(gcalEventId: string): Promise<Appointment | null> {
+    return [...this.appointments.values()].find((a) => a.gcalEventId === gcalEventId) ?? null;
   }
 }
 
@@ -76,5 +82,10 @@ export class FileAppointmentStore implements AppointmentStore {
   async listActive(): Promise<Appointment[]> {
     const all = await this.readAll();
     return Object.values(all).filter(isActive);
+  }
+
+  async findByGcalEventId(gcalEventId: string): Promise<Appointment | null> {
+    const all = await this.readAll();
+    return Object.values(all).find((a) => a.gcalEventId === gcalEventId) ?? null;
   }
 }
