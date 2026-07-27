@@ -24,6 +24,18 @@ export interface WhatsAppSender {
   sendText(to: string, body: string): Promise<WhatsAppSendResult>;
   /** `imageUrl` debe ser una URL pública (Graph API no acepta rutas locales). */
   sendImage(to: string, imageUrl: string, caption?: string): Promise<WhatsAppSendResult>;
+  /**
+   * Mensajes proactivos (fuera de la ventana de 24hs — recordatorios,
+   * recontacto) *tienen* que ser plantillas pre-aprobadas por Meta, texto
+   * libre no sirve (docs/SOW.md secc. 4.1). `bodyParams` reemplaza los
+   * `{{1}}`, `{{2}}`... del body de la plantilla, en orden.
+   */
+  sendTemplate(
+    to: string,
+    templateName: string,
+    languageCode: string,
+    bodyParams: string[]
+  ): Promise<WhatsAppSendResult>;
 }
 
 export class GraphApiWhatsAppSender implements WhatsAppSender {
@@ -43,6 +55,27 @@ export class GraphApiWhatsAppSender implements WhatsAppSender {
       to,
       type: "image",
       image: { link: imageUrl, caption },
+    });
+  }
+
+  sendTemplate(
+    to: string,
+    templateName: string,
+    languageCode: string,
+    bodyParams: string[]
+  ): Promise<WhatsAppSendResult> {
+    return this.postMessage({
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        components:
+          bodyParams.length > 0
+            ? [{ type: "body", parameters: bodyParams.map((text) => ({ type: "text", text })) }]
+            : undefined,
+      },
     });
   }
 

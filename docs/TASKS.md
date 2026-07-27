@@ -196,8 +196,127 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       143 tests en todo el monorepo (99 en orchestrator — incluye
       integración real contra los 3 MCP servers por stdio, no solo Tokko).
 
-## No hacer todavía (fase 2+, ver SOW)
-- Recordatorios automáticos, recontacto proactivo, seguimiento post-visita
-  (intents `scheduled`).
-- Canal broker (`broker_resumen_agenda`, `broker_accion_directa`, etc).
-- Cualquier cosa de "Out of scope" en `docs/SOW.md` sección 2.
+---
+
+# Backlog de tareas — Fase 2 (MVP en producción)
+
+Mismo criterio que la Fase 1: no bloquear el trabajo por falta de una
+credencial o prerequisito externo (plantillas de WhatsApp aprobadas por
+Meta, `TOKKO_API_KEY`, etc.) — avanzar con mocks/stubs y dejar `// TODO`
+explícito. Orden sugerido; no saltar un bloque sin haber cerrado el
+anterior con un test que lo pruebe (mismo criterio que la Fase 1).
+
+## Bloque 6 — Scheduler + `recordatorio_visita`
+- [x] `apps/orchestrator/src/jobs/scheduler.ts` — polling a intervalo fijo
+      (`SCHEDULER_INTERVAL_MS`, default 5 min), no cron expressions de
+      verdad: los jobs de este proyecto son "chequeá si ya se cumplió tal
+      condición", no "corré a tal hora exacta" (documentado en el propio
+      archivo). Un job que falla no frena a los demás (`tick()` los
+      atrapa individualmente).
+- [x] `WhatsAppSender.sendTemplate(to, templateName, languageCode,
+      bodyParams)` — nuevo método, mismo patrón que `sendText`/`sendImage`
+      (Fase 1). Implementado contra la API real de Meta (`type: template`
+      con components de body). **Pendiente de confirmar con el usuario**:
+      que `recordatorio_visita_v1` exista y esté aprobada en Meta Business
+      Manager — sin eso, el envío va a fallar en producción aunque el
+      código esté bien (mismo tipo de bloqueo externo que Tokko/Calendar
+      en la Fase 1, no bloquea el desarrollo).
+- [x] `jobs/reminders.ts` — recorre `AppointmentStore.listActive()` (método
+      nuevo, agregado a la interfaz) y dispara `recordatorio_visita` en
+      T-24h/T-2h leyendo `schedule_rules` del catálogo en runtime
+      (`jobs/scheduleOffset.ts` parsea "-24h"/"-2h"/"+3h" — nunca
+      hardcodeado, CLAUDE.md secc. 7), usando `Appointment.remindersSent`
+      (existía desde la Fase 1, sin usar todavía) para no duplicar. El
+      mensaje incluye clima real (`weather.get_forecast`, mismo patrón que
+      `consulta_clima_visita`) + datos de la propiedad.
+- [x] Integrado en `server.ts`: el scheduler arranca solo si hay
+      `WhatsAppSender` configurado (si no, warning y no arranca — no tiene
+      sentido correr un job que no puede mandar nada).
+- [x] Tests: 21 nuevos (`scheduler` 4, `scheduleOffset` 4, `sender` 5,
+      `reminders` 6, `appointmentStore.listActive` 1, + fix de
+      `brokerNotifier` para la nueva interfaz). Cubren: no manda si falta
+      más de 24hs; manda -24h y lo marca en `remindersSent`; no duplica en
+      una segunda corrida; manda -2h aunque -24h ya se haya mandado; nada
+      para una visita ya pasada; un envío que falla no frena los demás ni
+      marca `remindersSent` (para poder reintentar la próxima corrida).
+      164 tests en todo el monorepo.
+
+## Bloque 7 — `recontacto_lead_frio` + `seguimiento_post_visita`
+- [ ] `jobs/recontact.ts`: recorre leads (`tokko.search_leads`) y evalúa
+      `dias_sin_respuesta >= 5/15/30` (docs/intent_catalog.yaml). Con
+      `MockTokkoClient` alcanza para probar la lógica del job — el dato de
+      `Lead.diasSinRespuesta` en sí va a ser real recién cuando haya
+      `TOKKO_API_KEY`.
+- [ ] Regla de escalamiento condicional del propio catálogo: el 3er
+      intento (30 días) va a revisión del broker *antes* de mandarse
+      (`requires_broker: "conditional"`) — reusar `draftComposer`/
+      `brokerNotifier` de la Fase 1, pero acá el broker aprueba o edita el
+      mensaje de recontacto en vez de solo recibir un aviso informativo.
+- [ ] `jobs/seguimientoPostVisita.ts`: dispara +3h después de una visita.
+      Necesita poder identificar visitas ya pasadas — marcar
+      `Appointment.estado = "realizada"` automáticamente cuando
+      `fechaHora` + duración ya pasó, antes de disparar el seguimiento.
+- [ ] Tests de los dos jobs con `MockTokkoClient` / `InMemoryAppointmentStore`.
+
+## Bloque 8 — Canal broker: identificación + resúmenes (solo lectura)
+- [ ] Detectar el canal por número: si `message.from ===
+      BROKER_WHATSAPP_NUMBER` es `channel: "broker"`, no `"cliente"`.
+      Filtrar los intents candidatos que se le pasan al classifier según
+      el canal del mensaje entrante — nunca dejar que un mensaje de
+      cliente matchee un intent `channel: broker` o viceversa.
+- [ ] `broker_resumen_agenda`: `gcal.list_events` + `tokko.get_lead`
+      cruzado, arma un resumen de la agenda.
+- [ ] `broker_resumen_leads`: `tokko.search_leads`, resumen de leads
+      nuevos/fríos/en negociación.
+- [ ] Los dos son de un solo turno y sin escritura — el punto de entrada
+      más simple al canal broker (mismo criterio de "empezar por lo más
+      simple" que ya usamos en la Fase 1 con mcp-weather/consulta_disponibilidad).
+- [ ] Tests contra el catálogo real + mocks de Tokko/Calendar.
+
+## Bloque 9 — Canal broker: pausar el agente
+- [ ] `broker_pausar_agente`: pausar/reactivar respuestas automáticas —
+      por conversación puntual (`ConversationState.pausedByBroker`, el
+      campo ya existe desde la Fase 1 sin usar todavía) o global (flag
+      nueva, no hay dónde guardarla todavía).
+- [ ] Si `pausedByBroker` es true (puntual o global),
+      `handleIncomingMessage` no responde solo a ese cliente — se loguea
+      en `audit_log` que se recibió el mensaje pero no se actuó, y se
+      corta el flujo antes de clasificar (ahorra la llamada a Claude).
+- [ ] Test: un mensaje de un cliente pausado no dispara ninguna tool ni
+      respuesta, pero sí queda auditado.
+
+## Bloque 10 — Canal broker: acción directa (el más grande, al final a propósito)
+- [ ] `broker_accion_directa`: orden compuesta en lenguaje libre ("mandale
+      la ficha de X a Juan y ofrecele el sábado a las 11"). A diferencia
+      de todo lo anterior, acá el LLM decide dinámicamente qué tools
+      llamar (tool-use real de Claude sobre `tokko.get_property`,
+      `tokko.search_leads`, `gcal.create_event`, `gcal.patch_event`,
+      `whatsapp.send_message`, `whatsapp.send_template`), no un handler
+      fijo por intent como el resto del catálogo.
+- [ ] `requires_preview_if_bulk: true` (docs/intent_catalog.yaml): si la
+      orden afecta a más de un contacto, el agente responde primero con
+      un preview ("esto le va a llegar a 14 contactos, ¿confirmás?") y
+      espera el OK del broker antes de ejecutar — nunca una acción masiva
+      directo, sin excepción.
+- [ ] Es lo más parecido a una acción irreversible de alto impacto que
+      construimos hasta ahora — priorizar los tests de "no ejecuta sin
+      confirmación" antes que los de "ejecuta bien cuando confirma".
+
+## Bloque 11 — Persistencia real (Postgres), si el volumen ya lo justifica
+- [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
+      `ConversationStateStore`, todos con interfaz ya lista desde la Fase
+      1) siguen alcanzando una vez que hay jobs corriendo periódicamente
+      + el canal broker escribiendo estado. Es probable que acá ya no.
+      **Este es el punto donde instalar Docker se vuelve necesario de
+      verdad** (venimos avisando desde el Bloque 3 que todavía no hacía
+      falta).
+- [ ] Migrar las 3 interfaces a implementaciones Postgres
+      (`docker-compose.yml` ya provisiona el servicio) — es swap de
+      implementación detrás de una interfaz que ya existe, no reescritura.
+- [ ] Redis/BullMQ (docs/SOW.md secc. 4.6) solo si el cron simple del
+      Bloque 6 no alcanza en volumen real — no implementarlo
+      especulativamente si nadie lo necesitó todavía.
+
+## Fuera de alcance permanente (no reabrir sin pedido explícito del usuario)
+- Multi-tenant, pagos, firma electrónica, publicación en portales — "Out
+  of scope" de `docs/SOW.md` sección 2.

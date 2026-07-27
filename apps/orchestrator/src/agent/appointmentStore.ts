@@ -12,6 +12,8 @@ export interface AppointmentStore {
    * de una?).
    */
   findActiveByLead(leadId: string): Promise<Appointment | null>;
+  /** Todas las citas activas de todos los leads — para jobs que escanean todo (recordatorios, seguimiento post-visita). */
+  listActive(): Promise<Appointment[]>;
 }
 
 function isActive(appointment: Appointment): boolean {
@@ -39,6 +41,10 @@ export class InMemoryAppointmentStore implements AppointmentStore {
   async findActiveByLead(leadId: string): Promise<Appointment | null> {
     return pickActive([...this.appointments.values()].filter((a) => a.leadId === leadId));
   }
+
+  async listActive(): Promise<Appointment[]> {
+    return [...this.appointments.values()].filter(isActive);
+  }
 }
 
 // TODO(fase 2+): migrar a Postgres (docker-compose.yml) cuando haga falta
@@ -65,5 +71,10 @@ export class FileAppointmentStore implements AppointmentStore {
   async findActiveByLead(leadId: string): Promise<Appointment | null> {
     const all = await this.readAll();
     return pickActive(Object.values(all).filter((a) => a.leadId === leadId));
+  }
+
+  async listActive(): Promise<Appointment[]> {
+    const all = await this.readAll();
+    return Object.values(all).filter(isActive);
   }
 }

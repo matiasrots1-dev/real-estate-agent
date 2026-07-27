@@ -41,6 +41,8 @@ export interface OrchestratorConfig {
    */
   defaultLat: number;
   defaultLng: number;
+  /** Cada cuánto corre el scheduler de jobs (recordatorios, etc). Ver jobs/scheduler.ts. */
+  schedulerIntervalMs: number;
 }
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
@@ -82,5 +84,6 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
       path.join(REPO_ROOT, "apps/orchestrator/data/conversations.json"),
     defaultLat: env.DEFAULT_LAT ? Number(env.DEFAULT_LAT) : -34.6037,
     defaultLng: env.DEFAULT_LNG ? Number(env.DEFAULT_LNG) : -58.3816,
+    schedulerIntervalMs: env.SCHEDULER_INTERVAL_MS ? Number(env.SCHEDULER_INTERVAL_MS) : 5 * 60 * 1000,
   };
 }
