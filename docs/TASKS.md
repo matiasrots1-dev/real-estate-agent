@@ -383,21 +383,76 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       todo el monorepo.
 
 ## Bloque 10 — Canal broker: acción directa (el más grande, al final a propósito)
-- [ ] `broker_accion_directa`: orden compuesta en lenguaje libre ("mandale
+- [x] `broker_accion_directa`: orden compuesta en lenguaje libre ("mandale
       la ficha de X a Juan y ofrecele el sábado a las 11"). A diferencia
       de todo lo anterior, acá el LLM decide dinámicamente qué tools
       llamar (tool-use real de Claude sobre `tokko.get_property`,
       `tokko.search_leads`, `gcal.create_event`, `gcal.patch_event`,
       `whatsapp.send_message`, `whatsapp.send_template`), no un handler
       fijo por intent como el resto del catálogo.
-- [ ] `requires_preview_if_bulk: true` (docs/intent_catalog.yaml): si la
+      Se agregó `tokko.search_properties` a la lista de `tools` del intent
+      en `docs/intent_catalog.yaml` (siguiendo CLAUDE.md secc. 7: "primero
+      editá el YAML, después el código") — el broker referencia una
+      propiedad por texto libre ("el depto de Palermo"), no por id, así
+      que hace falta buscarla antes de poder usar `tokko.get_property`.
+      **Diseño: planificar vs. ejecutar, separados a propósito.** En vez
+      de darle a Claude las 4 tools de escritura/envío directo dentro de
+      un mismo loop de tool-use, se separó en dos archivos:
+      `agent/brokerAccionDirectaPlan.ts` (`ClaudeBrokerAccionDirectaPlanner`:
+      Claude investiga con tools de solo lectura reales —
+      `tokko_find_property`/`tokko_search_leads` — y termina siempre
+      llamando a una tool terminal `submit_action_plan` con la lista
+      estructurada de acciones + un preview para el broker) y
+      `agent/brokerAccionDirectaExecutor.ts` (`executeActionPlan`: nuestro
+      propio código TS ejecuta cada acción del plan contra Calendar/
+      WhatsApp de verdad, best-effort por acción — mismo criterio que
+      `jobs/reminders.ts`/`jobs/recontact.ts`). Esto es lo que hace posible
+      el gate de confirmación bulk de abajo: interceptamos el plan ANTES
+      de tocar nada, en vez de confiar en que el modelo respete una
+      instrucción de "esperá mi confirmación" en medio de un loop con las
+      tools de escritura ya en la mano. `gcal_create_event` también guarda
+      una `Appointment` (igual que `agendarVisita.ts`) — si no, la visita
+      creada por esta vía no aparecería en `broker_resumen_agenda` ni en
+      los jobs de recordatorio/seguimiento.
+- [x] `requires_preview_if_bulk: true` (docs/intent_catalog.yaml): si la
       orden afecta a más de un contacto, el agente responde primero con
       un preview ("esto le va a llegar a 14 contactos, ¿confirmás?") y
       espera el OK del broker antes de ejecutar — nunca una acción masiva
       directo, sin excepción.
-- [ ] Es lo más parecido a una acción irreversible de alto impacto que
+      El conteo es de **contactos distintos** (`leadId` únicos en el
+      plan), no de acciones — "mandale la ficha a Juan y ofrecele el
+      sábado" son 2 acciones sobre 1 solo contacto y se ejecuta directo,
+      sin pedir confirmación (`requires_client_confirmation: false` del
+      catálogo es justo eso: el que confirma es el broker, no el
+      cliente). El texto del preview y del resumen de ejecución se arman
+      con código propio, no con el composer (aunque el catálogo declara
+      `response.style: generative_grounded`) — desviación deliberada: la
+      pregunta de confirmación bulk es seguridad, no redacción, y no
+      queremos que una reformulación del LLM pierda el conteo exacto o la
+      pregunta misma. El turno 2 (confirmación) usa un nuevo
+      `agent/confirmationClassifier.ts` (sí/no simple, mismo patrón de
+      tool-use forzado que el resto) enganchado en `stateMachine.ts` bajo
+      el step `esperando_ok_broker` (el campo ya existía en
+      `ConversationStep` desde la Fase 1, sin usar hasta ahora) — el plan
+      completo viaja serializado en `ConversationState.context` del
+      broker entre los dos turnos.
+- [x] Es lo más parecido a una acción irreversible de alto impacto que
       construimos hasta ahora — priorizar los tests de "no ejecuta sin
       confirmación" antes que los de "ejecuta bien cuando confirma".
+      `brokerAccionDirecta.test.ts` arranca justamente con el describe
+      "el gate bulk nunca ejecuta sin confirmación" (verifica que ningún
+      tool de escritura se llama, y que el conteo de contactos usa leads
+      distintos, no acciones) antes de los tests de ejecución exitosa.
+      37 tests nuevos (`brokerAccionDirectaExecutor` 9,
+      `brokerAccionDirectaPlan` 6 — con un fake del cliente Anthropic para
+      poder probar el loop de planificación multi-turno sin red real,
+      incluyendo el caso de plan incompleto y el de turnos agotados sin
+      converger —, `brokerAccionDirecta` 10, `stateMachine` +1,
+      `handleIncomingMessage` +4). `ClaudeConfirmationClassifier` no tiene
+      test directo, mismo criterio que `ReprogramActionClassifier`/
+      `PausarAgenteActionClassifier`: wrapper fino de Claude, probado
+      indirecto vía `brokerAccionDirecta.test.ts` con un stub. 255 tests
+      en todo el monorepo.
 
 ## Bloque 11 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

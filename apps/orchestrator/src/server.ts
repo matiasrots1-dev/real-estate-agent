@@ -10,6 +10,8 @@ import { ClaudeDraftReplyComposer } from "./agent/draftComposer.js";
 import { ClaudeSlotConfirmationClassifier } from "./agent/slotConfirmation.js";
 import { ClaudeReprogramActionClassifier } from "./agent/reprogramActionClassifier.js";
 import { ClaudePausarAgenteActionClassifier } from "./agent/pausarAgenteClassifier.js";
+import { ClaudeBrokerAccionDirectaPlanner } from "./agent/brokerAccionDirectaPlan.js";
+import { ClaudeConfirmationClassifier } from "./agent/confirmationClassifier.js";
 import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
 import { FileAppointmentStore } from "./agent/appointmentStore.js";
@@ -82,6 +84,8 @@ async function main() {
     reprogramActionClassifier: new ClaudeReprogramActionClassifier(anthropic),
     pausarAgenteActionClassifier: new ClaudePausarAgenteActionClassifier(anthropic),
     globalPauseStore: new FileGlobalPauseStore(config.globalPauseStorePath),
+    brokerAccionDirectaPlanner: new ClaudeBrokerAccionDirectaPlanner(anthropic, tokko),
+    confirmationClassifier: new ClaudeConfirmationClassifier(anthropic),
     auditLog,
     appointmentStore,
     conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),
