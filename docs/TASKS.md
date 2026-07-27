@@ -285,19 +285,56 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       real de mcp-tokko). 191 tests en todo el monorepo.
 
 ## Bloque 8 — Canal broker: identificación + resúmenes (solo lectura)
-- [ ] Detectar el canal por número: si `message.from ===
+- [x] Detectar el canal por número: si `message.from ===
       BROKER_WHATSAPP_NUMBER` es `channel: "broker"`, no `"cliente"`.
       Filtrar los intents candidatos que se le pasan al classifier según
       el canal del mensaje entrante — nunca dejar que un mensaje de
       cliente matchee un intent `channel: broker` o viceversa.
-- [ ] `broker_resumen_agenda`: `gcal.list_events` + `tokko.get_lead`
-      cruzado, arma un resumen de la agenda.
-- [ ] `broker_resumen_leads`: `tokko.search_leads`, resumen de leads
-      nuevos/fríos/en negociación.
-- [ ] Los dos son de un solo turno y sin escritura — el punto de entrada
+      Implementado como `filterCatalogByChannel(catalog, channel)` en
+      `agent/intentCatalog.ts`: filtra el catálogo ANTES de llamar al
+      classifier (el classifier no cambió — sigue recibiendo un
+      `IntentCatalog`, solo que ya recortado). `handleIncomingMessage`
+      calcula `channel` comparando `message.from` con el nuevo
+      `HandleMessageDeps.brokerWhatsappNumber` (pasado desde `server.ts` ←
+      `config.whatsapp.brokerWhatsappNumber`). Los intents `channel: any`
+      (ej. `consulta_clima_visita`) quedan visibles en los dos canales.
+      Nota de riesgo conocida (no resuelta, a revisar con uso real): la
+      comparación es una igualdad de string exacta; Meta normaliza
+      números argentinos de forma inconsistente (ya lo vimos en
+      Bloques 4/6), así que un desfasaje de formato haría que el broker
+      caiga silenciosamente en el canal `cliente` en vez de fallar
+      ruidosamente.
+- [x] `broker_resumen_agenda`: `gcal.list_events` + `tokko.get_lead`
+      cruzado, arma un resumen de la agenda. Implementado en
+      `agent/brokerResumenAgenda.ts`: trae los eventos de Calendar de una
+      ventana de 7 días (`AGENDA_WINDOW_DAYS`, simplificación pragmática,
+      no una regla de negocio del catálogo), y para cada evento busca la
+      `Appointment` interna vía el nuevo `AppointmentStore.findByGcalEventId`
+      para resolver el lead dueño con `tokko.get_lead`. Si un evento no
+      tiene `Appointment` asociada (ej. algo cargado a mano en el
+      Calendar), el resumen muestra `lead: null` en vez de inventar un
+      nombre — `tokko.get_lead` ni se llama en ese caso, así el
+      `toolsCalled` que se audita refleja exactamente lo que se usó.
+- [x] `broker_resumen_leads`: `tokko.search_leads`, resumen de leads
+      nuevos/fríos/en negociación. Implementado en
+      `agent/brokerResumenLeads.ts`: un único `searchLeads({})` sin
+      filtro, agrupado por `temperatura` en el propio código (no le pide
+      al LLM que cuente) — los conteos son exactamente los que devolvió
+      Tokko, nunca una estimación del composer.
+- [x] Los dos son de un solo turno y sin escritura — el punto de entrada
       más simple al canal broker (mismo criterio de "empezar por lo más
       simple" que ya usamos en la Fase 1 con mcp-weather/consulta_disponibilidad).
-- [ ] Tests contra el catálogo real + mocks de Tokko/Calendar.
+- [x] Tests contra el catálogo real + mocks de Tokko/Calendar: 5 nuevos en
+      `intentCatalog.test.ts` (filtrado por canal), 2 nuevos en
+      `appointmentStore.test.ts` (`findByGcalEventId`), 3 nuevos en
+      `brokerResumenAgenda.test.ts`, 2 nuevos en `brokerResumenLeads.test.ts`,
+      y 5 nuevos en `handleIncomingMessage.test.ts` (el classifier recibe
+      un catálogo sin intents `broker` cuando el mensaje es de un cliente
+      y viceversa; sin `brokerWhatsappNumber` configurado todo se trata
+      como canal cliente; dispatch end-to-end de los dos intents nuevos).
+      El test viejo que esperaba `NotImplementedIntentError` para
+      `broker_resumen_agenda` se eliminó porque ese intent ya tiene
+      handler real. 209 tests en todo el monorepo.
 
 ## Bloque 9 — Canal broker: pausar el agente
 - [ ] `broker_pausar_agente`: pausar/reactivar respuestas automáticas —

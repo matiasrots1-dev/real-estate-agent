@@ -68,6 +68,17 @@ function runSharedTests(makeStore: () => AppointmentStore) {
     const active = await store.listActive();
     expect(active.map((a) => a.id).sort()).toEqual(["appt-1", "appt-2"]);
   });
+
+  it("findByGcalEventId encuentra la cita por su evento de Calendar", async () => {
+    const store = makeStore();
+    await store.save(sampleAppointment({ id: "appt-1", gcalEventId: "evt-abc" }));
+    expect((await store.findByGcalEventId("evt-abc"))?.id).toBe("appt-1");
+  });
+
+  it("findByGcalEventId devuelve null si ningún evento matchea", async () => {
+    const store = makeStore();
+    expect(await store.findByGcalEventId("no-existe")).toBeNull();
+  });
 }
 
 describe("InMemoryAppointmentStore", () => {

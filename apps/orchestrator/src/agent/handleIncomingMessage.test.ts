@@ -54,6 +54,8 @@ function stubTokko(): TokkoQueries {
   return {
     searchProperties: vi.fn(async () => [property]),
     getProperty: vi.fn(async () => property),
+    searchLeads: vi.fn(async () => []),
+    getLead: vi.fn(async () => null),
     logActivity: vi.fn(async () => ({ logged: true as const, activityId: "act-1" })),
   };
 }
@@ -277,15 +279,6 @@ describe("handleIncomingMessage — flujo multi-turno de agendar_visita (Bloque 
 });
 
 describe("handleIncomingMessage — intents sin handler todavía", () => {
-  it("intent de canal broker (fuera de alcance del cliente, ej. broker_resumen_agenda): tira NotImplementedIntentError", async () => {
-    await expect(
-      handleIncomingMessage(
-        incoming("resumen de mañana"),
-        baseDeps({ classifier: stubClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 }) })
-      )
-    ).rejects.toThrow(NotImplementedIntentError);
-  });
-
   it("intent inexistente en el catálogo (alucinación del classifier): tira NotImplementedIntentError", async () => {
     await expect(
       handleIncomingMessage(
@@ -293,5 +286,90 @@ describe("handleIncomingMessage — intents sin handler todavía", () => {
         baseDeps({ classifier: stubClassifier({ intentId: "intent_que_no_existe", confidence: 0.9 }) })
       )
     ).rejects.toThrow(NotImplementedIntentError);
+  });
+});
+
+const BROKER_NUMBER = "5491199999999";
+
+/** Classifier espía que registra qué catálogo (ya filtrado por canal) recibió, sin importarle el texto. */
+function capturingClassifier(result: IntentClassification): IntentClassifier & { seenCatalog?: IntentCatalog } {
+  const spy = {
+    seenCatalog: undefined as IntentCatalog | undefined,
+    classify: vi.fn(async (_text: string, catalog: IntentCatalog) => {
+      spy.seenCatalog = catalog;
+      return result;
+    }),
+  };
+  return spy;
+}
+
+describe("handleIncomingMessage — canal broker (Bloque 8)", () => {
+  it("mensaje de un cliente: el classifier recibe un catálogo sin intents channel=broker", async () => {
+    const classifier = capturingClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9, searchQuery: "Palermo" });
+
+    await handleIncomingMessage(incoming("¿algo disponible?", "5491100000001"), baseDeps({ classifier, brokerWhatsappNumber: BROKER_NUMBER }));
+
+    expect(classifier.seenCatalog).toBeDefined();
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(false);
+    expect(classifier.seenCatalog!.intents.some((i) => i.id === "consulta_disponibilidad")).toBe(true);
+  });
+
+  it("mensaje del broker (message.from === brokerWhatsappNumber): el classifier recibe un catálogo sin intents channel=cliente", async () => {
+    const classifier = capturingClassifier({ intentId: "broker_resumen_leads", confidence: 0.9 });
+
+    await handleIncomingMessage(
+      incoming("resumen de leads", BROKER_NUMBER),
+      baseDeps({ classifier, brokerWhatsappNumber: BROKER_NUMBER, tokko: stubTokko() })
+    );
+
+    expect(classifier.seenCatalog).toBeDefined();
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "cliente")).toBe(false);
+    expect(classifier.seenCatalog!.intents.some((i) => i.id === "broker_resumen_leads")).toBe(true);
+  });
+
+  it("sin brokerWhatsappNumber configurado: cualquier mensaje se trata como canal cliente", async () => {
+    const classifier = capturingClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9, searchQuery: "Palermo" });
+
+    await handleIncomingMessage(incoming("¿algo disponible?", BROKER_NUMBER), baseDeps({ classifier }));
+
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(false);
+  });
+
+  it("broker_resumen_agenda: ejecuta el handler real (gcal.list_events + cruce con tokko.get_lead), no escala", async () => {
+    const gcal = stubGcal();
+    gcal.listEvents = vi.fn(async () => []);
+    const result = await handleIncomingMessage(
+      incoming("¿cómo viene la agenda?", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        gcal,
+        composer: stubComposer("No tenés visitas esta semana."),
+      })
+    );
+
+    expect(gcal.listEvents).toHaveBeenCalledTimes(1);
+    expect(result.responseText).toBe("No tenés visitas esta semana.");
+    expect(result.escalatedToBroker).toBe(false);
+    expect(result.intentId).toBe("broker_resumen_agenda");
+  });
+
+  it("broker_resumen_leads: ejecuta el handler real (tokko.search_leads), no escala", async () => {
+    const tokko = stubTokko();
+    tokko.searchLeads = vi.fn(async () => []);
+    const result = await handleIncomingMessage(
+      incoming("¿cómo vienen los leads?", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_resumen_leads", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        tokko,
+        composer: stubComposer("No tenés leads cargados."),
+      })
+    );
+
+    expect(tokko.searchLeads).toHaveBeenCalledWith({});
+    expect(result.responseText).toBe("No tenés leads cargados.");
+    expect(result.escalatedToBroker).toBe(false);
+    expect(result.intentId).toBe("broker_resumen_leads");
   });
 });

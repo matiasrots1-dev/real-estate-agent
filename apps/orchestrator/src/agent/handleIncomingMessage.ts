@@ -4,7 +4,7 @@ import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayloa
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
-import { effectiveConfidenceThreshold, findIntent } from "./intentCatalog.js";
+import { effectiveConfidenceThreshold, filterCatalogByChannel, findIntent } from "./intentCatalog.js";
 import type { IntentClassifier } from "./classifier.js";
 import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
@@ -27,6 +27,8 @@ import {
   type ReprogramarCancelarVisitaStepResult,
 } from "./reprogramarCancelarVisita.js";
 import { continueConversationIfActive } from "./stateMachine.js";
+import { runBrokerResumenAgenda } from "./brokerResumenAgenda.js";
+import { runBrokerResumenLeads } from "./brokerResumenLeads.js";
 
 /**
  * El intent matcheó pero no hay handler para él: ni escala, ni es uno de los
@@ -59,6 +61,8 @@ export interface HandleMessageDeps {
   defaultLng: number;
   /** Si no está configurado, se escala igual pero no se notifica a nadie. */
   brokerNotifier?: BrokerNotifier;
+  /** Si `message.from` matchea esto, el mensaje es del canal `broker`, no `cliente` (docs/TASKS.md Bloque 8). */
+  brokerWhatsappNumber?: string;
 }
 
 export interface HandleMessageResult {
@@ -94,7 +98,17 @@ export async function handleIncomingMessage(
     await deps.conversationStateStore.save(idleState(message.from, message.from));
   }
 
-  const classification = await deps.classifier.classify(message.text, deps.catalog);
+  // docs/TASKS.md Bloque 8: el classifier solo ve los intents del canal que
+  // corresponde — un cliente nunca puede matchear un intent `channel:
+  // broker` ni viceversa. Nota conocida: esto asume que `message.from`
+  // llega exactamente igual a `BROKER_WHATSAPP_NUMBER`; Meta a veces
+  // normaliza números argentinos de forma inconsistente (ver Bloque 4/6),
+  // así que un desfasaje de formato haría que el broker sea tratado como
+  // cliente en vez de fallar ruidosamente — a revisar con uso real.
+  const channel = message.from === deps.brokerWhatsappNumber ? "broker" : "cliente";
+  const catalogForChannel = filterCatalogByChannel(deps.catalog, channel);
+
+  const classification = await deps.classifier.classify(message.text, catalogForChannel);
   const intent = findIntent(deps.catalog, classification.intentId);
   if (!intent) {
     throw new NotImplementedIntentError(classification.intentId);
@@ -156,6 +170,22 @@ export async function handleIncomingMessage(
     case "reprogramar_cancelar_visita": {
       const result = await startReprogramarCancelarVisita(message, intent, reprogramarVisitaDeps(deps));
       return finalizeVisitStep(deps, message, intent, classification.confidence, result);
+    }
+
+    case "broker_resumen_agenda": {
+      const result = await runBrokerResumenAgenda(intent, {
+        gcal: deps.gcal,
+        tokko: deps.tokko,
+        appointmentStore: deps.appointmentStore,
+        composer: deps.composer,
+        language,
+      });
+      return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
+    }
+
+    case "broker_resumen_leads": {
+      const result = await runBrokerResumenLeads(intent, deps.tokko, deps.composer, language);
+      return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
     }
 
     default:

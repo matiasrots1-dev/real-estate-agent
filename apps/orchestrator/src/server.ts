@@ -88,6 +88,7 @@ async function main() {
     defaultLng: config.defaultLng,
     sender,
     brokerNotifier,
+    brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     whatsappAppSecret: config.whatsapp.appSecret,
   });
