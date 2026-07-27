@@ -40,20 +40,25 @@ mergear.
    cierra, con el mismo nivel de detalle que ya tienen los bloques
    anteriores (qué se hizo, qué quedó pendiente de credenciales externas,
    cuántos tests nuevos).
-6. **Pusheá la rama y abrí el Pull Request contra `main`**:
+6. **Pusheá la rama**:
    ```
    git push -u origin bloque-N-slug-corto
-   gh pr create --title "Bloque N: título corto" --body "..."
    ```
-   El cuerpo del PR resume: qué se implementó, decisiones de diseño no
-   obvias, qué quedó mockeado/pendiente de una credencial real, y el
-   conteo de tests. Mismo tono que las entradas de `docs/TASKS.md`.
+   Git devuelve en la salida la URL directa para abrir el Pull Request
+   ("Create a pull request for '...' on GitHub by visiting: ..."). No hay
+   `gh` CLI configurado en este entorno, así que **quien empujó la rama le
+   pasa ese link al dueño del repo** (o lo abre él mismo si es quien
+   pushea) — el PR se crea a mano desde la web de GitHub con ese link,
+   completando título y cuerpo con el resumen del bloque: qué se
+   implementó, decisiones de diseño no obvias, qué quedó
+   mockeado/pendiente de una credencial real, y el conteo de tests. Mismo
+   tono que las entradas de `docs/TASKS.md`.
 
-   Si no tenés `gh` instalado/autenticado, pusheá la rama igual — Git te da
-   la URL para abrir el PR a mano desde la web de GitHub.
-7. **Esperá la revisión.** No mergees el PR vos mismo ni asumas que va a
-   aprobarse — el dueño del repo lo revisa y aprueba desde GitHub. Si pide
-   cambios, hacé los commits nuevos en la misma rama.
+   (Si en algún momento se instala y autentica `gh` CLI, `gh pr create`
+   hace este paso sin pasar por la web — pero no es el flujo actual.)
+7. **Esperá la revisión.** Quien pushea no mergea su propio PR ni asume que
+   va a aprobarse — el dueño del repo lo revisa y aprueba desde GitHub. Si
+   pide cambios, hacé los commits nuevos en la misma rama.
 8. **Después de que se mergea**, volvé a `main` y actualizá antes de
    arrancar el próximo bloque:
    ```
