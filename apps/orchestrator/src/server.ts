@@ -7,9 +7,15 @@ import { loadCatalog } from "./agent/intentCatalog.js";
 import { ClaudeIntentClassifier } from "./agent/classifier.js";
 import { ClaudeResponseComposer } from "./agent/composer.js";
 import { ClaudeDraftReplyComposer } from "./agent/draftComposer.js";
+import { ClaudeSlotConfirmationClassifier } from "./agent/slotConfirmation.js";
+import { ClaudeReprogramActionClassifier } from "./agent/reprogramActionClassifier.js";
 import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
+import { FileAppointmentStore } from "./agent/appointmentStore.js";
+import { FileConversationStateStore } from "./agent/conversationStateStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
+import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
+import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
 import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
 import { createRequestListener } from "./app.js";
 
@@ -31,11 +37,10 @@ async function main() {
   const catalog = loadCatalog(config.intentCatalogPath);
   const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
 
-  const tokko = new TokkoMcpClient({
-    entryPath: config.mcpTokko.entryPath,
-    cwd: config.mcpTokko.cwd,
-  });
-  await tokko.connect();
+  const tokko = new TokkoMcpClient({ entryPath: config.mcpTokko.entryPath, cwd: config.mcpTokko.cwd });
+  const gcal = new GcalMcpClient({ entryPath: config.mcpGcal.entryPath, cwd: config.mcpGcal.cwd });
+  const weather = new WeatherMcpClient({ entryPath: config.mcpWeather.entryPath, cwd: config.mcpWeather.cwd });
+  await Promise.all([tokko.connect(), gcal.connect(), weather.connect()]);
 
   const sender =
     config.whatsapp.phoneNumberId && config.whatsapp.accessToken
@@ -62,8 +67,16 @@ async function main() {
     classifier: new ClaudeIntentClassifier(anthropic),
     composer: new ClaudeResponseComposer(anthropic),
     draftComposer: new ClaudeDraftReplyComposer(anthropic),
+    slotConfirmationClassifier: new ClaudeSlotConfirmationClassifier(anthropic),
+    reprogramActionClassifier: new ClaudeReprogramActionClassifier(anthropic),
     auditLog: new FileAuditLogStore(config.auditLogPath),
+    appointmentStore: new FileAppointmentStore(config.appointmentStorePath),
+    conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),
     tokko,
+    gcal,
+    weather,
+    defaultLat: config.defaultLat,
+    defaultLng: config.defaultLng,
     sender,
     brokerNotifier,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
@@ -77,7 +90,7 @@ async function main() {
 
   const shutdown = async () => {
     httpServer.close();
-    await tokko.close();
+    await Promise.all([tokko.close(), gcal.close(), weather.close()]);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

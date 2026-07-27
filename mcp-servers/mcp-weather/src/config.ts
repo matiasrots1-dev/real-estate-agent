@@ -6,11 +6,19 @@ export interface WeatherConfig {
 export function loadWeatherConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env
 ): WeatherConfig {
-  const apiKey = env.WEATHER_API_KEY;
-  if (!apiKey) {
+  const config = tryLoadWeatherConfigFromEnv(env);
+  if (!config) {
     throw new Error(
       "Falta WEATHER_API_KEY en el entorno. Copiá .env.example a .env y completá la clave de OpenWeatherMap."
     );
   }
-  return { apiKey };
+  return config;
+}
+
+/** Igual que `loadWeatherConfigFromEnv`, pero devuelve `null` en vez de lanzar si falta la clave. */
+export function tryLoadWeatherConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env
+): WeatherConfig | null {
+  const apiKey = env.WEATHER_API_KEY;
+  return apiKey ? { apiKey } : null;
 }

@@ -4,7 +4,8 @@ export interface BrokerNotification {
   conversationId: string;
   incomingMessage: string;
   matchedIntentId: string;
-  confidence: number;
+  /** `null` cuando el escalamiento surge de una continuación multi-turno (agendar/reprogramar visita), sin clasificación este turno. */
+  confidence: number | null;
   escalationReason?: string;
   draftReply: string;
 }
@@ -18,7 +19,7 @@ export function formatBrokerNotificationText(n: BrokerNotification): string {
   const lines = [
     `🔔 Escalamiento: *${n.matchedIntentId}*`,
     `De: ${n.conversationId}`,
-    `Confianza: ${Math.round(n.confidence * 100)}%`,
+    `Confianza: ${n.confidence === null ? "N/A (continuación de conversación)" : `${Math.round(n.confidence * 100)}%`}`,
   ];
   if (n.escalationReason) lines.push(`Motivo: ${n.escalationReason}`);
   lines.push("", `Mensaje del cliente:`, `"${n.incomingMessage}"`);

@@ -14,12 +14,20 @@ const REQUIRED_ENV_VARS = [
 
 /** Lee las credenciales OAuth y el calendario dedicado del entorno (ver .env.example). */
 export function loadGcalConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GcalConfig {
-  const missing = REQUIRED_ENV_VARS.filter((key) => !env[key]);
-  if (missing.length > 0) {
+  const config = tryLoadGcalConfigFromEnv(env);
+  if (!config) {
+    const missing = REQUIRED_ENV_VARS.filter((key) => !env[key]);
     throw new Error(
       `Faltan variables de entorno para Google Calendar: ${missing.join(", ")} (ver .env.example).`
     );
   }
+  return config;
+}
+
+/** Igual que `loadGcalConfigFromEnv`, pero devuelve `null` en vez de lanzar si faltan credenciales. */
+export function tryLoadGcalConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GcalConfig | null {
+  const missing = REQUIRED_ENV_VARS.filter((key) => !env[key]);
+  if (missing.length > 0) return null;
   return {
     clientId: env.GOOGLE_CLIENT_ID as string,
     clientSecret: env.GOOGLE_CLIENT_SECRET as string,

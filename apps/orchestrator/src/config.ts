@@ -22,6 +22,25 @@ export interface OrchestratorConfig {
     entryPath: string;
     cwd: string;
   };
+  mcpGcal: {
+    entryPath: string;
+    cwd: string;
+  };
+  mcpWeather: {
+    entryPath: string;
+    cwd: string;
+  };
+  appointmentStorePath: string;
+  conversationStateStorePath: string;
+  /**
+   * Coordenadas por defecto para consulta_clima_visita cuando la propiedad
+   * no tiene lat/lng cargados en Tokko. Centro de CABA — ajustar si el
+   * mercado real del broker es otra zona. Nunca se inventa el pronóstico en
+   * sí (eso lo devuelve weather.get_forecast), solo la ubicación a
+   * consultar cuando no hay una más precisa.
+   */
+  defaultLat: number;
+  defaultLng: number;
 }
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
@@ -47,5 +66,21 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
         env.MCP_TOKKO_ENTRY_PATH ?? path.join(REPO_ROOT, "mcp-servers/mcp-tokko/src/index.ts"),
       cwd: path.join(REPO_ROOT, "mcp-servers/mcp-tokko"),
     },
+    mcpGcal: {
+      entryPath: env.MCP_GCAL_ENTRY_PATH ?? path.join(REPO_ROOT, "mcp-servers/mcp-gcal/src/index.ts"),
+      cwd: path.join(REPO_ROOT, "mcp-servers/mcp-gcal"),
+    },
+    mcpWeather: {
+      entryPath:
+        env.MCP_WEATHER_ENTRY_PATH ?? path.join(REPO_ROOT, "mcp-servers/mcp-weather/src/index.ts"),
+      cwd: path.join(REPO_ROOT, "mcp-servers/mcp-weather"),
+    },
+    appointmentStorePath:
+      env.APPOINTMENT_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/appointments.json"),
+    conversationStateStorePath:
+      env.CONVERSATION_STATE_STORE_PATH ??
+      path.join(REPO_ROOT, "apps/orchestrator/data/conversations.json"),
+    defaultLat: env.DEFAULT_LAT ? Number(env.DEFAULT_LAT) : -34.6037,
+    defaultLng: env.DEFAULT_LNG ? Number(env.DEFAULT_LNG) : -58.3816,
   };
 }

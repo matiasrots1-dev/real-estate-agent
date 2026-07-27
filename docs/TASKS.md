@@ -142,12 +142,59 @@ haber cerrado el bloque 2 con un test que lo pruebe.
       `BROKER_WHATSAPP_NUMBER` no están configurados todavía.
 
 ## Bloque 5 — Resto de intents reactivos de fase 1
-- [ ] `consulta_precio_condiciones`, `pedido_ficha_multimedia`,
-      `agendar_visita`, `reprogramar_cancelar_visita`,
-      `consulta_clima_visita`.
-- [ ] Máquina de estados de conversación (`agent/state_machine.ts`) para
-      soportar flujos multi-turno (ej: "quiero agendar visita" → agente
-      propone horarios → cliente confirma uno).
+- [x] `consulta_precio_condiciones` (`agent/consultaPrecioCondiciones.ts`) —
+      mismo patrón de búsqueda que consulta_disponibilidad (factorizado en
+      `agent/tokkoLookup.ts`), grounding en precio/expensas/requisitos/
+      garantías; un campo no cargado se pasa `null` explícito al composer
+      (nunca se omite en silencio ni se inventa).
+- [x] `pedido_ficha_multimedia` (`agent/pedidoFichaMultimedia.ts`) — manda
+      el template del catálogo + las fotos de la propiedad como mensajes de
+      imagen reales (`WhatsAppSender.sendImage`, nuevo). Planos/videos
+      quedan pendientes (necesitarían tipos de mensaje document/video que
+      el sender no implementa todavía).
+- [x] `consulta_clima_visita` (`agent/consultaClimaVisita.ts`) — encuentra
+      la visita activa del lead (`AppointmentStore`), confirma la fecha
+      real contra `gcal.get_event`, y pide `weather.get_forecast` con las
+      coordenadas de la propiedad (`Property.lat/lng`, nuevo en
+      shared-types) o un default de `config.ts` si no están cargadas.
+- [x] `agendar_visita` (`agent/agendarVisita.ts`) y
+      `reprogramar_cancelar_visita` (`agent/reprogramarCancelarVisita.ts`) —
+      los dos flujos multi-turno reales: proponen hasta 3 horarios libres
+      en las próximas 72hs vía `gcal.freebusy` (horario habitual 9-20hs,
+      sin domingos, hora de Argentina — `agent/slotProposal.ts`), esperan
+      la confirmación del cliente (`agent/slotConfirmation.ts`, Claude
+      matchea la respuesta libre contra los horarios propuestos), y recién
+      ahí ejecutan `gcal.create_event`/`patch_event`/`delete_event` +
+      `tokko.log_activity`. Implementan las dos reglas de escalamiento
+      condicional que el Bloque 4 había dejado pendientes (regla 2 de
+      `docs/escalation_policy.md`): sin disponibilidad en 72hs, o el
+      cliente no elige ninguno de los horarios propuestos (incluye pedir
+      algo fuera de rango — nunca llegó a proponerse, así que cae acá
+      naturalmente). `reprogramar_cancelar_visita` además escala si es la
+      2da reprogramación de la misma visita (`Appointment.vecesReprogramada`).
+- [x] Máquina de estados de conversación (`agent/stateMachine.ts` +
+      `agent/conversationStateStore.ts`) — `ConversationState.step`
+      (shared-types) trackea si hay un flujo multi-turno activo; si lo hay,
+      `handleIncomingMessage` rutea directo a la continuación (sin volver a
+      clasificar el mensaje) en vez de tratarlo como un mensaje nuevo. Si
+      el estado quedó inconsistente (ej. el catálogo cambió), se resetea a
+      `idle` en vez de trabar la conversación para siempre.
+- [x] Nueva persistencia local (mismo patrón que `audit_log` del Bloque 3 —
+      archivo JSON, interfaz swappable a Postgres): `AppointmentStore`
+      (`apps/orchestrator/data/appointments.json`) y
+      `ConversationStateStore` (`apps/orchestrator/data/conversations.json`).
+      Simplificación deliberada: un lead tiene a lo sumo una visita activa
+      a la vez (documentado en `appointmentStore.ts`).
+- [x] `mcp-gcal` y `mcp-weather` no tenían mock de fallback (a diferencia de
+      `mcp-tokko` desde el Bloque 2) — sin `GOOGLE_CLIENT_ID/SECRET/
+      REFRESH_TOKEN/CALENDAR_ID` ni `WEATHER_API_KEY` (CLAUDE.md secc. 5,
+      todavía sin confirmar), estos servers no arrancaban. Se agregó
+      `MockGoogleCalendarClient` y `MockWeatherClient` (determinístico) con
+      el mismo `// TODO: reemplazar por credenciales reales` que Tokko, y
+      `GcalMcpClient`/`WeatherMcpClient` en el orchestrator (wrappers MCP
+      tipados, mismo patrón que `TokkoMcpClient`).
+      143 tests en todo el monorepo (99 en orchestrator — incluye
+      integración real contra los 3 MCP servers por stdio, no solo Tokko).
 
 ## No hacer todavía (fase 2+, ver SOW)
 - Recordatorios automáticos, recontacto proactivo, seguimiento post-visita

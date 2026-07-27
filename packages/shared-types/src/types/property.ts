@@ -19,6 +19,11 @@ export interface Property {
   garantiasAceptadas?: string[];
   ambientes?: number;
   metrosCuadrados?: number;
+  // Coordenadas para pedir clima de la visita (docs/intent_catalog.yaml:
+  // consulta_clima_visita). Tokko no siempre las carga a nivel propiedad —
+  // si faltan, el caller decide un fallback razonable, nunca se inventan.
+  lat?: number;
+  lng?: number;
   fotos?: string[];
   planos?: string[];
   videos?: string[];

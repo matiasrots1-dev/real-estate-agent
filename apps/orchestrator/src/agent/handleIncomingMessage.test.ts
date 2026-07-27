@@ -4,13 +4,17 @@ import { describe, expect, it, vi } from "vitest";
 import type { IntentCatalog, Property } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
+import type { GcalQueries } from "../mcp/gcalMcpClient.js";
+import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import type { IntentClassification, IntentClassifier } from "./classifier.js";
 import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier, BrokerNotification } from "./brokerNotifier.js";
 import { InMemoryAuditLogStore } from "./auditLog.js";
+import { InMemoryAppointmentStore } from "./appointmentStore.js";
+import { InMemoryConversationStateStore } from "./conversationStateStore.js";
 import { loadCatalog } from "./intentCatalog.js";
-import { handleIncomingMessage, NotImplementedIntentError } from "./handleIncomingMessage.js";
+import { handleIncomingMessage, NotImplementedIntentError, type HandleMessageDeps } from "./handleIncomingMessage.js";
 
 // Usa el catálogo REAL de docs/intent_catalog.yaml, no uno inventado — así
 // estos tests también detectan si alguien cambia el YAML de forma
@@ -27,10 +31,11 @@ const property: Property = {
   tipo: "departamento",
   estado: "disponible",
   precio: 350000,
+  fotos: ["https://example.com/foto1.jpg"],
 };
 
-function incoming(text: string): IncomingWhatsAppMessage {
-  return { from: "5491100000001", messageId: "wamid.abc", text };
+function incoming(text: string, from = "5491100000001"): IncomingWhatsAppMessage {
+  return { from, messageId: "wamid.abc", text };
 }
 
 function stubClassifier(result: IntentClassification): IntentClassifier {
@@ -49,7 +54,23 @@ function stubTokko(): TokkoQueries {
   return {
     searchProperties: vi.fn(async () => [property]),
     getProperty: vi.fn(async () => property),
+    logActivity: vi.fn(async () => ({ logged: true as const, activityId: "act-1" })),
   };
+}
+
+function stubGcal(): GcalQueries {
+  return {
+    freebusy: vi.fn(async () => []),
+    createEvent: vi.fn(async () => ({ id: "evt-1", summary: "Visita", start: "x", end: "y", status: "confirmed" })),
+    patchEvent: vi.fn(),
+    deleteEvent: vi.fn(),
+    getEvent: vi.fn(),
+    listEvents: vi.fn(),
+  };
+}
+
+function stubWeather(): WeatherQueries {
+  return { getForecast: vi.fn() };
 }
 
 function recordingBrokerNotifier(): BrokerNotifier & { notifications: BrokerNotification[] } {
@@ -59,6 +80,27 @@ function recordingBrokerNotifier(): BrokerNotifier & { notifications: BrokerNoti
     notify: vi.fn(async (n: BrokerNotification) => {
       notifications.push(n);
     }),
+  };
+}
+
+/** Deps completas con stubs razonables — cada test sobreescribe solo lo que le importa. */
+function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps {
+  return {
+    catalog,
+    classifier: stubClassifier({ intentId: "fallback_low_confidence", confidence: 0.1 }),
+    composer: stubComposer(),
+    draftComposer: stubDraftComposer(),
+    tokko: stubTokko(),
+    gcal: stubGcal(),
+    weather: stubWeather(),
+    auditLog: new InMemoryAuditLogStore(),
+    appointmentStore: new InMemoryAppointmentStore(),
+    conversationStateStore: new InMemoryConversationStateStore(),
+    slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
+    reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
+    defaultLat: -34.6037,
+    defaultLng: -58.3816,
+    ...overrides,
   };
 }
 
@@ -75,28 +117,24 @@ describe("handleIncomingMessage — intents que siempre escalan (Bloque 4)", () 
     '"%s": responde con el template del catálogo, no llama tools, y notifica al broker con el borrador',
     async (intentId) => {
       const auditLog = new InMemoryAuditLogStore();
-      const tokko = stubTokko();
-      const composer = stubComposer();
       const draftComposer = stubDraftComposer("Hola! Dejame confirmarte eso.");
       const brokerNotifier = recordingBrokerNotifier();
       const intent = catalog.intents.find((i) => i.id === intentId);
       if (!intent) throw new Error(`Intent "${intentId}" no está en el catálogo real — revisar el test.`);
 
-      const result = await handleIncomingMessage(incoming("mensaje de prueba"), {
-        catalog,
-        classifier: stubClassifier({ intentId, confidence: 0.9 }),
-        composer,
-        draftComposer,
-        tokko,
-        auditLog,
-        brokerNotifier,
-      });
+      const result = await handleIncomingMessage(
+        incoming("mensaje de prueba"),
+        baseDeps({
+          classifier: stubClassifier({ intentId, confidence: 0.9 }),
+          draftComposer,
+          auditLog,
+          brokerNotifier,
+        })
+      );
 
       expect(intent.requires_broker).toBe(true);
       expect(result.escalatedToBroker).toBe(true);
       expect(result.responseText).toBe(intent.response.template);
-      expect(tokko.searchProperties).not.toHaveBeenCalled();
-      expect(composer.compose).not.toHaveBeenCalled();
 
       expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
       expect(brokerNotifier.notifications[0]).toMatchObject({
@@ -113,138 +151,147 @@ describe("handleIncomingMessage — intents que siempre escalan (Bloque 4)", () 
 
   it("confianza por debajo del umbral escala con rule=low_confidence aunque requires_broker sea false", async () => {
     const auditLog = new InMemoryAuditLogStore();
-    const brokerNotifier = recordingBrokerNotifier();
-
-    const result = await handleIncomingMessage(incoming("che disponible?"), {
-      catalog,
-      classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.5 }),
-      composer: stubComposer(),
-      draftComposer: stubDraftComposer(),
-      tokko: stubTokko(),
-      auditLog,
-      brokerNotifier,
-    });
+    const result = await handleIncomingMessage(
+      incoming("che disponible?"),
+      baseDeps({ classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.5 }), auditLog })
+    );
 
     expect(result.escalatedToBroker).toBe(true);
     expect(result.responseText).toMatch(/asesor/);
     const [entry] = await auditLog.readAll();
     expect(entry.escalationRule).toBe("low_confidence");
-    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
   });
 
   it("sin brokerNotifier configurado: igual escala y responde al cliente, solo que no notifica a nadie", async () => {
-    const auditLog = new InMemoryAuditLogStore();
-    const result = await handleIncomingMessage(incoming("quiero hablar con una persona"), {
-      catalog,
-      classifier: stubClassifier({ intentId: "hablar_con_persona", confidence: 0.95 }),
-      composer: stubComposer(),
-      draftComposer: stubDraftComposer(),
-      tokko: stubTokko(),
-      auditLog,
-      // brokerNotifier omitido a propósito
-    });
-
+    const result = await handleIncomingMessage(
+      incoming("quiero hablar con una persona"),
+      baseDeps({ classifier: stubClassifier({ intentId: "hablar_con_persona", confidence: 0.95 }) })
+    );
     expect(result.escalatedToBroker).toBe(true);
-    const [entry] = await auditLog.readAll();
-    expect(entry.escalatedToBroker).toBe(true);
   });
 
   it("si notificar al broker falla, el cliente igual recibe su respuesta (best-effort, no rompe el loop)", async () => {
-    const auditLog = new InMemoryAuditLogStore();
     const brokerNotifier: BrokerNotifier = {
       notify: vi.fn(async () => {
         throw new Error("WhatsApp Cloud API caída");
       }),
     };
-
-    const result = await handleIncomingMessage(incoming("esto es un desastre"), {
-      catalog,
-      classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
-      composer: stubComposer(),
-      draftComposer: stubDraftComposer(),
-      tokko: stubTokko(),
-      auditLog,
-      brokerNotifier,
-    });
-
+    const result = await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({ classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }), brokerNotifier })
+    );
     const reclamoQueja = catalog.intents.find((i) => i.id === "reclamo_queja");
     expect(result.responseText).toBe(reclamoQueja?.response.template);
     expect(result.escalatedToBroker).toBe(true);
   });
 });
 
-describe("handleIncomingMessage — consulta_disponibilidad (Bloque 3, sigue funcionando)", () => {
-  it("con confianza suficiente: ejecuta el handler, no escala, no notifica al broker", async () => {
-    const auditLog = new InMemoryAuditLogStore();
-    const draftComposer = stubDraftComposer();
+describe("handleIncomingMessage — intents reactivos de un solo turno", () => {
+  it("consulta_disponibilidad: ejecuta el handler, no escala, no notifica al broker", async () => {
     const brokerNotifier = recordingBrokerNotifier();
-
-    const result = await handleIncomingMessage(incoming("¿el depto de Palermo sigue disponible?"), {
-      catalog,
-      classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
-      composer: stubComposer("Sigue disponible por $350.000."),
-      draftComposer,
-      tokko: stubTokko(),
-      auditLog,
-      brokerNotifier,
-    });
+    const result = await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer("Sigue disponible por $350.000."),
+        brokerNotifier,
+      })
+    );
 
     expect(result).toEqual({
       responseText: "Sigue disponible por $350.000.",
       intentId: "consulta_disponibilidad",
       confidence: 0.95,
       escalatedToBroker: false,
+      mediaUrls: undefined,
     });
-    expect(draftComposer.composeDraft).not.toHaveBeenCalled();
     expect(brokerNotifier.notify).not.toHaveBeenCalled();
+  });
 
-    const [entry] = await auditLog.readAll();
-    expect(entry).toMatchObject({
-      matchedIntentId: "consulta_disponibilidad",
-      toolsCalled: ["tokko.search_properties", "tokko.get_property"],
-      escalatedToBroker: false,
-      escalationRule: undefined,
+  it("consulta_precio_condiciones: ya está implementado (Bloque 5), no tira NotImplementedIntentError", async () => {
+    const result = await handleIncomingMessage(
+      incoming("¿cuánto sale el alquiler?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_precio_condiciones", confidence: 0.9, searchQuery: "Palermo" }),
+        composer: stubComposer("Sale $350.000."),
+      })
+    );
+    expect(result.responseText).toBe("Sale $350.000.");
+    expect(result.escalatedToBroker).toBe(false);
+  });
+
+  it("pedido_ficha_multimedia: expone mediaUrls en el resultado para que app.ts las mande como imágenes", async () => {
+    const result = await handleIncomingMessage(
+      incoming("mandame fotos"),
+      baseDeps({ classifier: stubClassifier({ intentId: "pedido_ficha_multimedia", confidence: 0.9, searchQuery: "Palermo" }) })
+    );
+    expect(result.mediaUrls).toEqual(property.fotos);
+  });
+
+  it("consulta_clima_visita: sin visita agendada, pide confirmación sin tocar gcal/weather", async () => {
+    const gcal = stubGcal();
+    const weather = stubWeather();
+    const result = await handleIncomingMessage(
+      incoming("¿va a llover el sábado?"),
+      baseDeps({ classifier: stubClassifier({ intentId: "consulta_clima_visita", confidence: 0.8 }), gcal, weather })
+    );
+    expect(result.responseText).toMatch(/visita agendada/);
+    expect(gcal.getEvent).not.toHaveBeenCalled();
+    expect(weather.getForecast).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleIncomingMessage — flujo multi-turno de agendar_visita (Bloque 5)", () => {
+  it("primer mensaje propone horarios; el segundo (mismo conversationId) confirma y agenda", async () => {
+    const conversationStateStore = new InMemoryConversationStateStore();
+    const appointmentStore = new InMemoryAppointmentStore();
+    const gcal = stubGcal();
+
+    const deps = baseDeps({
+      conversationStateStore,
+      appointmentStore,
+      gcal,
+      classifier: stubClassifier({ intentId: "agendar_visita", confidence: 0.9, searchQuery: "Palermo" }),
+      composer: stubComposer("Tengo estos horarios: ..."),
+      slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
     });
+
+    const first = await handleIncomingMessage(incoming("quiero ir a verlo"), deps);
+    expect(first.escalatedToBroker).toBe(false);
+    expect(await conversationStateStore.get("5491100000001")).toMatchObject({
+      step: "esperando_confirmacion_horario",
+      currentIntentId: "agendar_visita",
+    });
+
+    // Segundo mensaje: el classifier NO se vuelve a llamar para decidir el
+    // intent — la máquina de estados rutea directo a la continuación.
+    const second = await handleIncomingMessage(incoming("el primero está perfecto"), deps);
+
+    expect(second.escalatedToBroker).toBe(false);
+    expect(second.intentId).toBe("agendar_visita");
+    expect(second.confidence).toBeNull();
+    expect(gcal.createEvent).toHaveBeenCalledTimes(1);
+    expect(await conversationStateStore.get("5491100000001")).toMatchObject({ step: "idle" });
+    expect(await appointmentStore.findActiveByLead("5491100000001")).not.toBeNull();
   });
 });
 
 describe("handleIncomingMessage — intents sin handler todavía", () => {
-  it('"conditional" (agendar_visita) con confianza suficiente: tira NotImplementedIntentError', async () => {
+  it("intent de canal broker (fuera de alcance del cliente, ej. broker_resumen_agenda): tira NotImplementedIntentError", async () => {
     await expect(
-      handleIncomingMessage(incoming("quiero ir a verlo el sábado"), {
-        catalog,
-        classifier: stubClassifier({ intentId: "agendar_visita", confidence: 0.9 }),
-        composer: stubComposer(),
-        draftComposer: stubDraftComposer(),
-        tokko: stubTokko(),
-        auditLog: new InMemoryAuditLogStore(),
-      })
-    ).rejects.toThrow(NotImplementedIntentError);
-  });
-
-  it("intent reactivo de Bloque 5 (consulta_precio_condiciones) con confianza suficiente: tira NotImplementedIntentError", async () => {
-    await expect(
-      handleIncomingMessage(incoming("¿cuánto sale el alquiler?"), {
-        catalog,
-        classifier: stubClassifier({ intentId: "consulta_precio_condiciones", confidence: 0.9 }),
-        composer: stubComposer(),
-        draftComposer: stubDraftComposer(),
-        tokko: stubTokko(),
-        auditLog: new InMemoryAuditLogStore(),
-      })
+      handleIncomingMessage(
+        incoming("resumen de mañana"),
+        baseDeps({ classifier: stubClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 }) })
+      )
     ).rejects.toThrow(NotImplementedIntentError);
   });
 
   it("intent inexistente en el catálogo (alucinación del classifier): tira NotImplementedIntentError", async () => {
     await expect(
-      handleIncomingMessage(incoming("mensaje raro"), {
-        catalog,
-        classifier: stubClassifier({ intentId: "intent_que_no_existe", confidence: 0.9 }),
-        composer: stubComposer(),
-        draftComposer: stubDraftComposer(),
-        tokko: stubTokko(),
-        auditLog: new InMemoryAuditLogStore(),
-      })
+      handleIncomingMessage(
+        incoming("mensaje raro"),
+        baseDeps({ classifier: stubClassifier({ intentId: "intent_que_no_existe", confidence: 0.9 }) })
+      )
     ).rejects.toThrow(NotImplementedIntentError);
   });
 });

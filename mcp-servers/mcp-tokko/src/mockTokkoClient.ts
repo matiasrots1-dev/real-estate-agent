@@ -26,6 +26,8 @@ const MOCK_PROPERTIES: Property[] = [
     garantiasAceptadas: ["propietaria", "seguro_caucion"],
     ambientes: 2,
     metrosCuadrados: 55,
+    lat: -34.5875,
+    lng: -58.409,
     fotos: ["https://example.com/prop-1/foto1.jpg"],
   },
   {
@@ -40,6 +42,8 @@ const MOCK_PROPERTIES: Property[] = [
     expensas: 30000,
     ambientes: 2,
     metrosCuadrados: 48,
+    lat: -34.5627,
+    lng: -58.4583,
   },
 ];
 

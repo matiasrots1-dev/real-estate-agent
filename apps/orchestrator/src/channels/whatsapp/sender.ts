@@ -1,4 +1,4 @@
-// Envío de mensajes de texto vía WhatsApp Cloud API (Meta Graph API).
+// Envío de mensajes de texto/imagen vía WhatsApp Cloud API (Meta Graph API).
 // Interfaz separada de la implementación real para poder testear el resto
 // del loop sin pegarle a la API de Meta.
 
@@ -22,6 +22,8 @@ export interface WhatsAppSendResult {
 
 export interface WhatsAppSender {
   sendText(to: string, body: string): Promise<WhatsAppSendResult>;
+  /** `imageUrl` debe ser una URL pública (Graph API no acepta rutas locales). */
+  sendImage(to: string, imageUrl: string, caption?: string): Promise<WhatsAppSendResult>;
 }
 
 export class GraphApiWhatsAppSender implements WhatsAppSender {
@@ -31,19 +33,28 @@ export class GraphApiWhatsAppSender implements WhatsAppSender {
     private readonly fetchFn: typeof fetch = fetch
   ) {}
 
-  async sendText(to: string, body: string): Promise<WhatsAppSendResult> {
+  sendText(to: string, body: string): Promise<WhatsAppSendResult> {
+    return this.postMessage({ messaging_product: "whatsapp", to, type: "text", text: { body } });
+  }
+
+  sendImage(to: string, imageUrl: string, caption?: string): Promise<WhatsAppSendResult> {
+    return this.postMessage({
+      messaging_product: "whatsapp",
+      to,
+      type: "image",
+      image: { link: imageUrl, caption },
+    });
+  }
+
+  private async postMessage(body: Record<string, unknown>): Promise<WhatsAppSendResult> {
+    const to = body.to as string;
     const res = await this.fetchFn(`${GRAPH_API_BASE_URL}/${this.phoneNumberId}/messages`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to,
-        type: "text",
-        text: { body },
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
@@ -54,7 +65,7 @@ export class GraphApiWhatsAppSender implements WhatsAppSender {
     const messageId = raw.messages?.[0]?.id;
     const waId = raw.contacts?.[0]?.wa_id;
     console.log(
-      `WhatsApp Cloud API aceptó el mensaje a ${to}: messageId=${messageId ?? "?"} wa_id=${waId ?? "?"} status=${raw.messages?.[0]?.message_status ?? "?"}`
+      `WhatsApp Cloud API aceptó el mensaje (${body.type}) a ${to}: messageId=${messageId ?? "?"} wa_id=${waId ?? "?"} status=${raw.messages?.[0]?.message_status ?? "?"}`
     );
     return { messageId, waId, raw };
   }

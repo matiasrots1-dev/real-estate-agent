@@ -18,7 +18,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createRequestListener } from "./app.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { InMemoryAuditLogStore } from "./agent/auditLog.js";
+import { InMemoryAppointmentStore } from "./agent/appointmentStore.js";
+import { InMemoryConversationStateStore } from "./agent/conversationStateStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
+import type { GcalQueries } from "./mcp/gcalMcpClient.js";
+import type { WeatherQueries } from "./mcp/weatherMcpClient.js";
 import type { IntentClassifier } from "./agent/classifier.js";
 import type { ResponseComposer } from "./agent/composer.js";
 import type { DraftReplyComposer } from "./agent/draftComposer.js";
@@ -71,9 +75,27 @@ function smartStubClassifier(): IntentClassifier {
       if (message.includes("desastre")) {
         return { intentId: "reclamo_queja", confidence: 0.9 };
       }
+      if (message.includes("expensas")) {
+        return { intentId: "consulta_precio_condiciones", confidence: 0.9, searchQuery: "Palermo" };
+      }
       return { intentId: "consulta_disponibilidad", confidence: 0.92, searchQuery: "Palermo" };
     }),
   };
+}
+
+function stubGcal(): GcalQueries {
+  return {
+    freebusy: vi.fn(),
+    createEvent: vi.fn(),
+    patchEvent: vi.fn(),
+    deleteEvent: vi.fn(),
+    getEvent: vi.fn(),
+    listEvents: vi.fn(),
+  };
+}
+
+function stubWeather(): WeatherQueries {
+  return { getForecast: vi.fn() };
 }
 
 /** Stub: reemplaza la redacción final de Claude, pero la mantiene grounded (refleja groundingData). */
@@ -122,6 +144,14 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
       draftComposer: stubDraftComposer(),
       auditLog,
       tokko,
+      gcal: stubGcal(),
+      weather: stubWeather(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      conversationStateStore: new InMemoryConversationStateStore(),
+      slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: null })) },
+      reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
+      defaultLat: -34.6037,
+      defaultLng: -58.3816,
       brokerNotifier,
       whatsappWebhookVerifyToken: WEBHOOK_VERIFY_TOKEN,
       whatsappAppSecret: APP_SECRET,
@@ -206,5 +236,25 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
     expect(notification).toBeDefined();
     expect(notification?.matchedIntentId).toBe("reclamo_queja");
     expect(notification?.draftReply).toContain("borrador");
+  });
+
+  it("Bloque 5: consulta_precio_condiciones también corre de punta a punta contra mcp-tokko real", async () => {
+    const body = metaTextMessagePayload("5491100000004", "¿cuánto son las expensas del depto de Palermo?");
+    const res = await fetch(`${baseUrl}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
+      body,
+    });
+
+    expect(res.status).toBe(200);
+
+    const entries = await auditLog.readAll();
+    const entry = entries.find((e) => e.conversationId === "5491100000004");
+    expect(entry).toMatchObject({
+      matchedIntentId: "consulta_precio_condiciones",
+      escalatedToBroker: false,
+      toolsCalled: ["tokko.search_properties", "tokko.get_property"],
+    });
+    expect(entry?.responseSent).toContain("45000");
   });
 });

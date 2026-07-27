@@ -4,29 +4,30 @@ import type { ResponseComposer } from "./composer.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import { findPropertyByQuery, pickGroundingData } from "./tokkoLookup.js";
 
-export interface ConsultaDisponibilidadResult {
+export interface ConsultaPrecioCondicionesResult {
   responseText: string;
   toolsCalled: string[];
 }
 
-const DEFAULT_GROUNDING_FIELDS = ["estado", "direccion", "tipo", "precio"];
+const DEFAULT_GROUNDING_FIELDS = ["precio", "expensas", "requisitos", "garantiasAceptadas"];
 
 const NOT_FOUND_FALLBACK =
   "No encontré esa propiedad con esos datos, ¿me pasás la dirección o el link del aviso?";
 
 /**
- * Único intent implementado de punta a punta en el Bloque 3 (docs/TASKS.md).
- * Busca la propiedad mencionada en Tokko (real vía MCP, mock hasta que haya
- * credenciales) y redacta la respuesta solo con datos que el tool devolvió
- * — nunca inventa precio/disponibilidad (CLAUDE.md secc. 7).
+ * Precio/expensas/requisitos/garantías (docs/intent_catalog.yaml). Mismo
+ * patrón de búsqueda que consulta_disponibilidad (tokkoLookup.ts) — la
+ * diferencia es qué campos pide de grounding. Si Tokko no tiene cargado
+ * alguno de esos campos, se lo pasa en null al composer, que usa
+ * `fallback_if_missing_field` en vez de inventar un valor.
  */
-export async function runConsultaDisponibilidad(
+export async function runConsultaPrecioCondiciones(
   classification: IntentClassification,
   intent: Intent,
   tokko: TokkoQueries,
   composer: ResponseComposer,
   language: string
-): Promise<ConsultaDisponibilidadResult> {
+): Promise<ConsultaPrecioCondicionesResult> {
   const { property, toolsCalled } = await findPropertyByQuery(tokko, classification.searchQuery);
 
   if (!property) {
@@ -38,13 +39,17 @@ export async function runConsultaDisponibilidad(
 
   const groundingData = pickGroundingData(
     {
-      estado: property.estado,
-      direccion: property.direccion,
-      tipo: property.tipo,
       precio: property.precio,
+      expensas: property.expensas,
+      requisitos: property.requisitos,
+      garantiasAceptadas: property.garantiasAceptadas,
     },
     intent.response.grounding_fields ?? DEFAULT_GROUNDING_FIELDS
   );
+
+  if (intent.response.fallback_if_missing_field) {
+    groundingData._nota_si_falta_un_dato = intent.response.fallback_if_missing_field;
+  }
 
   const responseText = await composer.compose({
     intentDescription: intent.description,

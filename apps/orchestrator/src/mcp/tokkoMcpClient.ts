@@ -8,6 +8,18 @@ export interface TokkoPropertySearchFilters {
   codigo?: string;
 }
 
+export interface LogActivityInput {
+  leadId?: string;
+  propertyId?: string;
+  tipo: string;
+  detalle?: string;
+}
+
+export interface LogActivityResult {
+  logged: true;
+  activityId: string;
+}
+
 /**
  * Lo que el agente necesita de Tokko, como interfaz — así los handlers de
  * intents (ej. consultaDisponibilidad.ts) se testean con un stub en vez de
@@ -16,6 +28,7 @@ export interface TokkoPropertySearchFilters {
 export interface TokkoQueries {
   searchProperties(filters: TokkoPropertySearchFilters): Promise<Property[]>;
   getProperty(propertyId: string): Promise<Property | null>;
+  logActivity(input: LogActivityInput): Promise<LogActivityResult>;
 }
 
 /** Wrapper tipado de las tools de mcp-tokko que usa el loop del agente. */
@@ -42,7 +55,7 @@ export class TokkoMcpClient implements TokkoQueries {
     return this.client.callTool<Property | null>("get_property", { propertyId });
   }
 
-  logActivity(input: { leadId?: string; propertyId?: string; tipo: string; detalle?: string }) {
-    return this.client.callTool("log_activity", input);
+  logActivity(input: LogActivityInput): Promise<LogActivityResult> {
+    return this.client.callTool<LogActivityResult>("log_activity", input);
   }
 }

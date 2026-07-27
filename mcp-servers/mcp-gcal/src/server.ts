@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GoogleCalendarClient, type CalendarClient } from "./calendarClient.js";
-import { loadGcalConfigFromEnv } from "./config.js";
+import { MockGoogleCalendarClient } from "./mockCalendarClient.js";
+import { tryLoadGcalConfigFromEnv } from "./config.js";
 import { createFreebusyHandler, freebusyInputShape } from "./tools/freebusy.js";
 import { createCreateEventHandler, createEventInputShape } from "./tools/createEvent.js";
 import { createPatchEventHandler, patchEventInputShape } from "./tools/patchEvent.js";
@@ -8,8 +9,17 @@ import { createDeleteEventHandler, deleteEventInputShape } from "./tools/deleteE
 import { createGetEventHandler, getEventInputShape } from "./tools/getEvent.js";
 import { createListEventsHandler, listEventsInputShape } from "./tools/listEvents.js";
 
+function defaultCalendarClient(): CalendarClient {
+  const config = tryLoadGcalConfigFromEnv();
+  if (config) return new GoogleCalendarClient(config);
+  console.warn(
+    "GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN/CALENDAR_ID no configurados: usando MockGoogleCalendarClient en memoria (ver CLAUDE.md secc. 5)."
+  );
+  return new MockGoogleCalendarClient();
+}
+
 export function createServer(client?: CalendarClient): McpServer {
-  const calendarClient = client ?? new GoogleCalendarClient(loadGcalConfigFromEnv());
+  const calendarClient = client ?? defaultCalendarClient();
 
   const server = new McpServer({ name: "mcp-gcal", version: "0.1.0" });
 
