@@ -543,8 +543,10 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       que se corrigió en el camino (ver nota de identidad de números más
       abajo) — quedan documentadas explícitamente como descartadas para
       que no se reintroduzcan como supuestos en el futuro.
-- [ ] **Pendiente, no resuelto: el camino ENTRANTE (webhook de Meta) nunca
-      se validó contra la infraestructura real de Meta.** Descubierto
+- [x] **Resuelto en el Bloque 11 (2026-07-28) — ver esa sección para el
+      detalle completo.** En su momento (2026-07-27) esto se dejó
+      documentado como pendiente: el camino ENTRANTE (webhook de Meta) nunca
+      se había validado contra la infraestructura real de Meta. Descubierto
       durante el review en vivo de este PR (2026-07-27): en Meta for
       Developers, la Callback URL y el Verify Token del webhook están los
       dos vacíos — nunca se configuraron. Revisando el historial del
@@ -569,8 +571,14 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       (mismo patrón que `app.test.ts`), dejando los envíos salientes
       reales. Eso prueba que el código del gate funciona: no prueba que
       un mensaje entrante real de un cliente por WhatsApp llegue hoy a
-      este servidor — eso sigue sin probarse. Túnel + publicación de la
-      app quedan como tarea aparte, todavía sin empezar.
+      este servidor.
+      **Actualización Bloque 11**: se armó el túnel (port forwarding de
+      VS Code, sin instalar nada) y se confirmó empíricamente — la
+      afirmación de arriba sobre "mientras la app siga sin publicar, Meta
+      solo entrega webhooks de prueba" era correcta: el botón "Probar" del
+      panel llegó, un mensaje real desde el teléfono del usuario no
+      llegó. El camino entrante está técnicamente completo y verificado;
+      falta únicamente publicar la app (bloque aparte).
 - [ ] **Pendiente, no resuelto: el proyecto no procesa los webhooks de
       status de Meta (`sent`/`delivered`/`read`/`failed`), así que hoy no
       hay forma de saber si un mensaje realmente le llegó a alguien —
@@ -631,7 +639,57 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       smoke test contra Claude real para todos los classifiers — quedó
       hecho ad-hoc, una vez, para este bug puntual.
 
-## Bloque 11 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 11 — Camino entrante: que Meta le pueda hablar al orchestrator
+Alcance acotado a propósito (decisión del usuario, 2026-07-28): **este
+bloque NO incluye publicar la app.** Publicar puede requerir verificación
+del negocio en Meta y depender de tiempos de un tercero — no se abre un
+bloque a esperar eso. Publicar queda como bloque aparte (ver más abajo por
+qué hace falta).
+- [x] Orchestrator levantado en `PORT=3000` (`.env`), corrido manualmente
+      por el usuario en una terminal de VS Code (no como proceso de fondo)
+      para ver los logs en vivo al llegar el webhook.
+- [x] Puerto 3000 expuesto públicamente con el port forwarding nativo de
+      VS Code (pestaña **Ports** → Forward a Port → 3000 → Port Visibility
+      → **Public**, usando Dev Tunnels de Microsoft) — no hizo falta
+      instalar ngrok ni nada externo, tal como pidió el usuario.
+- [x] Callback URL pública (`<url-del-túnel>/webhook`) + el
+      `WHATSAPP_WEBHOOK_VERIFY_TOKEN` ya existente en `.env` cargados en
+      Meta for Developers (WhatsApp → Configuration → Webhook), campo
+      `messages` suscripto. El handshake de verificación (`hub.mode` +
+      `hub.verify_token`, `channels/whatsapp/signature.ts`) pasó.
+- [x] **Prueba empírica concluyente (2026-07-28), reemplaza la duda que
+      había quedado abierta en el Bloque 10 — esto ya NO es hipótesis,
+      es un hecho confirmado con dos resultados contrastados a
+      propósito:**
+      - El botón **"Probar"** del panel de Meta (webhook de prueba,
+        disparado manualmente desde el dashboard) **sí llegó**: log
+        completo en la terminal, pasó por escalamiento, y notificó al
+        broker por WhatsApp real.
+      - Un **mensaje real** ("hola", mandado desde el teléfono real del
+        usuario, número ya cargado como tester) **no llegó**: cero líneas
+        nuevas en la terminal, el agente nunca se enteró.
+      **Conclusión confirmada**: con la app en modo Desarrollo (sin
+      publicar), Meta entrega webhooks de prueba disparados desde el
+      panel, pero NO entrega webhooks de mensajes reales de producción —
+      ni siquiera de un número ya cargado como tester de la propia app.
+      Esto corrige la nota de duda que quedó en el Bloque 10 ("no se
+      verificó ni contra la documentación ni empíricamente" — ya está
+      verificado, la afirmación original del dashboard de Meta era
+      correcta para el campo `messages` específicamente, no solo para
+      Graph API en general).
+- [x] **El camino entrante está técnicamente completo y verificado**:
+      código, verify token, firma HMAC, túnel, suscripción del webhook —
+      todo funciona correctamente contra un webhook real de Meta. Lo
+      único que falta para recibir mensajes reales de clientes es
+      **publicar la app** — no es un problema de código ni de
+      configuración de este proyecto.
+- [ ] **Publicar la app queda como bloque aparte** (número a definir
+      cuando se arranque), por la razón original de no meterlo acá:
+      depende de tiempos de Meta (verificación del negocio, App Review) —
+      ver el resumen de requisitos que se armó para el usuario antes de
+      decidir si arrancarlo.
+
+## Bloque 12 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
