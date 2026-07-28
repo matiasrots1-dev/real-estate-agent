@@ -304,6 +304,42 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       Bloques 4/6), así que un desfasaje de formato haría que el broker
       caiga silenciosamente en el canal `cliente` en vez de fallar
       ruidosamente.
+      **Actualización (live testing del Bloque 10, 2026-07-27), corregida
+      después de una primera lectura apresurada de la evidencia — ver
+      abajo el detalle de qué se descartó y por qué.** Un número de
+      celular argentino tiene dos representaciones válidas: el formato
+      viejo/doméstico con prefijo `15` (ej. `54111557994543`) y el
+      formato internacional con `9` (ej. `5491157994543`). Se probó en
+      vivo mandando mensajes reales a las dos formas del mismo número:
+      **Meta resuelve las dos como la misma cuenta de WhatsApp sin
+      problema** (`contacts[].wa_id` en la respuesta de `POST /messages`
+      devuelve el mismo `wa_id` para las dos) y, una vez que el número
+      está autorizado como destinatario de prueba, los dos formatos
+      entregan igual — la primera conclusión de esta sesión ("el formato
+      `9` no entrega, hay que usar `15`") **era incorrecta** y quedó
+      descartada con una prueba de re-envío específica. El único fallo
+      real y reproducible contra la lista de destinatarios de prueba fue
+      un `(#131030) Recipient phone number not in allowed list` al
+      mandar a un número que directamente no estaba cargado como tester
+      — un problema de autorización, no de formato.
+      Aun así, el riesgo de fondo sigue en pie, con otra forma: el código
+      no normaliza números de teléfono en ningún lado —
+      `Lead.telefonoWhatsapp`, `BROKER_WHATSAPP_NUMBER`, `message.from`
+      viajan como strings crudos, comparados/usados tal cual
+      (`intentCatalog.ts` para detectar canal, `ConversationStateStore`
+      que indexa por número para `broker_pausar_agente`,
+      `brokerAccionDirectaExecutor.ts`, `jobs/recontact.ts`, etc.). El
+      sistema no tiene forma de saber que `54111557994543` y
+      `5491157994543` son la misma persona si aparecen escritos distinto
+      en dos lugares (ej. `BROKER_WHATSAPP_NUMBER` en un formato y el
+      `telefonoWhatsapp` de un `Lead` de Tokko en el otro) — eso puede
+      hacer que el gate bulk de `broker_accion_directa` cuente 2
+      contactos donde en realidad hay 1 (si Tokko tuviera el mismo
+      contacto duplicado con dos formatos), o que un
+      `broker_pausar_agente` puntual no encuentre la conversación correcta
+      para pausar. **Sigue sin resolverse — no hay ninguna lógica de
+      normalización de números en el código, esto queda documentado como
+      pendiente, no como arreglado.**
 - [x] `broker_resumen_agenda`: `gcal.list_events` + `tokko.get_lead`
       cruzado, arma un resumen de la agenda. Implementado en
       `agent/brokerResumenAgenda.ts`: trae los eventos de Calendar de una
@@ -448,11 +484,152 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       poder probar el loop de planificación multi-turno sin red real,
       incluyendo el caso de plan incompleto y el de turnos agotados sin
       converger —, `brokerAccionDirecta` 10, `stateMachine` +1,
-      `handleIncomingMessage` +4). `ClaudeConfirmationClassifier` no tiene
-      test directo, mismo criterio que `ReprogramActionClassifier`/
-      `PausarAgenteActionClassifier`: wrapper fino de Claude, probado
-      indirecto vía `brokerAccionDirecta.test.ts` con un stub. 255 tests
+      `handleIncomingMessage` +4). 255 tests en todo el monorepo
+      (`ClaudeConfirmationClassifier` sumó test directo propio después,
+      ver la nota de live testing más abajo — dejó de ser un wrapper
+      "solo probado indirecto").
+- [x] **Live testing en vivo contra credenciales reales, antes de aprobar
+      el PR (2026-07-27/28)**: se armaron 2 leads de prueba en el mock de
+      Tokko (números reales del usuario, verificados como testers en Meta)
+      y se corrieron los 5 casos que importaban del gate bulk, simulando
+      el POST del webhook localmente (mismo patrón que `app.test.ts`) pero
+      con Claude, mcp-tokko y el envío por WhatsApp Cloud API reales de
+      punta a punta — sin depender del camino entrante de Meta (ver nota
+      aparte más abajo sobre por qué):
+      1. Orden bulk (2 contactos) → preview pidiendo confirmar, **cero
+         envíos a los leads**. ✅
+      2. Confirmación negativa ("mejor no, dejalo por ahora") → **cero
+         envíos**, plan descartado, conversación vuelve a `idle`. ✅
+      3. Orden bulk otra vez, con texto distinto (para descartar que fuera
+         un eco del plan anterior) → preview nuevo, **cero envíos**. ✅
+      4. Confirmación positiva ("sí, dale, confirmado") → recién ahí
+         **2 envíos reales**, uno a cada lead. ✅ (en el primer intento
+         esto falló — ver el bug de abajo — funcionó después del fix)
+      5. Orden a un solo contacto (filtro que matchea 1 solo lead) →
+         **ejecuta directo, sin pedir confirmación** — confirma que el
+         gate discrimina por cantidad real de contactos, no que pregunta
+         siempre. ✅
+      Los 5 casos se confirmaron mirando el teléfono real del usuario, no
+      solo el audit_log — incluye descartar activamente que los mensajes
+      le llegaran a los leads en los pasos 1-3 (nunca llegó nada) y que sí
+      llegaran en 4-5 (llegó lo esperado, nada más).
+      **Bug real encontrado en el camino: `ClaudeConfirmationClassifier`
+      tenía `max_tokens: 32`, insuficiente — Claude se quedaba sin tokens
+      a mitad del `tool_use` (`stop_reason: "max_tokens"`) antes de
+      escribir `"confirmed"` en el JSON, y el `input` volvía `{}`. Como el
+      código hacía `if (!confirmed)`, un `input` vacío (`confirmed:
+      undefined`) caía en la rama segura de "no confirmado" — por
+      casualidad, no por diseño. Con esa rama activa, ninguna
+      confirmación real (probado con 4 frases distintas, todas volvieron
+      `{}`) podía destrabar jamás un plan bulk.** Ningún test automatizado
+      lo agarró — pega la API real de Claude, ver la nota de agujero de
+      cobertura más abajo. Fix: subir `max_tokens` a 64; el classifier
+      ahora detecta un `input` sin `confirmed: boolean` válido y **tira un
+      error explícito** en vez de devolver un resultado ambiguo;
+      `continueBrokerAccionDirecta` atrapa ese error, no toca el estado
+      (el plan sigue pendiente, no se descarta), y responde "No pude
+      interpretar tu respuesta, confirmame de nuevo" en vez de asumir un
+      no silencioso; y el chequeo pasó de `if (!confirmed)` a
+      `if (confirmed !== true)` como defensa adicional. 5 tests nuevos en
+      `confirmationClassifier.test.ts` (incluye simular la respuesta
+      truncada real que causó el bug) + 1 test nuevo en
+      `brokerAccionDirecta.test.ts` (el classifier tira error → no
+      ejecuta, no descarta el plan, pide confirmar de nuevo). 261 tests
       en todo el monorepo.
+      De paso, mientras se investigaba por qué un preview no llegaba, se
+      encontraron y descartaron dos hipótesis falsas antes de dar con la
+      causa real (ver nota de ventana de 24hs más abajo) y una conclusión
+      intermedia incorrecta sobre normalización de números de teléfono
+      que se corrigió en el camino (ver nota de identidad de números más
+      abajo) — quedan documentadas explícitamente como descartadas para
+      que no se reintroduzcan como supuestos en el futuro.
+- [ ] **Pendiente, no resuelto: el camino ENTRANTE (webhook de Meta) nunca
+      se validó contra la infraestructura real de Meta.** Descubierto
+      durante el review en vivo de este PR (2026-07-27): en Meta for
+      Developers, la Callback URL y el Verify Token del webhook están los
+      dos vacíos — nunca se configuraron. Revisando el historial del
+      proyecto (`docs/TASKS.md`, commits, `.env`/`.env.example`,
+      `infra/scripts/`) no aparece ningún túnel (ngrok u otro) ni
+      evidencia de que Meta haya entregado alguna vez un webhook real a
+      este servidor. Todo lo marcado como "validado con WhatsApp real" en
+      bloques anteriores (4, 6-9) fue en realidad: (a) envíos SALIENTES
+      directos contra la Graph API (`sendText`/`sendTemplate`, no
+      necesitan URL pública), y/o (b) requests HTTP locales simulando el
+      payload de Meta contra el webhook (como `app.test.ts`), sin que
+      Meta lo haya entregado de verdad.
+      Además, mientras la app siga sin publicar, Meta solo entrega
+      webhooks de **prueba** disparados manualmente desde el panel de la
+      app — no entrega datos de producción a nadie, ni siquiera a
+      administradores o testers de la app. O sea que ni siquiera
+      levantando un túnel ahora se podría validar el camino entrante tal
+      como funcionaría en producción; hace falta publicar la app primero.
+      La prueba en vivo del gate bulk de este mismo bloque (ver más
+      arriba) se hizo a propósito **sin** depender del camino entrante:
+      se simuló el POST del webhook con un request HTTP local firmado
+      (mismo patrón que `app.test.ts`), dejando los envíos salientes
+      reales. Eso prueba que el código del gate funciona: no prueba que
+      un mensaje entrante real de un cliente por WhatsApp llegue hoy a
+      este servidor — eso sigue sin probarse. Túnel + publicación de la
+      app quedan como tarea aparte, todavía sin empezar.
+- [ ] **Pendiente, no resuelto: el proyecto no procesa los webhooks de
+      status de Meta (`sent`/`delivered`/`read`/`failed`), así que hoy no
+      hay forma de saber si un mensaje realmente le llegó a alguien —
+      solo si Meta lo aceptó para encolar.** Ya estaba anotado como
+      comentario en `channels/whatsapp/sender.ts` ("un 200 acá significa
+      que Meta lo aceptó, no que el destinatario lo recibió").
+      Se topó con un caso real durante el live testing de este bloque: el
+      primer envío del preview del gate bulk devolvió `200 OK` con un
+      `message_id` válido, sin ningún error — y no le llegó al
+      destinatario en el momento. **Causa confirmada, no es un bug del
+      gate ni del código de envío**: la ventana de servicio de 24hs
+      todavía no estaba abierta con ese número (nunca le había escrito
+      antes al número de prueba de Meta). Se probó reenviando el mismo
+      texto exacto, por el mismo código (`GraphApiWhatsAppSender.sendText`,
+      sin curl de por medio), una vez que el destinatario ya le había
+      escrito al número de prueba y la ventana estaba abierta — entregó
+      sin problema. El gate del Bloque 10 y el envío en sí funcionan
+      correctamente; lo que falló fue la precondición de la ventana de
+      servicio, no el código de este proyecto.
+      **Para reproducir pruebas de envío saliente con números de Meta
+      for Developers sin publicar: cada número de prueba tiene que
+      escribirle primero (un simple "hola" alcanza) al número de WhatsApp
+      de prueba antes de que el sistema pueda mandarle texto libre — si
+      no, la Graph API responde `200 OK` con `message_id` igual, pero no
+      entrega nada, sin ningún error que lo delate.**
+      La limitación de fondo sigue sin resolver: aunque en este caso se
+      pudo diagnosticar a mano, en producción no hay forma sistemática de
+      distinguir "Meta lo aceptó y lo entregó" de "Meta lo aceptó pero no
+      lo entregó" — `audit_log.responseSent` registra qué se *intentó*
+      mandar, no qué se *entregó*. Implica agregar manejo del
+      `field: statuses` del webhook de Meta (que hoy tampoco se recibe —
+      ver el punto anterior sobre el camino entrante) y probablemente un
+      estado explícito de entrega por mensaje en `AuditLogEntry` o en su
+      propio store. Fuera de alcance de este bloque; queda para cuando se
+      resuelva el camino entrante.
+- [ ] **Agujero de cobertura estructural, no específico de este bloque: los
+      255 tests del monorepo no cubren el comportamiento real de la API de
+      Claude.** Todos los wrappers de Claude (`classifier.ts`,
+      `composer.ts`, `draftComposer.ts`, `slotConfirmation.ts`,
+      `reprogramActionClassifier.ts`, `pausarAgenteActionClassifier.ts`,
+      `confirmationClassifier.ts`, `brokerAccionDirectaPlan.ts`) se testean
+      siempre stubeados detrás de su interfaz — nunca contra la API real.
+      Eso significa que ningún test automatizado puede agarrar cosas como:
+      `max_tokens` insuficiente y la respuesta se corta a mitad de un
+      tool_use, un `input` mal formado, un `stop_reason` inesperado, o
+      cualquier otro comportamiento real del modelo que no sea "responde
+      bien formado siempre". El bug real de `ClaudeConfirmationClassifier`
+      (`max_tokens: 32` insuficiente — ver más arriba) es la prueba: pasó
+      los 255 tests sin problema y lo agarró recién el live testing con
+      credenciales reales, no el test suite. Mitigación parcial agregada en
+      este mismo live testing: `confirmationClassifier.test.ts` y
+      `brokerAccionDirectaPlan.test.ts` usan un cliente Anthropic fake que
+      simula respuestas truncadas/mal formadas (mismo patrón que un mock,
+      no pega la red real) — eso cubre "el código reacciona bien a una
+      respuesta truncada", pero no cubre "el prompt/schema actual de cada
+      classifier nunca se trunca en la práctica", que solo se puede
+      verificar contra la API real. No hay todavía una rutina periódica de
+      smoke test contra Claude real para todos los classifiers — quedó
+      hecho ad-hoc, una vez, para este bug puntual.
 
 ## Bloque 11 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

@@ -203,4 +203,29 @@ describe("continueBrokerAccionDirecta — turno 2 (confirmación del broker)", (
 
     expect(await conversationStateStore.get(BROKER_NUMBER)).toMatchObject({ step: "idle" });
   });
+
+  it("el classifier no puede leer la respuesta (ej. Claude truncado): NO ejecuta, NO descarta el plan, y avisa del error en vez de asumir un no", async () => {
+    // Caso real encontrado en vivo (docs/TASKS.md Bloque 10, 2026-07-28):
+    // antes esto cascaba en silencio a confirmed: false. Que la rama fuera
+    // segura era casualidad, no diseño — acá se verifica el diseño real.
+    const sender = stubSender();
+    const conversationStateStore = new InMemoryConversationStateStore();
+    const actions = bulkActions(3);
+    const state = pendingState(actions);
+    await conversationStateStore.save(state);
+    const failingClassifier: ConfirmationClassifier = {
+      extractConfirmation: vi.fn(async () => {
+        throw new Error("ClaudeConfirmationClassifier: respuesta incompleta o mal formada de Claude");
+      }),
+    };
+    const deps = baseDeps({ confirmationClassifier: failingClassifier, sender, conversationStateStore });
+
+    const result = await continueBrokerAccionDirecta(incoming("sí, dale, confirmado"), state, deps);
+
+    expect(sender.sendText).not.toHaveBeenCalled();
+    expect(result.toolsCalled).toEqual([]);
+    expect(result.responseText).toMatch(/no pude interpretar/i);
+    // El plan sigue pendiente tal cual estaba — no se resetea a idle.
+    expect(await conversationStateStore.get(BROKER_NUMBER)).toEqual(state);
+  });
 });

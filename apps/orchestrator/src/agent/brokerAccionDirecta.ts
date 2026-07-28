@@ -84,17 +84,37 @@ export async function runBrokerAccionDirecta(
  * Segundo turno: el broker ya vio el preview bulk y esta es su respuesta.
  * Cualquier cosa que no sea una confirmación clara aborta sin ejecutar nada
  * (ver ClaudeConfirmationClassifier) — "nunca una acción masiva directo,
- * sin excepción" es la regla dura de este bloque.
+ * sin excepción" es la regla dura de este bloque. Chequea `=== true`
+ * explícito (no `!confirmed`) a propósito: no confía en que "falsy" siempre
+ * signifique "no" — ver más abajo por qué.
+ *
+ * Si el classifier no puede leer la respuesta (Claude truncado, sin
+ * tool_use, etc. — tira una excepción, no vuelve `confirmed: false`), NO
+ * se toca el estado: el plan sigue pendiente en `esperando_ok_broker` tal
+ * cual estaba, y se le pide al broker que confirme de nuevo. Antes esto se
+ * confundía en silencio con un "no" del broker — descubierto en vivo
+ * (docs/TASKS.md Bloque 10, 2026-07-28): funcionaba por casualidad (la
+ * rama seria la segura) pero no por diseño, y ocultaba el error real.
  */
 export async function continueBrokerAccionDirecta(
   message: IncomingWhatsAppMessage,
   state: ConversationState,
   deps: BrokerAccionDirectaDeps
 ): Promise<BrokerAccionDirectaStepResult> {
-  const { confirmed } = await deps.confirmationClassifier.extractConfirmation(message.text);
+  let confirmed: boolean;
+  try {
+    ({ confirmed } = await deps.confirmationClassifier.extractConfirmation(message.text));
+  } catch (error) {
+    console.error(
+      "broker_accion_directa: no se pudo interpretar la confirmación del broker (el plan queda pendiente, no se ejecuta ni se descarta):",
+      error
+    );
+    return { responseText: "No pude interpretar tu respuesta, confirmame de nuevo.", toolsCalled: [] };
+  }
+
   await deps.conversationStateStore.save(idleState(message.from, message.from));
 
-  if (!confirmed) {
+  if (confirmed !== true) {
     return { responseText: "Ok, no hago nada entonces.", toolsCalled: [] };
   }
 
