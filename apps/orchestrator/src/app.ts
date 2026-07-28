@@ -1,11 +1,9 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import { parseIncomingMessage } from "./channels/whatsapp/webhookPayload.js";
 import { verifyWebhookChallenge, verifyWebhookSignature } from "./channels/whatsapp/signature.js";
-import type { WhatsAppSender } from "./channels/whatsapp/sender.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 
 export interface AppDeps extends HandleMessageDeps {
-  sender?: WhatsAppSender;
   whatsappWebhookVerifyToken?: string;
   whatsappAppSecret?: string;
 }

@@ -11,6 +11,7 @@ import {
   type ReprogramarCancelarVisitaDeps,
   type ReprogramarCancelarVisitaStepResult,
 } from "./reprogramarCancelarVisita.js";
+import { continueBrokerAccionDirecta, type BrokerAccionDirectaDeps } from "./brokerAccionDirecta.js";
 
 /**
  * Máquina de estados de conversación (docs/TASKS.md Bloque 5): soporta los
@@ -34,6 +35,7 @@ export interface StateMachineDeps {
   catalog: IntentCatalog;
   agendarVisita: AgendarVisitaDeps;
   reprogramarCancelarVisita: ReprogramarCancelarVisitaDeps;
+  brokerAccionDirecta: BrokerAccionDirectaDeps;
 }
 
 /**
@@ -64,6 +66,11 @@ export async function continueConversationIfActive(
     if (!intent) return null;
     const result = await continueReprogramarCancelarVisita(message, state, intent, deps.reprogramarCancelarVisita);
     return toContinuationResult("reprogramar_cancelar_visita", result);
+  }
+
+  if (state.currentIntentId === "broker_accion_directa" && state.step === "esperando_ok_broker") {
+    const result = await continueBrokerAccionDirecta(message, state, deps.brokerAccionDirecta);
+    return { matchedIntentId: "broker_accion_directa", ...result, escalate: false };
   }
 
   return null;

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConversationState, IntentCatalog } from "shared-types";
 import type { AgendarVisitaDeps } from "./agendarVisita.js";
 import type { ReprogramarCancelarVisitaDeps } from "./reprogramarCancelarVisita.js";
+import type { BrokerAccionDirectaDeps } from "./brokerAccionDirecta.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import { InMemoryConversationStateStore, idleState } from "./conversationStateStore.js";
 import { loadCatalog } from "./intentCatalog.js";
@@ -56,6 +57,24 @@ function reprogramarDeps(overrides: Partial<ReprogramarCancelarVisitaDeps> = {})
   };
 }
 
+function brokerAccionDirectaDeps(overrides: Partial<BrokerAccionDirectaDeps> = {}): BrokerAccionDirectaDeps {
+  return {
+    planner: { plan: vi.fn(async () => ({ actions: [], previewSummary: "x" })) },
+    confirmationClassifier: { extractConfirmation: vi.fn(async () => ({ confirmed: true })) },
+    gcal: {
+      freebusy: vi.fn(),
+      createEvent: vi.fn(),
+      patchEvent: vi.fn(),
+      deleteEvent: vi.fn(),
+      getEvent: vi.fn(),
+      listEvents: vi.fn(),
+    },
+    appointmentStore: new InMemoryAppointmentStore(),
+    conversationStateStore: new InMemoryConversationStateStore(),
+    ...overrides,
+  };
+}
+
 function stateFor(currentIntentId: string, step: ConversationState["step"], context: unknown = {}): ConversationState {
   const state = idleState("5491100000001", "5491100000001");
   state.currentIntentId = currentIntentId;
@@ -78,6 +97,7 @@ describe("continueConversationIfActive", () => {
       catalog,
       agendarVisita: deps,
       reprogramarCancelarVisita: reprogramarDeps(),
+      brokerAccionDirecta: brokerAccionDirectaDeps(),
     });
 
     expect(result?.matchedIntentId).toBe("agendar_visita");
@@ -111,6 +131,7 @@ describe("continueConversationIfActive", () => {
       catalog,
       agendarVisita: agendarDeps(),
       reprogramarCancelarVisita: deps,
+      brokerAccionDirecta: brokerAccionDirectaDeps(),
     });
 
     expect(result?.matchedIntentId).toBe("reprogramar_cancelar_visita");
@@ -123,17 +144,42 @@ describe("continueConversationIfActive", () => {
       catalog,
       agendarVisita: agendarDeps(),
       reprogramarCancelarVisita: reprogramarDeps(),
+      brokerAccionDirecta: brokerAccionDirectaDeps(),
     });
     expect(result).toBeNull();
   });
 
-  it("devuelve null si currentIntentId no es ninguno de los dos flujos multi-turno conocidos", async () => {
+  it("devuelve null si currentIntentId no es ninguno de los flujos multi-turno conocidos", async () => {
     const state = stateFor("consulta_disponibilidad", "esperando_confirmacion_horario");
     const result = await continueConversationIfActive(message("hola"), state, {
       catalog,
       agendarVisita: agendarDeps(),
       reprogramarCancelarVisita: reprogramarDeps(),
+      brokerAccionDirecta: brokerAccionDirectaDeps(),
     });
     expect(result).toBeNull();
+  });
+
+  it("rutea a continueBrokerAccionDirecta cuando currentIntentId/step matchean broker_accion_directa (Bloque 10)", async () => {
+    const confirmationClassifier = { extractConfirmation: vi.fn(async () => ({ confirmed: true })) };
+    const sentText = vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } }));
+    const deps = brokerAccionDirectaDeps({
+      confirmationClassifier,
+      sender: { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() },
+    });
+    const state = stateFor("broker_accion_directa", "esperando_ok_broker", {
+      actions: [{ type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." }],
+    });
+
+    const result = await continueConversationIfActive({ from: "5491199999999", messageId: "wamid.x", text: "sí, dale" }, state, {
+      catalog,
+      agendarVisita: agendarDeps(),
+      reprogramarCancelarVisita: reprogramarDeps(),
+      brokerAccionDirecta: deps,
+    });
+
+    expect(result?.matchedIntentId).toBe("broker_accion_directa");
+    expect(result?.escalate).toBe(false);
+    expect(sentText).toHaveBeenCalledWith("5491100000001", "Bajamos el precio.");
   });
 });

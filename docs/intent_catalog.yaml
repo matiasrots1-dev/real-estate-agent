@@ -369,6 +369,9 @@ intents:
         - "cancelale la visita a María y decile que la reprogramamos"
         - "avisale a todos los leads fríos de más de 30 días que bajamos el precio del depto de Nuñez"
     tools:
+      - tokko.search_properties  # agregado en Bloque 10: el broker referencia la propiedad por texto libre
+                                  # ("el depto de Palermo"), no por id -- hace falta buscarla antes de poder
+                                  # usar tokko.get_property.
       - tokko.get_property
       - tokko.search_leads
       - gcal.create_event

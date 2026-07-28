@@ -15,6 +15,8 @@ import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import { InMemoryConversationStateStore, idleState } from "./conversationStateStore.js";
 import { InMemoryGlobalPauseStore } from "./globalPauseStore.js";
 import type { PausarAgenteAction, PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
+import type { ActionPlan, BrokerAccionDirectaPlanner } from "./brokerAccionDirectaPlan.js";
+import type { ConfirmationClassifier } from "./confirmationClassifier.js";
 import { loadCatalog } from "./intentCatalog.js";
 import { handleIncomingMessage, NotImplementedIntentError, type HandleMessageDeps } from "./handleIncomingMessage.js";
 
@@ -91,6 +93,14 @@ function stubPausarAgenteActionClassifier(action: PausarAgenteAction): PausarAge
   return { extractAction: vi.fn(async () => action) };
 }
 
+function stubBrokerAccionDirectaPlanner(plan: ActionPlan): BrokerAccionDirectaPlanner {
+  return { plan: vi.fn(async () => plan) };
+}
+
+function stubConfirmationClassifier(confirmed: boolean): ConfirmationClassifier {
+  return { extractConfirmation: vi.fn(async () => ({ confirmed })) };
+}
+
 /** Deps completas con stubs razonables — cada test sobreescribe solo lo que le importa. */
 function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps {
   return {
@@ -108,6 +118,8 @@ function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps
     reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
     globalPauseStore: new InMemoryGlobalPauseStore(),
     pausarAgenteActionClassifier: stubPausarAgenteActionClassifier({ accion: "pausar", alcance: "global" }),
+    brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({ actions: [], previewSummary: "no-op" }),
+    confirmationClassifier: stubConfirmationClassifier(true),
     defaultLat: -34.6037,
     defaultLng: -58.3816,
     ...overrides,
@@ -471,5 +483,123 @@ describe("handleIncomingMessage — pausa del agente (Bloque 9)", () => {
     );
 
     expect((await conversationStateStore.get("5491100000001"))?.pausedByBroker).toBe(true);
+  });
+});
+
+describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
+  it("plan bulk (más de un contacto): NO ejecuta nada todavía, deja la conversación esperando confirmación", async () => {
+    const gcal = stubGcal();
+    const bulkActions = [
+      { type: "whatsapp_send_message" as const, leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
+      { type: "whatsapp_send_message" as const, leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+    ];
+
+    const result = await handleIncomingMessage(
+      incoming("avisale a todos los leads fríos que bajamos el precio", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        gcal,
+        brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({ actions: bulkActions, previewSummary: "Bajamos el precio." }),
+      })
+    );
+
+    expect(result.responseText).toContain("2 contactos");
+    expect(result.responseText).toMatch(/confirmás/i);
+    expect(gcal.createEvent).not.toHaveBeenCalled();
+    expect(result.escalatedToBroker).toBe(false);
+    expect(result.intentId).toBe("broker_accion_directa");
+  });
+
+  it("plan de un solo contacto: se ejecuta directo (requires_client_confirmation: false)", async () => {
+    const sentText = vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } }));
+    const result = await handleIncomingMessage(
+      incoming("mandale un mensaje a Juan con la ficha", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        sender: { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() },
+        brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
+          actions: [{ type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola Juan!" }],
+          previewSummary: "x",
+        }),
+      })
+    );
+
+    expect(sentText).toHaveBeenCalledWith("5491100000001", "Hola Juan!");
+    expect(result.escalatedToBroker).toBe(false);
+  });
+
+  it("turno 2 con confirmación positiva: ejecuta el plan que había quedado pendiente", async () => {
+    const conversationStateStore = new InMemoryConversationStateStore();
+    const sentText = vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } }));
+    const deps = baseDeps({
+      brokerWhatsappNumber: BROKER_NUMBER,
+      conversationStateStore,
+      sender: { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() },
+      confirmationClassifier: stubConfirmationClassifier(true),
+    });
+
+    // Turno 1: plan bulk, queda pendiente.
+    await handleIncomingMessage(
+      incoming("avisale a todos los leads fríos", BROKER_NUMBER),
+      {
+        ...deps,
+        classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+        brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
+          actions: [
+            { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+          ],
+          previewSummary: "Bajamos el precio.",
+        }),
+      }
+    );
+    expect(sentText).not.toHaveBeenCalled();
+
+    // Turno 2: el broker confirma — ahora sí se ejecuta.
+    const second = await handleIncomingMessage(incoming("sí, dale", BROKER_NUMBER), {
+      ...deps,
+      classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+    });
+
+    expect(sentText).toHaveBeenCalledTimes(2);
+    expect(second.intentId).toBe("broker_accion_directa");
+    expect((await conversationStateStore.get(BROKER_NUMBER))?.step).toBe("idle");
+  });
+
+  it("turno 2 sin confirmación clara: NO ejecuta el plan pendiente", async () => {
+    const conversationStateStore = new InMemoryConversationStateStore();
+    const sentText = vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } }));
+    const sender = { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() };
+
+    await handleIncomingMessage(
+      incoming("avisale a todos los leads fríos", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        conversationStateStore,
+        sender,
+        brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
+          actions: [
+            { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+          ],
+          previewSummary: "Bajamos el precio.",
+        }),
+      })
+    );
+
+    await handleIncomingMessage(
+      incoming("mmm dejame pensarlo", BROKER_NUMBER),
+      baseDeps({
+        brokerWhatsappNumber: BROKER_NUMBER,
+        conversationStateStore,
+        sender,
+        confirmationClassifier: stubConfirmationClassifier(false),
+      })
+    );
+
+    expect(sentText).not.toHaveBeenCalled();
   });
 });

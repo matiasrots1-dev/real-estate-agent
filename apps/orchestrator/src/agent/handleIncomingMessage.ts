@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AuditLogEntry, ConversationState, Intent, IntentCatalog } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
+import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
@@ -32,6 +33,9 @@ import { runBrokerResumenLeads } from "./brokerResumenLeads.js";
 import { runBrokerPausarAgente } from "./brokerPausarAgente.js";
 import type { GlobalPauseStore } from "./globalPauseStore.js";
 import type { PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
+import { runBrokerAccionDirecta, type BrokerAccionDirectaDeps } from "./brokerAccionDirecta.js";
+import type { BrokerAccionDirectaPlanner } from "./brokerAccionDirectaPlan.js";
+import type { ConfirmationClassifier } from "./confirmationClassifier.js";
 
 /** No es un id real del catálogo — marca en `audit_log` los mensajes que se recibieron pero no se procesaron por pausa (docs/TASKS.md Bloque 9). */
 const PAUSED_SENTINEL_INTENT_ID = "agente_pausado";
@@ -65,12 +69,16 @@ export interface HandleMessageDeps {
   reprogramActionClassifier: ReprogramActionClassifier;
   globalPauseStore: GlobalPauseStore;
   pausarAgenteActionClassifier: PausarAgenteActionClassifier;
+  brokerAccionDirectaPlanner: BrokerAccionDirectaPlanner;
+  confirmationClassifier: ConfirmationClassifier;
   defaultLat: number;
   defaultLng: number;
   /** Si no está configurado, se escala igual pero no se notifica a nadie. */
   brokerNotifier?: BrokerNotifier;
   /** Si `message.from` matchea esto, el mensaje es del canal `broker`, no `cliente` (docs/TASKS.md Bloque 8). */
   brokerWhatsappNumber?: string;
+  /** Sin esto, broker_accion_directa igual arma el plan pero las acciones de whatsapp del plan fallan (best-effort). */
+  sender?: WhatsAppSender;
 }
 
 export interface HandleMessageResult {
@@ -112,6 +120,7 @@ export async function handleIncomingMessage(
       catalog: deps.catalog,
       agendarVisita: agendarVisitaDeps(deps, deps.catalog.meta.language),
       reprogramarCancelarVisita: reprogramarVisitaDeps(deps),
+      brokerAccionDirecta: brokerAccionDirectaDeps(deps),
     });
     if (continuation) {
       const intent = findIntent(deps.catalog, continuation.matchedIntentId);
@@ -216,6 +225,11 @@ export async function handleIncomingMessage(
       return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
     }
 
+    case "broker_accion_directa": {
+      const result = await runBrokerAccionDirecta(message, brokerAccionDirectaDeps(deps));
+      return finalizeNonEscalating(deps, message, intent, classification.confidence, result.toolsCalled, result.responseText);
+    }
+
     default:
       throw new NotImplementedIntentError(intent.id);
   }
@@ -241,6 +255,17 @@ function reprogramarVisitaDeps(deps: HandleMessageDeps): ReprogramarCancelarVisi
     appointmentStore: deps.appointmentStore,
     slotConfirmationClassifier: deps.slotConfirmationClassifier,
     reprogramActionClassifier: deps.reprogramActionClassifier,
+  };
+}
+
+function brokerAccionDirectaDeps(deps: HandleMessageDeps): BrokerAccionDirectaDeps {
+  return {
+    planner: deps.brokerAccionDirectaPlanner,
+    confirmationClassifier: deps.confirmationClassifier,
+    gcal: deps.gcal,
+    appointmentStore: deps.appointmentStore,
+    conversationStateStore: deps.conversationStateStore,
+    sender: deps.sender,
   };
 }
 

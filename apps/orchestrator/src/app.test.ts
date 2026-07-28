@@ -153,6 +153,8 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
       reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
       globalPauseStore: new InMemoryGlobalPauseStore(),
       pausarAgenteActionClassifier: { extractAction: vi.fn(async () => ({ accion: "pausar" as const, alcance: "global" as const })) },
+      brokerAccionDirectaPlanner: { plan: vi.fn(async () => ({ actions: [], previewSummary: "no-op" })) },
+      confirmationClassifier: { extractConfirmation: vi.fn(async () => ({ confirmed: true })) },
       defaultLat: -34.6037,
       defaultLng: -58.3816,
       brokerNotifier,
