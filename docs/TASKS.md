@@ -679,17 +679,90 @@ qué hace falta).
       Graph API en general).
 - [x] **El camino entrante está técnicamente completo y verificado**:
       código, verify token, firma HMAC, túnel, suscripción del webhook —
-      todo funciona correctamente contra un webhook real de Meta. Lo
-      único que falta para recibir mensajes reales de clientes es
-      **publicar la app** — no es un problema de código ni de
-      configuración de este proyecto.
-- [ ] **Publicar la app queda como bloque aparte** (número a definir
-      cuando se arranque), por la razón original de no meterlo acá:
-      depende de tiempos de Meta (verificación del negocio, App Review) —
-      ver el resumen de requisitos que se armó para el usuario antes de
-      decidir si arrancarlo.
+      todo funciona correctamente contra un webhook real de Meta.
+- [x] **Corrección (2026-07-29, Bloque 12): la hipótesis de que "lo único
+      que falta es publicar la app" era incorrecta — quedó descartada con
+      una prueba directa, no era solo una suposición sin probar.** Se
+      publicó la app (modo Live, sin acciones pendientes en el panel) y el
+      mensaje real ("hola" desde un número ya autorizado como tester)
+      **igual no llegó** — cero líneas en la terminal, con el túnel
+      confirmado sano (`/health` respondiendo desde internet) y esperando
+      20+ minutos por si había demora de propagación. Publicar la app NO
+      alcanzó. La causa real y el resto de la investigación quedan en el
+      Bloque 12.
 
-## Bloque 12 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 12 — Publicar la app: investigación (no alcanzó por sí sola)
+- [x] App pasada a modo Live en Meta for Developers ("Publicada", sin
+      acciones pendientes en el panel).
+- [x] **Prueba empírica: publicar NO destrabó la entrega de webhooks de
+      producción.** Estado verificado en el momento de la prueba:
+      - App en Live, sin acciones requeridas.
+      - Túnel sano: `/health` responde `{"ok":true}` desde internet.
+      - Callback URL correcta y verificada, campo `messages` suscripto.
+      - El botón "Probar" del panel sigue llegando (procesa, clasifica,
+        escala, notifica al broker) — igual que en el Bloque 11.
+      - Un "hola" real desde un número ya autorizado como tester
+        (`972538036699`) **no llegó** — cero líneas en la terminal,
+        esperando 20+ minutos por posible demora de propagación. El
+        mensaje salió de WhatsApp con doble tilde (entregado a Meta), pero
+        nunca se vio en el orchestrator.
+- [x] **Investigación: ¿qué más puede bloquear la entrega, aparte del modo
+      Dev/Live de la app?** Foco en si el número de prueba gratuito de
+      Meta (el `+1 555...`) tiene una limitación propia para RECIBIR,
+      independiente de si la app está publicada.
+      **Encontrado, con una fuente directa (no es la documentación oficial
+      de Meta, que sigue sin ser explícita en este punto puntual — ver
+      nota de fuente más abajo): el número de prueba gratuito de Meta es
+      de solo salida.** Un cliente real no puede mandarle un mensaje al
+      número de prueba y que dispare el webhook — la lista de "números de
+      prueba/destinatarios autorizados" habilita que VOS le mandes a esos
+      números (saliente), no que ellos te escriban a vos y llegue
+      (entrante). Esto explica el patrón completo que se observó: el botón
+      "Probar" del panel es un evento sintético inyectado del lado de
+      Meta (nunca pasa por la restricción de mensajería real), mientras
+      que un mensaje real de un cliente sí queda sujeto a esa limitación,
+      publicada la app o no.
+      **Nota de fuente**: la documentación oficial de Meta for Developers
+      sigue sin decir esto de forma explícita (mismo problema que ya se
+      documentó en el Bloque 10/11 — la doc oficial es vaga en varios
+      puntos de comportamiento de números de prueba). El hallazgo sale de
+      un artículo de soporte de un tercero (WANotifier), no de Meta
+      directamente — coincide exactamente con el patrón observado en las
+      dos pruebas empíricas (Bloque 11 y este bloque), así que la
+      evidencia empírica propia es lo que más pesa acá, no la fuente en sí.
+- [ ] **Pendiente, decisión del usuario: registrar un número propio.**
+      Resumen de qué implica (investigado, no ejecutado todavía):
+      - **Requisitos**: un número de teléfono real que NO esté activo hoy
+        en la app de WhatsApp/WhatsApp Business normal (hay que borrar esa
+        cuenta primero, salvo que se use la función "Coexistence" de Meta,
+        que permite mantener el número en la app normal y conectarlo
+        también al Cloud API). Se agrega en WhatsApp Manager, se verifica
+        por SMS/llamada, y se registra con una llamada a la API.
+      - **Verificación del negocio**: NO es obligatoria para poder recibir
+        mensajes — sin verificar, igual se pueden responder conversaciones
+        iniciadas por el cliente sin límite; lo que la verificación
+        destraba es superar el límite de 250 conversaciones iniciadas por
+        el negocio cada 24hs (mismo límite que ya se vio con el número de
+        prueba en el Bloque 10) y beneficios como la cuenta oficial
+        verificada.
+      - **Costos**: Meta no cobra por alojar/usar el número en la Cloud
+        API en sí. Se cobra por conversación una vez que se supera el
+        nivel gratuito, según categoría (marketing, utilidad,
+        autenticación, servicio) — las de servicio/iniciadas por el
+        cliente suelen ser gratis o muy baratas; las iniciadas por el
+        negocio (marketing/utilidad) tienen costo por conversación,
+        variable según país.
+      - **Tiempos**: registrar el número en sí, de minutos a un día. La
+        guía oficial dice 1-5 días hábiles para verificación del negocio
+        si los documentos están correctos — pero ya se documentó en el
+        Bloque 10/11 que hay casos reales reportados de semanas o meses
+        de demora en la cola de revisión de Meta. Como no hace falta
+        verificación para recibir mensajes (ver arriba), esto no debería
+        ser bloqueante para probar el camino entrante — sí lo sería para
+        escalar en volumen real más adelante.
+      No se arrancó todavía — queda para cuando el usuario decida seguir.
+
+## Bloque 13 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
