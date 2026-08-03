@@ -85,60 +85,64 @@ es un monorepo con npm/pnpm workspaces (ver `package.json` raíz).
 
 ## 5. Estado actual (importante: leé esto antes de generar código)
 
-**Lo que existe hoy**: documentación (`docs/`) y el esqueleto de carpetas
-vacío. **Ningún código funcional está escrito todavía.** Todo lo que hay en
-`apps/` y `mcp-servers/` son carpetas vacías o `package.json` mínimos sin
-implementación real. Vas a partir de cero en la implementación.
+**Esto ya no es un repo vacío.** Fase 1 (Bloques 0-5) y Fase 2 (Bloques
+6-11) están completas y mergeadas a `main`: hay un agente funcional de
+punta a punta — webhook de WhatsApp, loop de clasificación + tool-use con
+Claude, escalamiento al broker, máquina de estados para agendar/
+reprogramar visitas, recordatorios y recontacto proactivo (scheduler), y
+el canal broker completo (resúmenes de agenda/leads, pausar el agente, y
+`broker_accion_directa` — el broker da órdenes en lenguaje libre y el
+agente las ejecuta, con un gate de confirmación obligatorio si la orden
+afecta a más de un contacto). El detalle bloque por bloque — qué se
+construyó, qué se decidió y por qué, qué tests lo cubren — vive en
+`docs/TASKS.md`. No lo dupliques acá: leelo antes de tocar un área que no
+conocés, y agregá una entrada ahí cuando cierres un bloque nuevo.
 
-**Lo que falta decidir con el usuario antes de escribir código** (preguntale
-si no está en `docs/`):
-- ¿Ya tiene un número de WhatsApp Business verificado, o arrancamos con el
-  sandbox de Meta for Developers?
-- ¿Tiene el token/credenciales de la API de Tokko a mano? ¿Confirmó qué
-  endpoints expone su plan?
-- ¿Ya creó un Google Calendar dedicado para visitas, o usamos el personal
-  en el POC?
+**Blocker activo, no resuelto en código**: el camino ENTRANTE de WhatsApp
+(que Meta le entregue al orchestrator un mensaje real de un cliente) está
+técnicamente armado y verificado contra Meta real (webhook, firma HMAC,
+túnel, verify token) pero **hoy no recibe mensajes de producción**.
+Publicar la app no lo resolvió. La causa más probable — investigada, pero
+sin confirmación 100% oficial de Meta — es que el número de prueba
+gratuito que se está usando es de solo salida (no puede recibir). Ver
+Bloque 11/12 de `docs/TASKS.md` para el detalle completo, y las dos
+opciones evaluadas para resolverlo (registrar un número propio, o
+Coexistence con el número laboral existente del broker — esta última
+requiere pasar por un Tech Provider externo, no es self-service).
 
-Si no tenés esas respuestas, no bloquees el trabajo por eso: avanzá con
-mocks/stubs de esas integraciones y dejalo explícito en el código
-(`// TODO: reemplazar por credenciales reales de Tokko`) para no frenar el
-progreso esperando una respuesta.
+**Integraciones reales vs. mock, estado actual de `.env`**: WhatsApp
+Business Cloud API, Google Calendar y OpenWeatherMap tienen credenciales
+reales cargadas y en uso. **Tokko sigue sin credenciales** (`TOKKO_API_KEY`
+vacío) — todo lo que toca Tokko corre contra `MockTokkoClient`
+(`mcp-servers/mcp-tokko/src/mockTokkoClient.ts`). Si necesitás confirmar
+el estado exacto de una credencial antes de asumir nada, no adivines:
+`grep` el nombre de la variable en `.env` (nunca imprimas el valor) o
+preguntale al usuario.
+
+**Persistencia sigue siendo JSON local** (`apps/orchestrator/data/`,
+gitignoreado), no Postgres — el swap de implementación detrás de las
+interfaces ya existentes (`AuditLogStore`, `AppointmentStore`,
+`ConversationStateStore`) es el Bloque 12/13 de `docs/TASKS.md`, todavía
+sin arrancar.
+
+**Para una introducción completa pensada para alguien nuevo en el
+proyecto** (no solo para vos, Claude Code, que ya tenés todo este
+contexto de sesiones anteriores) **ver `docs/ONBOARDING.md`.**
 
 ## 6. Por dónde empezar — plan de trabajo sugerido
 
-Seguí `docs/TASKS.md` como backlog ordenado. Resumen de las primeras
-iteraciones:
+`docs/TASKS.md` es el backlog ordenado y la fuente de verdad de qué está
+hecho. Abrilo y andá al primer bloque sin `[x]` — ese es el punto de
+partida real, no una lista fija escrita acá (que quedaría desactualizada
+apenas se cierre el próximo bloque, como pasó con la versión anterior de
+esta sección). Al momento de escribir esto, eso es el Bloque 12
+(persistencia real en Postgres) — pero no lo des por hecho, confirmalo en
+`docs/TASKS.md` antes de arrancar nada.
 
-1. **Setup del monorepo**: completar `package.json` raíz con workspaces,
-   configurar TypeScript compartido (`tsconfig.base.json`), levantar
-   `docker-compose.yml` (Postgres + Redis) y confirmar que todo compila con
-   `npm run build` aunque no haya lógica todavía.
-2. **`packages/shared-types`**: definir los tipos base (`Intent`,
-   `ConversationState`, `Property`, `Appointment`, `Lead`, `AuditLogEntry`)
-   a partir de lo que describe `docs/intent_catalog.yaml` y `docs/SOW.md`.
-3. **`mcp-servers/mcp-weather`**: empezá por este, es el más simple — sirve
-   para validar el patrón de MCP server del proyecto antes de meterte con
-   Tokko o Calendar, que tienen más superficie de API.
-4. **`mcp-servers/mcp-gcal`**: hay servers MCP de referencia públicos para
-   Google Calendar — partí de uno existente y adaptalo a las funciones que
-   necesita este proyecto (`freebusy`, `create_event`, `patch_event`,
-   `delete_event`, `list_events`) en vez de escribirlo desde cero.
-5. **`mcp-servers/mcp-tokko`**: wrapper de la API de Tokko Broker. No hay
-   server de referencia público — implementalo contra la documentación
-   real de la API una vez que el usuario confirme el acceso. Si todavía no
-   la tiene, armá el server con mocks y dejalo marcado como pendiente de
-   validar contra la API real.
-6. **`apps/orchestrator`**: recién acá arranca el servicio principal —
-   webhook de WhatsApp, loader de `intent_catalog.yaml`, loop de tool-use
-   con Claude API, máquina de estados de conversación, y la lógica de
-   escalamiento de `docs/escalation_policy.md`.
-7. **Loop end-to-end mínimo**: un mensaje de WhatsApp de prueba que
-   dispare `consulta_disponibilidad` contra un mock de Tokko y devuelva
-   una respuesta. Este es el primer hito verificable — no sigas con más
-   intents hasta que este loop funcione de punta a punta.
-
-No implementes las fases 2+ del roadmap (recordatorios, recontacto,
-multi-tenant) hasta que el loop mínimo de la fase 1 esté probado.
+Mismo criterio que siempre: no saltes a un bloque nuevo sin haber cerrado
+el anterior con tests en verde, y no implementes algo fuera del bloque
+activo por iniciativa propia — si te parece que falta algo, decíselo al
+usuario en vez de agregarlo por tu cuenta.
 
 ## 7. Convenciones de trabajo
 
