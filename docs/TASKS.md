@@ -638,6 +638,29 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       verificar contra la API real. No hay todavía una rutina periódica de
       smoke test contra Claude real para todos los classifiers — quedó
       hecho ad-hoc, una vez, para este bug puntual.
+- [ ] **Pendiente, no resuelto: `brokerAccionDirectaPlan.ts` manda a la
+      API de Claude el `Lead[]` completo que devuelve Tokko, no solo los
+      leads que terminan en el plan final.** Encontrado al armar la
+      política de privacidad de la app (2026-07-29). `runReadTool`
+      (tool `tokko_search_leads`, línea ~231) hace
+      `return this.tokko.searchLeads({...})` directo — el resultado sin
+      filtrar (nombre, teléfono, email de **todos** los leads que
+      matchean el filtro de temperatura/días sin respuesta) viaja como
+      `tool_result` a Anthropic. Si el broker pide "avisale a los leads
+      fríos" y hay 40 que matchean pero el plan final que arma Claude
+      solo termina tocando a 5 (porque el broker especificó más
+      condiciones en el texto, o Claude decidió acotar), los otros 35
+      leads igual mandaron su nombre/teléfono/email completos a un
+      tercero (Anthropic) sin necesidad. Es sobre-exposición de datos
+      personales de gente que no dio consentimiento para esa búsqueda
+      puntual — no rompe nada funcionalmente, pero es exactamente el
+      tipo de dato que una política de privacidad tiene que declarar con
+      precisión, y un candidato claro a arreglar filtrando el resultado
+      de `searchLeads` a los campos que el planner realmente necesita
+      (ej. `id`, `temperatura`, `diasSinRespuesta`) antes de devolvérselo
+      a Claude, agregando `nombre`/`telefonoWhatsapp` recién para los
+      leads que terminan en el plan. No implementado todavía — queda
+      documentado como pendiente, no como arreglado.
 
 ## Bloque 11 — Camino entrante: que Meta le pueda hablar al orchestrator
 Alcance acotado a propósito (decisión del usuario, 2026-07-28): **este
