@@ -5,37 +5,40 @@ vía WhatsApp: consultas típicas de clientes, agenda de visitas contra
 Google Calendar, recordatorios, recontacto de leads, y escalamiento al
 broker humano cuando corresponde.
 
-## Para arrancar a desarrollar
+Fase 1 y Fase 2 del roadmap ya están completas y mergeadas — esto no es
+un esqueleto vacío. Ver `docs/TASKS.md` para el estado exacto (qué está
+hecho, qué falta, y los pendientes conocidos).
 
-Si estás usando Claude Code, andá directo a **`CLAUDE.md`** — tiene todo
-el contexto y el plan de trabajo.
+## Para arrancar
 
-Si sos humano y estás onboardeando manualmente:
+- Si estás usando Claude Code, andá directo a **`CLAUDE.md`** — tiene el
+  contexto de negocio, las decisiones ya tomadas, y las convenciones de
+  trabajo.
+- Si sos humano y nunca viste este proyecto, empezá por
+  **`docs/ONBOARDING.md`** — recorrido completo pensado para alguien sin
+  contexto previo (qué problema resuelve, cómo funciona de punta a punta,
+  por qué las decisiones grandes son como son, y cómo levantarlo en tu
+  máquina).
 
-1. Leé `docs/SOW.md` (alcance y arquitectura completa).
-2. Leé `docs/intent_catalog.yaml` (reglas de negocio: qué reconoce el
-   agente y cuándo escala).
-3. `cp .env.example .env` y completá las credenciales que tengas
-   disponibles (ver `docs/TASKS.md` si te faltan algunas — el proyecto
-   está pensado para avanzar con mocks donde falte una credencial).
-4. `docker compose up -d` (levanta Postgres local).
-5. `npm install` en la raíz (instala todos los workspaces).
-6. Seguí el backlog de `docs/TASKS.md` en orden.
+Para el flujo de git (rama por bloque, Pull Request, nunca commit directo
+a `main`), ver `CONTRIBUTING.md`.
 
 ## Estructura
 
 ```
 real-estate-agent/
 ├── CLAUDE.md              # brief para Claude Code
-├── docs/                  # SOW, intent catalog, políticas, arquitectura, backlog
+├── docs/                  # SOW, intent catalog, políticas, arquitectura, onboarding, backlog
 ├── apps/orchestrator/     # servicio principal
 ├── mcp-servers/           # integraciones (Tokko, Google Calendar, Weather) como MCP servers
 ├── packages/shared-types/ # tipos compartidos + loader del intent catalog
-└── docker-compose.yml     # Postgres local
+└── docker-compose.yml     # Postgres, provisionado para cuando se migre desde JSON local (ver docs/TASKS.md)
 ```
 
 ## Stack
 
 TypeScript + Node.js (monorepo con npm workspaces), Claude API con
 tool-use, MCP para las integraciones externas, WhatsApp Business Platform
-(Cloud API oficial), Google Calendar API, Tokko Broker API, Postgres.
+(Cloud API oficial), Google Calendar API, Tokko Broker API. Persistencia
+hoy en archivos JSON locales — Postgres está provisionado pero todavía no
+en uso (ver `docs/TASKS.md`).

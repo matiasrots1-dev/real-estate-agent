@@ -308,8 +308,8 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       después de una primera lectura apresurada de la evidencia — ver
       abajo el detalle de qué se descartó y por qué.** Un número de
       celular argentino tiene dos representaciones válidas: el formato
-      viejo/doméstico con prefijo `15` (ej. `54111557994543`) y el
-      formato internacional con `9` (ej. `5491157994543`). Se probó en
+      viejo/doméstico con prefijo `15` (ej. `54111155559999`) y el
+      formato internacional con `9` (ej. `5491155559999`). Se probó en
       vivo mandando mensajes reales a las dos formas del mismo número:
       **Meta resuelve las dos como la misma cuenta de WhatsApp sin
       problema** (`contacts[].wa_id` en la respuesta de `POST /messages`
@@ -329,8 +329,8 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       (`intentCatalog.ts` para detectar canal, `ConversationStateStore`
       que indexa por número para `broker_pausar_agente`,
       `brokerAccionDirectaExecutor.ts`, `jobs/recontact.ts`, etc.). El
-      sistema no tiene forma de saber que `54111557994543` y
-      `5491157994543` son la misma persona si aparecen escritos distinto
+      sistema no tiene forma de saber que `54111155559999` y
+      `5491155559999` son la misma persona si aparecen escritos distinto
       en dos lugares (ej. `BROKER_WHATSAPP_NUMBER` en un formato y el
       `telefonoWhatsapp` de un `Lead` de Tokko en el otro) — eso puede
       hacer que el gate bulk de `broker_accion_directa` cuente 2
@@ -638,6 +638,29 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       verificar contra la API real. No hay todavía una rutina periódica de
       smoke test contra Claude real para todos los classifiers — quedó
       hecho ad-hoc, una vez, para este bug puntual.
+- [ ] **Pendiente, no resuelto: `brokerAccionDirectaPlan.ts` manda a la
+      API de Claude el `Lead[]` completo que devuelve Tokko, no solo los
+      leads que terminan en el plan final.** Encontrado al armar la
+      política de privacidad de la app (2026-07-29). `runReadTool`
+      (tool `tokko_search_leads`, línea ~231) hace
+      `return this.tokko.searchLeads({...})` directo — el resultado sin
+      filtrar (nombre, teléfono, email de **todos** los leads que
+      matchean el filtro de temperatura/días sin respuesta) viaja como
+      `tool_result` a Anthropic. Si el broker pide "avisale a los leads
+      fríos" y hay 40 que matchean pero el plan final que arma Claude
+      solo termina tocando a 5 (porque el broker especificó más
+      condiciones en el texto, o Claude decidió acotar), los otros 35
+      leads igual mandaron su nombre/teléfono/email completos a un
+      tercero (Anthropic) sin necesidad. Es sobre-exposición de datos
+      personales de gente que no dio consentimiento para esa búsqueda
+      puntual — no rompe nada funcionalmente, pero es exactamente el
+      tipo de dato que una política de privacidad tiene que declarar con
+      precisión, y un candidato claro a arreglar filtrando el resultado
+      de `searchLeads` a los campos que el planner realmente necesita
+      (ej. `id`, `temperatura`, `diasSinRespuesta`) antes de devolvérselo
+      a Claude, agregando `nombre`/`telefonoWhatsapp` recién para los
+      leads que terminan en el plan. No implementado todavía — queda
+      documentado como pendiente, no como arreglado.
 
 ## Bloque 11 — Camino entrante: que Meta le pueda hablar al orchestrator
 Alcance acotado a propósito (decisión del usuario, 2026-07-28): **este
