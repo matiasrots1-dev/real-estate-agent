@@ -134,8 +134,12 @@ confirmación). El detalle bloque por bloque está en `docs/TASKS.md`.
 
 **No funcionando todavía — bloqueante para uso real**: el camino
 ENTRANTE de WhatsApp. Un mensaje real de un cliente hoy **no le llega**
-al servidor, aunque el webhook, la firma, el túnel y la app de Meta ya
-están armados y verificados. La causa más probable (investigada, sin
+al servidor — pero el webhook de prueba que dispara el propio panel de
+Meta ("Probar", en Configuration → Webhook) **sí llega y se procesa
+completo** (clasifica, escala, notifica al broker). Esa es justamente la
+evidencia de que el problema es específico de los mensajes reales de
+producción, no del webhook, la firma o el túnel en sí — todo eso ya está
+armado y verificado. La causa más probable (investigada, sin
 confirmación 100% oficial de Meta) es que el número de prueba gratuito
 que se está usando solo puede mandar mensajes, no recibirlos. Publicar la
 app en Meta no lo resolvió. Ver Bloque 11 y 12 de `docs/TASKS.md` para
@@ -167,6 +171,23 @@ Google Calendar y el clima sí corren contra las APIs reales.
    hizo con el port forwarding nativo de VS Code, sin instalar nada) y
    cargar la Callback URL + verify token en Meta for Developers.
 
+**Tres trampas operativas que ya costaron horas de diagnóstico — evitalas
+de entrada:**
+- **El token de acceso de WhatsApp (`WHATSAPP_ACCESS_TOKEN`) vence cada
+  24hs** si es uno de los temporales que da la pantalla rápida de "API
+  Setup" de Meta. Si un envío que antes funcionaba empieza a devolver 401
+  `Authentication Error`, es casi siempre esto — no un bug. Para no
+  repetir el ciclo, considerá un token de System User (no vence en
+  minutos/horas).
+- **El `.env` se lee una sola vez, al arrancar el proceso.** Si cambiás
+  una variable (ej. renovaste el token de arriba) y el servidor ya está
+  corriendo, no la va a ver hasta que lo reinicies — no alcanza con
+  guardar el archivo.
+- **La URL del túnel cambia cada vez que se levanta de nuevo** (port
+  forwarding de VS Code o cualquier otro). Si reiniciaste el túnel,
+  tenés que volver a pegar la URL nueva como Callback URL en Meta for
+  Developers — la vieja va a dejar de funcionar silenciosamente.
+
 Para el flujo de git (rama por bloque, PR, nunca commit directo a
 `main`), ver `CONTRIBUTING.md`.
 
@@ -192,8 +213,20 @@ Para el flujo de git (rama por bloque, PR, nunca commit directo a
   de que algo falló.
 - **Retención de datos indefinida** — ningún store tiene borrado
   automático; todo se acumula para siempre en archivos locales. Riesgo:
-  **bajo hoy, crece con el volumen** — ya es relevante para la política
-  de privacidad de la app.
+  **alto, no bajo** — la política de privacidad de la app **ya está
+  publicada** y promete 12 meses de retención; el código hoy no borra
+  nada, nunca. Esto no es una brecha futura hipotética, es una promesa
+  pública ya incumplida mientras este párrafo esté vigente.
+- **`brokerAccionDirectaPlan.ts` manda a la API de Claude el `Lead[]`
+  completo que devuelve Tokko** (`runReadTool`, tool `tokko_search_leads`)
+  — nombre, teléfono y email de **todos** los leads que matchearon el
+  filtro de la búsqueda, no solo los que terminan en el plan final que
+  arma Claude. Si el broker pide "avisale a los leads fríos" y hay 40
+  que matchean pero el plan final solo toca a 5, los otros 35 igual
+  viajaron completos a Anthropic. Riesgo: **medio-alto** — es
+  sobre-exposición de datos personales de terceros (los leads no dieron
+  ese consentimiento específico), y es exactamente el tipo de dato que
+  la política de privacidad tiene que declarar con precisión.
 - **Persistencia en JSON, no Postgres** — no soporta concurrencia real
   entre procesos. Riesgo: **bajo** mientras el volumen sea el de un
   broker individual; es el techo conocido, no una sorpresa.
