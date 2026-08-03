@@ -308,8 +308,8 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       después de una primera lectura apresurada de la evidencia — ver
       abajo el detalle de qué se descartó y por qué.** Un número de
       celular argentino tiene dos representaciones válidas: el formato
-      viejo/doméstico con prefijo `15` (ej. `54111557994543`) y el
-      formato internacional con `9` (ej. `5491157994543`). Se probó en
+      viejo/doméstico con prefijo `15` (ej. `54111155559999`) y el
+      formato internacional con `9` (ej. `5491155559999`). Se probó en
       vivo mandando mensajes reales a las dos formas del mismo número:
       **Meta resuelve las dos como la misma cuenta de WhatsApp sin
       problema** (`contacts[].wa_id` en la respuesta de `POST /messages`
@@ -329,8 +329,8 @@ anterior con un test que lo pruebe (mismo criterio que la Fase 1).
       (`intentCatalog.ts` para detectar canal, `ConversationStateStore`
       que indexa por número para `broker_pausar_agente`,
       `brokerAccionDirectaExecutor.ts`, `jobs/recontact.ts`, etc.). El
-      sistema no tiene forma de saber que `54111557994543` y
-      `5491157994543` son la misma persona si aparecen escritos distinto
+      sistema no tiene forma de saber que `54111155559999` y
+      `5491155559999` son la misma persona si aparecen escritos distinto
       en dos lugares (ej. `BROKER_WHATSAPP_NUMBER` en un formato y el
       `telefonoWhatsapp` de un `Lead` de Tokko en el otro) — eso puede
       hacer que el gate bulk de `broker_accion_directa` cuente 2
