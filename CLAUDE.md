@@ -153,6 +153,37 @@ usuario en vez de agregarlo por tu cuenta.
   `docs/TASKS.md` y abrí un PR contra `main` con un resumen — el dueño del
   repo lo revisa y aprueba desde GitHub, no asumas el merge. Detalle
   completo del flujo en `CONTRIBUTING.md`.
+- **Pre-mortem antes de escribir código; obituario después de cada
+  fracaso.** Al arrancar un bloque, *antes* de tocar código: imaginá que
+  ya está mergeado y falló en producción, y planteá **3 modos de fallo
+  concretos**. La barra es que cada uno sea lo bastante específico como
+  para poder testearlo o descartarlo — *"el classifier devuelve algo que
+  no es boolean y el gate nunca destraba"* sirve; *"podría haber un bug"*
+  no. Con cada uno hacé una de dos cosas, nunca lo dejes implícito:
+  mitigarlo ya (un test, una guarda en el código), o anotarlo en
+  `docs/TASKS.md` como riesgo conocido y asumido.
+  **Antes de escribir el tuyo, leé los obituarios previos** — las
+  retrospectivas de fracasos que ya están en `docs/TASKS.md`. Eso es lo
+  que hace que cada sesión arranque mejor que la anterior en vez de
+  repetir los mismos errores. Modos de fallo que este proyecto ya sufrió,
+  como semilla:
+  - Tests en verde que no prueban el comportamiento real de una API
+    externa (`max_tokens: 32` del Bloque 10 — 255 tests pasando y el gate
+    de confirmación no podía destrabarse nunca; lo agarró recién el
+    testing en vivo).
+  - Datos personales o credenciales entrando al repo (Bloques 10 y 12,
+    dos veces; de ahí salió el escaneo pre-commit del Bloque 13).
+  - Dar por buena la causa de un fallo externo sin verificarla (se
+    publicó la app de Meta asumiendo que era lo que bloqueaba el webhook
+    entrante — no lo era).
+  - Algo que se rompe solo con el paso del tiempo, sin que nadie lo toque
+    (fechas hardcodeadas en la suite de tests).
+  - Cerrar un diagnóstico con el primer sospechoso que encaja, sin
+    confirmar que explique *todos* los hechos observados.
+  Y cuando algo efectivamente falle, la entrada de `docs/TASKS.md` no
+  alcanza con contar qué lo mató: agregá **qué pregunta lo habría
+  agarrado antes**. Esa cláusula es la que alimenta los pre-mortems
+  siguientes — sin ella el loop no cierra.
 - Commits chicos y descriptivos, en español o inglés (consistente con lo
   que ya haya en el repo).
 - Cada MCP server debe tener su propio test que lo ejercite de forma
