@@ -27,7 +27,8 @@ mergear.
    `bloque-8-broker-resumenes`. Para trabajo que no corresponde a un bloque
    del backlog (un fix puntual, una tarea de infra), usá un prefijo
    descriptivo: `fix/...`, `chore/...`.
-3. **Implementá el bloque completo**: código + tests. Commits chicos y
+3. **Hacé el pre-mortem** (ver la sección dedicada más abajo) y después
+   **implementá el bloque completo**: código + tests. Commits chicos y
    descriptivos a medida que avanzás, no un commit gigante al final.
 4. **Antes de abrir el PR, confirmá en verde**:
    ```
@@ -66,6 +67,33 @@ mergear.
    git checkout main
    git pull
    ```
+
+## Pre-mortem antes de codear
+
+Antes de escribir código en un bloque: imaginá que ya está mergeado y
+falló en producción, y planteá **3 modos de fallo concretos**. La barra
+es que cada uno sea lo bastante específico como para poder testearlo o
+descartarlo — *"el classifier devuelve algo que no es boolean y el gate
+nunca destraba"* sirve; *"podría haber un bug"* no. Con cada uno hacé una
+de dos cosas, nunca lo dejes implícito: mitigarlo ya (un test, una guarda
+en el código), o anotarlo en `docs/TASKS.md` como riesgo conocido y
+asumido.
+
+No es ceremonia ni pide un artefacto nuevo: va en el hilo de trabajo, y a
+`docs/TASKS.md` solo llega lo que sobrevive como riesgo asumido.
+
+**Antes de escribir el tuyo, leé los obituarios previos** — las
+retrospectivas de fracasos que ya están en `docs/TASKS.md`. Y cuando algo
+falle, la entrada nueva no alcanza con contar qué lo mató: agregá **qué
+pregunta lo habría agarrado antes**. Esa cláusula es la que alimenta los
+pre-mortems siguientes; sin ella cada bloque arranca de cero.
+
+Existe porque este proyecto ya pagó varias veces por no tenerlo: 255
+tests en verde con un gate que no podía destrabarse nunca, datos
+personales entrando al repo dos veces, y una app publicada en Meta
+asumiendo que era lo que bloqueaba el webhook entrante cuando no lo era.
+El catálogo completo de modos de fallo ya vividos está en `CLAUDE.md`
+secc. 7, como semilla para no arrancar de cero.
 
 ## Escaneo de datos sensibles antes de cada commit
 
