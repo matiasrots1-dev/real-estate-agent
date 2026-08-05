@@ -12,7 +12,9 @@
     "build": "npm run build --workspace=shared-types && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "dev:orchestrator": "npm run dev --workspace=apps/orchestrator",
-    "auth:gcal": "node infra/scripts/get_google_refresh_token.mjs"
+    "auth:gcal": "node infra/scripts/get_google_refresh_token.mjs",
+    "prepare": "node scripts/setup-git-hooks.mjs",
+    "check:sensitive-data": "node scripts/check-sensitive-data.mjs"
   },
   "engines": {
     "node": ">=20"

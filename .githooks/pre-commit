@@ -1,0 +1,5 @@
+#!/bin/sh
+# Hook de git versionado en el repo (ver scripts/setup-git-hooks.mjs para
+# cómo se instala solo, y CONTRIBUTING.md para el detalle). Corre el
+# escaneo de datos sensibles antes de cada commit.
+node "$(git rev-parse --show-toplevel)/scripts/check-sensitive-data.mjs"

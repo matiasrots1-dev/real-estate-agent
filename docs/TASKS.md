@@ -725,7 +725,7 @@ qué hace falta).
       - El botón "Probar" del panel sigue llegando (procesa, clasifica,
         escala, notifica al broker) — igual que en el Bloque 11.
       - Un "hola" real desde un número ya autorizado como tester
-        (`972538036699`) **no llegó** — cero líneas en la terminal,
+        (`972555559999`) **no llegó** — cero líneas en la terminal,
         esperando 20+ minutos por posible demora de propagación. El
         mensaje salió de WhatsApp con doble tilde (entregado a Meta), pero
         nunca se vio en el orchestrator.
@@ -785,7 +785,50 @@ qué hace falta).
         escalar en volumen real más adelante.
       No se arrancó todavía — queda para cuando el usuario decida seguir.
 
-## Bloque 13 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 13 — Escaneo de datos sensibles antes de cada commit
+Motivado por un incidente real, no preventivo en abstracto: números de
+teléfono reales del usuario llegaron a `main` dos veces (docs/TASKS.md,
+Bloques 10 y 12) durante sesiones de live testing, porque el escaneo de
+privacidad se hizo a mano, después del hecho, y una vez se hizo sobre la
+rama equivocada (no agarró contenido ya mergeado por un PR distinto). Se
+decidió explícitamente **no** reescribir el historial de `main` para sacar
+los números viejos — el riesgo/complejidad de reescribir una rama
+protegida y compartida (force-push, ramas huérfanas, caché de GitHub en
+PRs ya mergeados) supera lo que resuelve, dado que un teléfono no es una
+credencial explotable. El número israelí que había quedado expuesto se redactó del
+`main` actual con el mismo tratamiento que el argentino en el Bloque 10
+(placeholder con corrida de dígitos repetidos, mismo punto técnico).
+- [x] `scripts/check-sensitive-data.mjs` — escanea el contenido real
+      (staged, vía `git show :archivo`) buscando tokens con forma de
+      credencial (Meta/Graph API, Anthropic, headers `Bearer`), URLs de
+      túnel (Dev Tunnels, ngrok, Cloudflare Tunnel), y números de
+      teléfono (Argentina/Israel) fuera de archivos de test/mock (esos
+      quedan exentos a propósito — usan números ficticios en todos
+      lados). Un número con una corrida de 4+ dígitos repetidos se trata
+      como placeholder a propósito, no se bloquea — es la convención que
+      ya usa el proyecto (`...5559999`).
+- [x] `.githooks/pre-commit` (versionado en el repo) corre ese script
+      antes de cada commit y lo bloquea si encuentra algo.
+      `scripts/setup-git-hooks.mjs` corre solo en cada `npm install`
+      (script `prepare` del `package.json` raíz) y apunta git a
+      `.githooks/` vía `core.hooksPath` — mismo mecanismo nativo que usan
+      herramientas como husky por debajo, sin agregar una dependencia
+      nueva para algo así de chico. Un colaborador nuevo lo tiene activo
+      desde su primer `npm install`, sin configurar nada a mano.
+- [x] `npm run check:sensitive-data` (lo que está staged) y
+      `npm run check:sensitive-data -- --all` (todo el árbol de trabajo
+      actual — se usó para auditar el repo entero antes de este commit:
+      163 archivos trackeados, sin coincidencias) para correrlo a mano.
+- [x] Documentado en `CONTRIBUTING.md`, sección dedicada: qué bloquea, por
+      qué existe, cómo se instala solo, y que `git commit --no-verify`
+      sigue siendo el escape para un falso positivo real — no se inventó
+      un mecanismo de bypass propio.
+- [x] Probado en vivo antes de commitear este bloque: un commit con un
+      token falso con forma de credencial y un teléfono con forma real
+      fue bloqueado correctamente (y no se creó el commit); un commit con
+      un número con corrida de dígitos repetidos pasó limpio.
+
+## Bloque 14 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
