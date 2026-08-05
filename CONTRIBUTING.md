@@ -35,7 +35,8 @@ mergear.
    npm run test
    ```
    en la raíz del repo (corre los 5 paquetes del monorepo). Un bloque no
-   está terminado si esto no pasa.
+   está terminado si esto no pasa. (Cada commit, además, pasa solo por el
+   escaneo de datos sensibles — ver la sección dedicada más abajo.)
 5. **Actualizá `docs/TASKS.md`**: marcá los checkboxes del bloque que se
    cierra, con el mismo nivel de detalle que ya tienen los bloques
    anteriores (qué se hizo, qué quedó pendiente de credenciales externas,
@@ -65,6 +66,45 @@ mergear.
    git checkout main
    git pull
    ```
+
+## Escaneo de datos sensibles antes de cada commit
+
+`git commit` corre automáticamente `scripts/check-sensitive-data.mjs` antes
+de crear el commit, y **lo bloquea** si detecta:
+
+- tokens con forma de credencial (Meta/Graph API, Anthropic, headers
+  `Bearer ...`),
+- URLs de túnel (Dev Tunnels, ngrok, Cloudflare Tunnel),
+- números de teléfono con forma real (Argentina, Israel), en cualquier
+  archivo que no sea de test o mock.
+
+Esto existe porque ya pasó dos veces (docs/TASKS.md, Bloques 10 y 12):
+números de teléfono reales del usuario entraron a `main` durante sesiones
+de live testing porque nadie los escaneó antes de commitear. No depende de
+que alguien se acuerde de correrlo a mano — se activa solo la primera vez
+que corrés `npm install` en un clone nuevo (script `prepare` del
+`package.json` raíz, que apunta git a los hooks versionados en
+`.githooks/` vía `core.hooksPath`), así que un colaborador nuevo lo tiene
+desde el día uno sin hacer nada extra.
+
+**Los archivos de test/mock quedan exentos del chequeo de teléfonos a
+propósito** (usan números ficticios en todos lados, por diseño) — el
+chequeo de tokens y URLs de túnel sí aplica siempre, en cualquier archivo.
+Un número se considera "obviamente ficticio" (y no bloquea) si tiene una
+corrida de 4+ dígitos iguales seguidos — la convención que ya usa el
+proyecto para sus propios placeholders (ej. `...5559999`).
+
+Correrlo a mano en cualquier momento:
+```
+npm run check:sensitive-data           # lo que está staged ahora
+npm run check:sensitive-data -- --all  # todo el árbol de trabajo actual (auditoría puntual)
+```
+
+Si el hook bloquea un falso positivo real (no un dato sensible de
+verdad), la salida ya sugiere el arreglo más simple (un placeholder con
+la corrida de dígitos repetidos). Si hace falta saltearlo a propósito,
+`git commit --no-verify` — con criterio, no de rutina, y dejando claro en
+el PR por qué se saltó.
 
 ## Por qué este flujo
 
