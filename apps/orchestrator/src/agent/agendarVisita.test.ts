@@ -107,10 +107,21 @@ describe("startAgendarVisita", () => {
   });
 
   it("escala si no hay ningún horario libre en las próximas 72hs", async () => {
+    // La agenda tiene que estar ocupada durante toda la ventana de propuesta,
+    // que `startAgendarVisita` calcula desde el reloj real. El rango va
+    // relativo a "ahora" a propósito (docs/TASKS.md Bloque 14): antes estaba
+    // fijo en 2020-2030 y dejaba de cubrir la ventana a partir de 2030, con
+    // lo cual este test se volvía verde por la razón equivocada —
+    // aparecían horarios libres y ya no escalaba. Verificado adelantando el
+    // reloj: fallaba a ~1600 días de 2026-08.
+    const ocupadoTodaLaVentana = [
+      {
+        start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ];
     const deps = makeDeps({
-      gcal: makeGcal({
-        freebusy: vi.fn(async () => [{ start: "2020-01-01T00:00:00Z", end: "2030-01-01T00:00:00Z" }]),
-      }),
+      gcal: makeGcal({ freebusy: vi.fn(async () => ocupadoTodaLaVentana) }),
     });
     const result = await startAgendarVisita(
       message("quiero ir a verlo"),

@@ -3,7 +3,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Appointment } from "shared-types";
-import { FileAppointmentStore, InMemoryAppointmentStore, type AppointmentStore } from "./appointmentStore.js";
+import {
+  FileAppointmentStore,
+  InMemoryAppointmentStore,
+  type AppointmentStore,
+  type Clock,
+} from "./appointmentStore.js";
+
+// Reloj fijo para todos los tests que comparan contra "ahora" (docs/TASKS.md
+// Bloque 14). Antes las fechas se comparaban contra la fecha real del día en
+// que corría la suite, así que los fixtures envejecían y los tests se rompían
+// solos. Con el reloj inyectado, las fechas fijas vuelven a ser correctas y
+// además determinísticas — no dependen de cuándo se corra.
+const AHORA = new Date("2026-08-15T12:00:00Z");
+const relojFijo = () => AHORA;
 
 function sampleAppointment(overrides: Partial<Appointment> = {}): Appointment {
   return {
@@ -19,7 +32,7 @@ function sampleAppointment(overrides: Partial<Appointment> = {}): Appointment {
   };
 }
 
-function runSharedTests(makeStore: () => AppointmentStore) {
+function runSharedTests(makeStore: (now?: Clock) => AppointmentStore) {
   it("guarda y encuentra por id", async () => {
     const store = makeStore();
     const appointment = sampleAppointment();
@@ -40,15 +53,33 @@ function runSharedTests(makeStore: () => AppointmentStore) {
   });
 
   it("findActiveByLead encuentra la visita activa más próxima en el futuro", async () => {
-    const store = makeStore();
+    const store = makeStore(relojFijo); // AHORA = 2026-08-15
     await store.save(
       sampleAppointment({ id: "appt-lejos", fechaHora: "2026-09-01T15:00:00-03:00" })
     );
     await store.save(
-      sampleAppointment({ id: "appt-cerca", fechaHora: "2026-08-01T15:00:00-03:00" })
+      sampleAppointment({ id: "appt-cerca", fechaHora: "2026-08-20T15:00:00-03:00" })
     );
     const active = await store.findActiveByLead("5491100000001");
     expect(active?.id).toBe("appt-cerca");
+  });
+
+  it("findActiveByLead compara instantes, no strings: respeta el offset de zona horaria", async () => {
+    // Regresión del bug encontrado al hacer el Bloque 14: `fechaHora` es ISO
+    // pero no siempre en UTC (el proyecto mezcla slots en `Z` con fixtures y
+    // datos en offset local), y se comparaban/ordenaban los strings
+    // lexicográficamente.
+    //
+    // Las dos citas son futuras respecto de AHORA (2026-08-15T12:00Z):
+    //   appt-utc    -> 2026-08-20T23:00Z
+    //   appt-offset -> 2026-08-21T01:00+03:00 = 2026-08-20T22:00Z  <- ANTES
+    // Por instante, la más próxima es appt-offset. Por string, "2026-08-21..."
+    // ordena DESPUÉS de "2026-08-20...", así que la versión con bug devolvía
+    // appt-utc. Si esta lógica vuelve a comparar strings, este test falla.
+    const store = makeStore(relojFijo);
+    await store.save(sampleAppointment({ id: "appt-utc", fechaHora: "2026-08-20T23:00:00.000Z" }));
+    await store.save(sampleAppointment({ id: "appt-offset", fechaHora: "2026-08-21T01:00:00+03:00" }));
+    expect((await store.findActiveByLead("5491100000001"))?.id).toBe("appt-offset");
   });
 
   it("save sobrescribe (para reprogramaciones/cancelaciones)", async () => {
@@ -82,7 +113,7 @@ function runSharedTests(makeStore: () => AppointmentStore) {
 }
 
 describe("InMemoryAppointmentStore", () => {
-  runSharedTests(() => new InMemoryAppointmentStore());
+  runSharedTests((now) => new InMemoryAppointmentStore(now));
 });
 
 describe("FileAppointmentStore", () => {
@@ -96,7 +127,7 @@ describe("FileAppointmentStore", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  runSharedTests(() => new FileAppointmentStore(path.join(dir, "appointments.json")));
+  runSharedTests((now) => new FileAppointmentStore(path.join(dir, "appointments.json"), now));
 
   it("persiste entre instancias distintas apuntando al mismo archivo", async () => {
     const filePath = path.join(dir, "appointments.json");

@@ -828,7 +828,79 @@ credencial explotable. El número israelí que había quedado expuesto se redact
       fue bloqueado correctamente (y no se creó el commit); un commit con
       un número con corrida de dígitos repetidos pasó limpio.
 
-## Bloque 14 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 14 — Fechas que se pudren solas en la suite de tests
+Motivado por un fallo real, encontrado de casualidad al cerrar el Bloque 13:
+2 tests de `appointmentStore.test.ts` estaban en rojo **sin que nadie tocara
+nada** — el fixture `appt-cerca: 2026-08-01` había quedado en el pasado y ya
+no era "la visita más próxima en el futuro". Confirmado con `git stash` que
+fallaba igual en `main` limpio.
+
+**Primer bloque que usa el pre-mortem de `CLAUDE.md` secc. 7**, y valió la
+pena: de los 3 modos de fallo planteados, el #2 cambió el enfoque antes de
+escribir una línea. La instrucción original era "que las fechas se calculen
+relativas a hoy en vez de estar escritas fijas"; aplicada al pie de la letra
+habría **roto tests que hoy andan**. `slotProposal.test.ts` pasa la fecha
+como *input* (`proposeAvailableSlots(gcal, "2026-08-05T00:00:00Z")`) y por
+eso es determinístico: hacerla relativa rompía el assert de formato en
+español y volvía no determinístico el de "propone hasta 3 horarios". La
+regla correcta quedó: **relativas solo donde se comparan contra el reloj
+real; fijas donde son input determinístico.**
+
+- [x] **Reloj inyectable en `AppointmentStore`** (mitigación del modo de
+      fallo #3, decidida con el usuario en vez de asumida): `pickActive`
+      leía `new Date()` directo y no había forma de testear su
+      comportamiento en el tiempo. Ahora ambas implementaciones aceptan un
+      `Clock` opcional (`() => Date`, default el reloj del sistema) — mismo
+      patrón que ya usaban `jobs/reminders.ts`, `jobs/recontact.ts` y
+      `jobs/seguimientoPostVisita.ts`. Con el reloj fijado en el test, las
+      fechas fijas vuelven a ser correctas **y** determinísticas, que es
+      mejor que relativas: no dependen de cuándo corra la suite.
+- [x] **Bug real de producción encontrado de paso** (el modo de fallo #1
+      era justamente "cambio el fixture y tapo un bug"): `pickActive`
+      comparaba y ordenaba los `fechaHora` como **strings**. `Appointment.
+      fechaHora` es ISO pero no siempre UTC — el proyecto mezcla slots en
+      `Z` con datos en offset local — y comparar lexicográficamente ISO con
+      offsets distintos da resultados incorrectos. Una cita
+      `2026-08-21T01:00+03:00` (instante 22:00Z) ordena *después* de una
+      `2026-08-20T23:00Z` por string, pero es *anterior* en el tiempo. Se
+      pasó a comparar instantes (`new Date(...).getTime()`).
+      Tiene test de regresión, y **se verificó que el test distingue de
+      verdad**: el primer intento usaba una sola cita y pasaba con las dos
+      implementaciones (el fallback `?? active[last]` devolvía lo mismo) —
+      un test verde que no probaba nada, exactamente el modo de fallo del
+      catálogo. Se rehizo con dos citas y se comprobó ejecutando ambas
+      implementaciones sobre el mismo fixture: la vieja devuelve
+      `appt-utc`, la nueva `appt-offset`.
+- [x] **Auditoría empírica del resto de la suite, en vez de inferirla
+      leyendo**: se levantó un harness descartable que adelanta `Date`
+      (sin tocar `setTimeout`/`setInterval`, para no romper los tests que
+      levantan subprocesos MCP reales) y se corrió la suite a distintos
+      horizontes. Resultado: con el reloj a 30, 200, 400 y 1200 días
+      adelante todo seguía en verde; **a ~1600 días (≈2030-12) aparecía 1
+      fallo**: `agendarVisita.test.ts > "escala si no hay ningún horario
+      libre"` usaba un rango de ocupación fijo `2020-01-01 → 2030-01-01`
+      para simular "agenda llena", que deja de cubrir la ventana de
+      propuesta una vez que el reloj pasa 2030 — el test se habría vuelto
+      verde por la razón equivocada (aparecen horarios libres, ya no
+      escala). Se pasó a un rango relativo a "ahora" (este sí corresponde
+      que sea relativo: su semántica es "ocupado durante toda la ventana").
+      Reverificado después del fix: 203/203 a 0, 1600, 5000 y 20000 días
+      (año 2081).
+- [x] Suite completa: **263 tests en verde** en todo el monorepo (antes:
+      261 con 2 en rojo). Los 2 nuevos son el test de regresión del offset,
+      que corre para las dos implementaciones del store.
+- [x] **Qué pregunta lo habría agarrado antes** (cláusula de obituario de
+      `CLAUDE.md` secc. 7): *"¿qué se rompe solo, sin que nadie toque
+      nada?"* — no se hizo nunca hasta que un test ya estaba en rojo. Es
+      el modo de fallo que ya está en el catálogo semilla de `CLAUDE.md`;
+      este bloque es el que lo puso ahí con evidencia. Complemento
+      aprendido acá: cuando un test empieza a fallar solo, la pregunta
+      siguiente no es "¿cómo lo hago pasar?" sino **"¿el fixture envejeció
+      o el código está mal?"** — en este bloque la respuesta fue "el
+      fixture" para el test que fallaba, pero mirar el código igual
+      destapó un bug real de producción que nadie estaba buscando.
+
+## Bloque 15 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
