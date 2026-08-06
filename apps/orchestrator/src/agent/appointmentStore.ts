@@ -18,19 +18,42 @@ export interface AppointmentStore {
   findByGcalEventId(gcalEventId: string): Promise<Appointment | null>;
 }
 
+/**
+ * Reloj inyectable (docs/TASKS.md Bloque 14). Sin esto, `pickActive` leía
+ * `new Date()` directo y no había forma de testear su comportamiento en el
+ * tiempo: los tests quedaban atados a la fecha real y se rompían solos con
+ * el paso de los días, sin que nadie tocara nada. Mismo patrón que ya usan
+ * `jobs/reminders.ts`, `jobs/recontact.ts` y `jobs/seguimientoPostVisita.ts`.
+ */
+export type Clock = () => Date;
+
+const systemClock: Clock = () => new Date();
+
 function isActive(appointment: Appointment): boolean {
   return appointment.estado !== "cancelada" && appointment.estado !== "realizada";
 }
 
-function pickActive(appointments: Appointment[]): Appointment | null {
-  const active = appointments.filter(isActive).sort((a, b) => a.fechaHora.localeCompare(b.fechaHora));
+/**
+ * Compara instantes, no strings. `Appointment.fechaHora` es ISO pero no
+ * siempre en UTC (los slots que arma el proyecto vienen con offset
+ * `-03:00`), así que comparar los strings lexicográficamente da resultados
+ * incorrectos cuando los offsets difieren — ver la nota del Bloque 14.
+ */
+function instante(isoDateTime: string): number {
+  return new Date(isoDateTime).getTime();
+}
+
+function pickActive(appointments: Appointment[], now: Clock): Appointment | null {
+  const active = appointments.filter(isActive).sort((a, b) => instante(a.fechaHora) - instante(b.fechaHora));
   if (active.length === 0) return null;
-  const now = new Date().toISOString();
-  return active.find((a) => a.fechaHora >= now) ?? active[active.length - 1];
+  const ahora = now().getTime();
+  return active.find((a) => instante(a.fechaHora) >= ahora) ?? active[active.length - 1];
 }
 
 export class InMemoryAppointmentStore implements AppointmentStore {
   private readonly appointments = new Map<string, Appointment>();
+
+  constructor(private readonly now: Clock = systemClock) {}
 
   async save(appointment: Appointment): Promise<void> {
     this.appointments.set(appointment.id, appointment);
@@ -41,7 +64,7 @@ export class InMemoryAppointmentStore implements AppointmentStore {
   }
 
   async findActiveByLead(leadId: string): Promise<Appointment | null> {
-    return pickActive([...this.appointments.values()].filter((a) => a.leadId === leadId));
+    return pickActive([...this.appointments.values()].filter((a) => a.leadId === leadId), this.now);
   }
 
   async listActive(): Promise<Appointment[]> {
@@ -57,7 +80,10 @@ export class InMemoryAppointmentStore implements AppointmentStore {
 // concurrencia real entre procesos — este read-modify-write sobre un solo
 // archivo no es seguro con requests concurrentes al mismo archivo.
 export class FileAppointmentStore implements AppointmentStore {
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly now: Clock = systemClock
+  ) {}
 
   private readAll(): Promise<Record<string, Appointment>> {
     return readJsonFile(this.filePath, {});
@@ -76,7 +102,7 @@ export class FileAppointmentStore implements AppointmentStore {
 
   async findActiveByLead(leadId: string): Promise<Appointment | null> {
     const all = await this.readAll();
-    return pickActive(Object.values(all).filter((a) => a.leadId === leadId));
+    return pickActive(Object.values(all).filter((a) => a.leadId === leadId), this.now);
   }
 
   async listActive(): Promise<Appointment[]> {
