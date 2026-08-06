@@ -154,7 +154,18 @@ usuario en vez de agregarlo por tu cuenta.
   repo lo revisa y aprueba desde GitHub, no asumas el merge. Detalle
   completo del flujo en `CONTRIBUTING.md`.
 - **Pre-mortem antes de escribir código; obituario después de cada
-  fracaso.** Al arrancar un bloque, *antes* de tocar código: imaginá que
+  fracaso.**
+  *Cuándo aplica*: a bloques que tocan **código o comportamiento**. Un
+  cambio que solo toca documentación, texto, o configuración sin lógica
+  se lo saltea — pero dejando **una línea en el commit diciendo que se
+  saltó y por qué**, para que la omisión sea una decisión visible y no un
+  olvido. Ojo con "configuración": en este proyecto
+  `docs/intent_catalog.yaml` **no** cuenta como config exenta — es la
+  fuente de verdad de las reglas de negocio (umbrales de confianza,
+  `requires_broker`, plantillas), así que editarlo es tocar
+  comportamiento y el pre-mortem aplica igual.
+
+  Al arrancar un bloque, *antes* de tocar código: imaginá que
   ya está mergeado y falló en producción, y planteá **3 modos de fallo
   concretos**. La barra es que cada uno sea lo bastante específico como
   para poder testearlo o descartarlo — *"el classifier devuelve algo que

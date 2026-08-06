@@ -70,6 +70,17 @@ mergear.
 
 ## Pre-mortem antes de codear
 
+**Cuándo aplica**: a bloques que tocan **código o comportamiento**. Un
+cambio que solo toca documentación, texto, o configuración sin lógica se
+lo saltea — pero dejando **una línea en el commit diciendo que se saltó y
+por qué**, para que la omisión sea una decisión visible y no un olvido.
+
+Ojo con la palabra "configuración": `docs/intent_catalog.yaml` **no**
+cuenta como config exenta. Es la fuente de verdad de las reglas de
+negocio del agente (umbrales de confianza, `requires_broker`, plantillas
+de respuesta), así que editarlo es tocar comportamiento aunque sea un
+YAML — el pre-mortem aplica igual.
+
 Antes de escribir código en un bloque: imaginá que ya está mergeado y
 falló en producción, y planteá **3 modos de fallo concretos**. La barra
 es que cada uno sea lo bastante específico como para poder testearlo o
