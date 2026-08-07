@@ -32,6 +32,7 @@ import { runBrokerResumenAgenda } from "./brokerResumenAgenda.js";
 import { runBrokerResumenLeads } from "./brokerResumenLeads.js";
 import { runBrokerPausarAgente } from "./brokerPausarAgente.js";
 import type { GlobalPauseStore } from "./globalPauseStore.js";
+import type { LastInteractionStore } from "./lastInteractionStore.js";
 import type { PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
 import { runBrokerAccionDirecta, type BrokerAccionDirectaDeps } from "./brokerAccionDirecta.js";
 import type { BrokerAccionDirectaPlanner } from "./brokerAccionDirectaPlan.js";
@@ -69,6 +70,8 @@ export interface HandleMessageDeps {
   reprogramActionClassifier: ReprogramActionClassifier;
   globalPauseStore: GlobalPauseStore;
   pausarAgenteActionClassifier: PausarAgenteActionClassifier;
+  /** Registra cuándo interactuó por última vez cada lead — alimenta el purgado por retención (docs/TASKS.md Bloque 15). */
+  lastInteractionStore: LastInteractionStore;
   brokerAccionDirectaPlanner: BrokerAccionDirectaPlanner;
   confirmationClassifier: ConfirmationClassifier;
   defaultLat: number;
@@ -103,6 +106,16 @@ export async function handleIncomingMessage(
   // así que un desfasaje de formato haría que el broker sea tratado como
   // cliente en vez de fallar ruidosamente — a revisar con uso real.
   const channel = message.from === deps.brokerWhatsappNumber ? "broker" : "cliente";
+
+  // Un mensaje entrante del cliente es una interacción suya, y eso define
+  // cuánto se retienen sus datos de gestión comercial (docs/TASKS.md Bloque
+  // 15). Se registra antes del gate de pausa a propósito: que el broker haya
+  // pausado el agente no significa que el cliente dejó de estar activo.
+  // Los mensajes del broker no cuentan — él no es un lead.
+  if (channel === "cliente") {
+    await deps.lastInteractionStore.record(message.from, new Date());
+  }
+
   const state = (await deps.conversationStateStore.get(message.from)) ?? idleState(message.from, message.from);
 
   // docs/TASKS.md Bloque 9: la pausa (puntual o global) corta el flujo antes

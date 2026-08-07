@@ -14,6 +14,7 @@ import { InMemoryAuditLogStore } from "./auditLog.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import { InMemoryConversationStateStore, idleState } from "./conversationStateStore.js";
 import { InMemoryGlobalPauseStore } from "./globalPauseStore.js";
+import { InMemoryLastInteractionStore } from "./lastInteractionStore.js";
 import type { PausarAgenteAction, PausarAgenteActionClassifier } from "./pausarAgenteClassifier.js";
 import type { ActionPlan, BrokerAccionDirectaPlanner } from "./brokerAccionDirectaPlan.js";
 import type { ConfirmationClassifier } from "./confirmationClassifier.js";
@@ -117,6 +118,7 @@ function baseDeps(overrides: Partial<HandleMessageDeps> = {}): HandleMessageDeps
     slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
     reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
     globalPauseStore: new InMemoryGlobalPauseStore(),
+    lastInteractionStore: new InMemoryLastInteractionStore(),
     pausarAgenteActionClassifier: stubPausarAgenteActionClassifier({ accion: "pausar", alcance: "global" }),
     brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({ actions: [], previewSummary: "no-op" }),
     confirmationClassifier: stubConfirmationClassifier(true),

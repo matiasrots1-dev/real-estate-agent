@@ -18,6 +18,8 @@ import { FileAppointmentStore } from "./agent/appointmentStore.js";
 import { FileConversationStateStore } from "./agent/conversationStateStore.js";
 import { FileRecontactStateStore } from "./agent/recontactStateStore.js";
 import { FileGlobalPauseStore } from "./agent/globalPauseStore.js";
+import { FileLastInteractionStore } from "./agent/lastInteractionStore.js";
+import { FileRetentionReportStore } from "./agent/retentionReportStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
 import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
@@ -27,6 +29,7 @@ import { Scheduler } from "./jobs/scheduler.js";
 import { createReminderJob } from "./jobs/reminders.js";
 import { createRecontactJob } from "./jobs/recontact.js";
 import { createSeguimientoPostVisitaJob } from "./jobs/seguimientoPostVisita.js";
+import { createRetentionJob } from "./jobs/retention.js";
 
 // Ruta absoluta al `.env` de la raíz del repo: `npm run dev --workspace=...`
 // (y por lo tanto `npm run dev:orchestrator` desde la raíz) corre este
@@ -72,6 +75,9 @@ async function main() {
   }
 
   const appointmentStore = new FileAppointmentStore(config.appointmentStorePath);
+  const conversationStateStore = new FileConversationStateStore(config.conversationStateStorePath);
+  const recontactStateStore = new FileRecontactStateStore(config.recontactStateStorePath);
+  const lastInteractionStore = new FileLastInteractionStore(config.lastInteractionStorePath);
   const auditLog = new FileAuditLogStore(config.auditLogPath);
   const composer = new ClaudeResponseComposer(anthropic);
 
@@ -88,7 +94,8 @@ async function main() {
     confirmationClassifier: new ClaudeConfirmationClassifier(anthropic),
     auditLog,
     appointmentStore,
-    conversationStateStore: new FileConversationStateStore(config.conversationStateStorePath),
+    conversationStateStore,
+    lastInteractionStore,
     tokko,
     gcal,
     weather,
@@ -126,7 +133,7 @@ async function main() {
         tokko,
         composer,
         sender,
-        recontactStateStore: new FileRecontactStateStore(config.recontactStateStorePath),
+        recontactStateStore,
         auditLog,
         brokerNotifier,
       })
@@ -140,10 +147,36 @@ async function main() {
         sender,
       })
     );
-    scheduler.start();
   } else {
-    console.warn("Scheduler de jobs (recordatorios, etc) sin arrancar: no hay WhatsAppSender configurado.");
+    console.warn(
+      "Jobs de mensajería (recordatorios, recontacto, seguimiento) sin registrar: no hay WhatsAppSender configurado."
+    );
   }
+
+  // El purgado por retención va fuera del `if (sender)`: no manda mensajes, y
+  // es una obligación de la política de privacidad publicada — tiene que
+  // correr aunque WhatsApp no esté configurado (docs/TASKS.md Bloque 15).
+  scheduler.register(
+    createRetentionJob({
+      auditLog,
+      conversationStateStore,
+      appointmentStore,
+      recontactStateStore,
+      lastInteractionStore,
+      reportStore: new FileRetentionReportStore(config.retentionReportPath),
+      mesesMensajes: config.retention.mesesMensajes,
+      mesesGestionComercial: config.retention.mesesGestionComercial,
+      borradoHabilitado: config.retention.borradoHabilitado,
+    })
+  );
+  if (!config.retention.borradoHabilitado) {
+    console.warn(
+      `Retención en modo SIMULACRO: reporta qué borraría pero no borra nada. ` +
+        `Revisá ${config.retentionReportPath} y poné RETENTION_BORRADO_HABILITADO=true para activarlo.`
+    );
+  }
+
+  scheduler.start();
 
   const shutdown = async () => {
     httpServer.close();

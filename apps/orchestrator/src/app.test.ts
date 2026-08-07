@@ -21,6 +21,7 @@ import { InMemoryAuditLogStore } from "./agent/auditLog.js";
 import { InMemoryAppointmentStore } from "./agent/appointmentStore.js";
 import { InMemoryConversationStateStore } from "./agent/conversationStateStore.js";
 import { InMemoryGlobalPauseStore } from "./agent/globalPauseStore.js";
+import { InMemoryLastInteractionStore } from "./agent/lastInteractionStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "./mcp/gcalMcpClient.js";
 import type { WeatherQueries } from "./mcp/weatherMcpClient.js";
@@ -152,6 +153,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
       slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: null })) },
       reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
       globalPauseStore: new InMemoryGlobalPauseStore(),
+      lastInteractionStore: new InMemoryLastInteractionStore(),
       pausarAgenteActionClassifier: { extractAction: vi.fn(async () => ({ accion: "pausar" as const, alcance: "global" as const })) },
       brokerAccionDirectaPlanner: { plan: vi.fn(async () => ({ actions: [], previewSummary: "no-op" })) },
       confirmationClassifier: { extractConfirmation: vi.fn(async () => ({ confirmed: true })) },

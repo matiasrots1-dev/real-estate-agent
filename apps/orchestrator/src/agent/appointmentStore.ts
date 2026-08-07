@@ -1,7 +1,8 @@
 import type { Appointment } from "shared-types";
 import { readJsonFile, writeJsonFile } from "./jsonFileStore.js";
+import { enmascararTelefono, MUESTRA_MAX, type PurgeResult, type PurgeableByLeadStore } from "./purge.js";
 
-export interface AppointmentStore {
+export interface AppointmentStore extends PurgeableByLeadStore {
   save(appointment: Appointment): Promise<void>;
   findById(id: string): Promise<Appointment | null>;
   /**
@@ -16,6 +17,14 @@ export interface AppointmentStore {
   listActive(): Promise<Appointment[]>;
   /** Búsqueda inversa evento de Calendar -> cita — para cruzar gcal.list_events con el lead dueño (broker_resumen_agenda). */
   findByGcalEventId(gcalEventId: string): Promise<Appointment | null>;
+  /**
+   * Fecha de la visita más reciente de cada lead. La usa `jobs/retention.ts`
+   * como **respaldo** para calcular la última interacción cuando el
+   * `LastInteractionStore` no tiene dato — que es lo que pasa con todos los
+   * leads que ya existían antes de que ese store se agregara (Bloque 15).
+   * Sin este respaldo, al desplegar no habría forma de fechar a nadie.
+   */
+  ultimaVisitaPorLead(): Promise<Record<string, string>>;
 }
 
 /**
@@ -41,6 +50,41 @@ function isActive(appointment: Appointment): boolean {
  */
 function instante(isoDateTime: string): number {
   return new Date(isoDateTime).getTime();
+}
+
+const STORE_NAME = "appointments";
+
+function particionar(todos: Appointment[], leadIds: ReadonlySet<string>) {
+  const sobreviven: Appointment[] = [];
+  const muestra: PurgeResult["muestra"] = [];
+  let borrados = 0;
+
+  for (const appointment of todos) {
+    if (leadIds.has(appointment.leadId)) {
+      borrados++;
+      if (muestra.length < MUESTRA_MAX) {
+        muestra.push({
+          store: STORE_NAME,
+          id: appointment.id,
+          fecha: appointment.fechaHora,
+          lead: enmascararTelefono(appointment.leadId),
+        });
+      }
+    } else {
+      sobreviven.push(appointment);
+    }
+  }
+
+  return { result: { borrados, muestra }, sobreviven };
+}
+
+function maxPorLead(appointments: Appointment[]): Record<string, string> {
+  const porLead: Record<string, string> = {};
+  for (const a of appointments) {
+    const previa = porLead[a.leadId];
+    if (!previa || instante(a.fechaHora) > instante(previa)) porLead[a.leadId] = a.fechaHora;
+  }
+  return porLead;
 }
 
 function pickActive(appointments: Appointment[], now: Clock): Appointment | null {
@@ -73,6 +117,19 @@ export class InMemoryAppointmentStore implements AppointmentStore {
 
   async findByGcalEventId(gcalEventId: string): Promise<Appointment | null> {
     return [...this.appointments.values()].find((a) => a.gcalEventId === gcalEventId) ?? null;
+  }
+
+  async ultimaVisitaPorLead(): Promise<Record<string, string>> {
+    return maxPorLead([...this.appointments.values()]);
+  }
+
+  async purgeLeads(leadIds: ReadonlySet<string>, _cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
+    const { result, sobreviven } = particionar([...this.appointments.values()], leadIds);
+    if (!dryRun) {
+      this.appointments.clear();
+      for (const a of sobreviven) this.appointments.set(a.id, a);
+    }
+    return result;
   }
 }
 
@@ -113,5 +170,17 @@ export class FileAppointmentStore implements AppointmentStore {
   async findByGcalEventId(gcalEventId: string): Promise<Appointment | null> {
     const all = await this.readAll();
     return Object.values(all).find((a) => a.gcalEventId === gcalEventId) ?? null;
+  }
+
+  async ultimaVisitaPorLead(): Promise<Record<string, string>> {
+    return maxPorLead(Object.values(await this.readAll()));
+  }
+
+  async purgeLeads(leadIds: ReadonlySet<string>, _cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
+    const { result, sobreviven } = particionar(Object.values(await this.readAll()), leadIds);
+    if (!dryRun && result.borrados > 0) {
+      await writeJsonFile(this.filePath, Object.fromEntries(sobreviven.map((a) => [a.id, a])));
+    }
+    return result;
   }
 }
