@@ -63,6 +63,15 @@ implementa lo que estos documentos especifican.
 - **Auditoría desde el día 1**: toda respuesta del agente debe loguear en
   `audit_log` qué intent matcheó, con qué confianza, y qué tools se
   llamaron. Esto no es opcional ni se pospone a una fase posterior.
+  **Obligatorio al escribir, pero sujeto a la retención publicada** (ver
+  Bloque 15 de `docs/TASKS.md`): las entradas del `audit_log` se purgan a
+  los 12 meses porque así lo promete la política de privacidad publicada
+  de la app. Esta aclaración existe porque la regla de arriba se escribió
+  **antes** de que existiera esa política — no es que la auditoría dejó
+  de importar, es que ahora tiene un plazo declarado públicamente y el
+  código tiene que cumplirlo. Si ves el job de purga (`jobs/retention.ts`)
+  y te parece que contradice esta sección: no la contradice, la cumple.
+  No lo "arregles" desactivándolo.
 
 ## 4. Cómo está organizado el repo
 

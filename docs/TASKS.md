@@ -900,7 +900,87 @@ real; fijas donde son input determinístico.**
       fixture" para el test que fallaba, pero mirar el código igual
       destapó un bug real de producción que nadie estaba buscando.
 
-## Bloque 15 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 15 — Retención de datos según la política publicada
+Motivado por una brecha real y ya documentada (ver `docs/ONBOARDING.md`): la
+política de privacidad **ya publicada** promete 12 meses para mensajes y
+logs, y datos de gestión comercial "mientras dure la relación comercial" —
+y ningún store borraba nada, nunca. Era una promesa pública incumplida, no
+una deuda técnica futura.
+
+**El pre-mortem encontró cuatro bloqueantes antes de escribir código**, tres
+de los cuales hacían la política literalmente no implementable:
+- `RecontactState` no tenía **ningún** campo de fecha (solo `leadId` y
+  `attemptsSent`): imposible saber si un registro tenía 3 días o 3 años.
+- `Appointment` no tiene fecha de creación, solo `fechaHora` (la de la visita).
+- **"Mientras dure la relación comercial" no tiene señal técnica**: no existe
+  `Lead.estado = cerrado` ni equivalente. Resuelto con el dueño del repo →
+  operacionalizado como **24 meses desde la última interacción del lead**
+  (elegido para no perder al lead que consulta, desaparece un año y vuelve,
+  que en inmobiliaria es común).
+- Tensión con la regla "auditoría desde el día 1, no es opcional" de
+  `CLAUDE.md` secc. 3 — aclarada ahí mismo, explicando que la regla se
+  escribió antes de que existiera la política y que el purge la cumple, no
+  la contradice.
+
+**Circularidad detectada por el dueño del repo, no por el pre-mortem**: si el
+`audit_log` se purga a los 12 meses, después no se puede calcular la última
+interacción de alguien que interactuó hace 18. Se evaluaron las dos salidas
+posibles y **una no funcionaba**: "calcular los cortes antes de purgar"
+alcanza dentro de una corrida pero se rompe entre corridas — a partir del mes
+13 el audit ya no distingue "nunca interactuó" de "interactuó antes de lo que
+recuerdo", y las visitas no se purgarían jamás.
+- [x] **`LastInteractionStore`** (`agent/lastInteractionStore.ts`): guarda la
+      última interacción como dato propio, desacoplando los dos plazos. Se
+      actualiza en `handleIncomingMessage` con cada mensaje entrante de
+      cliente (no del broker — no es un lead), **antes** del gate de pausa:
+      que el broker haya pausado el agente no significa que el cliente dejó
+      de estar activo.
+- [x] **Respaldo para el backfill**: al desplegar, ese store arranca vacío y
+      ningún lead preexistente tendría fecha. `ultimaInteraccionEfectiva`
+      toma el **máximo** de tres señales — interacción registrada, última
+      visita (`AppointmentStore.ultimaVisitaPorLead`) y última actividad de
+      recontacto — así que funciona desde la primera corrida.
+- [x] `purgeOlderThan` / `purgeLeads` en los 5 stores (In-Memory + File), con
+      `jobs/retention.ts` como **coordinador único**: purgar un store y dejar
+      el mismo teléfono vivo en otro daría apariencia de cumplimiento sin
+      cumplir (modo de fallo #2 del pre-mortem). Hay un test que verifica que
+      tras el purge el teléfono no queda en **ninguno** de los cinco.
+- [x] **Arranca sin borrar** (modo de fallo #1: irreversible y sin backup).
+      `RETENTION_BORRADO_HABILITADO=false` por default: reporta qué borraría
+      y no borra. El reporte se **persiste** (`retention_reports.jsonl`, las
+      últimas 12 corridas) para poder comparar semana contra semana, e
+      incluye una **muestra de qué registros caerían** con la fecha que
+      motivó cada decisión — no solo el conteo.
+- [x] **El reporte no lleva contenido de mensajes ni teléfonos sin
+      enmascarar**, con test que lo verifica. Se persiste para comparar
+      corridas, así que si llevara contenido sería un archivo con exactamente
+      los datos personales que este bloque existe para borrar — empeorando
+      el problema en vez de resolverlo.
+- [x] El purge del `audit_log` reescribe un JSONL append-only: se escribe a
+      temporal y se renombra (rename atómico), para que un corte a mitad no
+      deje el log truncado.
+- [x] **Bug encontrado por un test propio**: el primer diseño purgaba
+      recontactos por la antigüedad *del registro*, lo que pisaba la regla
+      por lead — un lead que volvía hacía 1 mes perdía su recontacto viejo,
+      exactamente el caso que el dueño del repo quería evitar. Corregido
+      moviendo esa fecha al cálculo del coordinador como una señal más (se
+      toma el máximo), así una señal vieja nunca acorta la retención de un
+      lead activo.
+- [x] 275 tests en verde en el monorepo (antes 263).
+- [ ] **Pendiente: habilitar el borrado real.** Hoy corre en simulacro. Hay
+      que revisar varias corridas de `retention_reports.jsonl` y recién
+      entonces poner `RETENTION_BORRADO_HABILITADO=true`. **Hasta que eso
+      pase, la política sigue incumplida** — el código está listo pero no
+      borra.
+- [x] **Qué pregunta lo habría agarrado antes**: *"¿lo que promete la
+      política publicada existe en el código?"* Nadie la hizo hasta que el
+      dueño del repo la trajo. El agujero no era técnico: el proyecto
+      documentó la brecha en `ONBOARDING.md` (con riesgo "alto") y la dejó
+      escrita durante bloques sin actuar. Aprendizaje para el catálogo:
+      **documentar un riesgo no lo mitiga** — una brecha con impacto legal o
+      público merece un bloque, no una línea en un documento.
+
+## Bloque 16 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

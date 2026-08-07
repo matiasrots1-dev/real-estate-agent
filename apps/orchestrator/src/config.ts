@@ -34,6 +34,26 @@ export interface OrchestratorConfig {
   conversationStateStorePath: string;
   recontactStateStorePath: string;
   globalPauseStorePath: string;
+  lastInteractionStorePath: string;
+  retentionReportPath: string;
+  /**
+   * Retención (docs/TASKS.md Bloque 15). **Estos valores tienen que coincidir
+   * con la política de privacidad publicada de la app** — no son un ajuste
+   * técnico, son un compromiso declarado públicamente. Si cambian acá, hay
+   * que cambiar la política, y al revés.
+   */
+  retention: {
+    /** Mensajes y logs (audit_log, conversaciones). */
+    mesesMensajes: number;
+    /** Gestión comercial (visitas, recontactos): meses desde la última interacción del lead. */
+    mesesGestionComercial: number;
+    /**
+     * Default `false` a propósito: el purgado arranca en modo reporte. El
+     * borrado es irreversible y no hay backup de los JSON, así que hay que
+     * habilitarlo explícitamente después de revisar unos cuantos reportes.
+     */
+    borradoHabilitado: boolean;
+  };
   /**
    * Coordenadas por defecto para consulta_clima_visita cuando la propiedad
    * no tiene lat/lng cargados en Tokko. Centro de CABA — ajustar si el
@@ -88,6 +108,18 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
       env.RECONTACT_STATE_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/recontacts.json"),
     globalPauseStorePath:
       env.GLOBAL_PAUSE_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/global_pause.json"),
+    lastInteractionStorePath:
+      env.LAST_INTERACTION_STORE_PATH ??
+      path.join(REPO_ROOT, "apps/orchestrator/data/last_interaction.json"),
+    retentionReportPath:
+      env.RETENTION_REPORT_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/retention_reports.jsonl"),
+    retention: {
+      mesesMensajes: env.RETENTION_MESES_MENSAJES ? Number(env.RETENTION_MESES_MENSAJES) : 12,
+      mesesGestionComercial: env.RETENTION_MESES_GESTION_COMERCIAL
+        ? Number(env.RETENTION_MESES_GESTION_COMERCIAL)
+        : 24,
+      borradoHabilitado: env.RETENTION_BORRADO_HABILITADO === "true",
+    },
     defaultLat: env.DEFAULT_LAT ? Number(env.DEFAULT_LAT) : -34.6037,
     defaultLng: env.DEFAULT_LNG ? Number(env.DEFAULT_LNG) : -58.3816,
     schedulerIntervalMs: env.SCHEDULER_INTERVAL_MS ? Number(env.SCHEDULER_INTERVAL_MS) : 5 * 60 * 1000,

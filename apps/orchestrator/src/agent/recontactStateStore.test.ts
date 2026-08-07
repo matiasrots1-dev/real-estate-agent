@@ -17,10 +17,20 @@ function runSharedTests(makeStore: () => RecontactStateStore) {
   it("guarda y recupera los intentos ya mandados", async () => {
     const store = makeStore();
     await store.save({ leadId: "lead-1", attemptsSent: ["dias_sin_respuesta >= 5"] });
-    expect(await store.get("lead-1")).toEqual({
+    expect(await store.get("lead-1")).toMatchObject({
       leadId: "lead-1",
       attemptsSent: ["dias_sin_respuesta >= 5"],
     });
+  });
+
+  it("estampa updatedAt al guardar, aunque el caller no lo pase (Bloque 15)", async () => {
+    // Sin fecha no hay forma de saber la antigüedad de un registro, y la
+    // retención por tiempo era imposible. El caller no tiene que acordarse.
+    const store = makeStore();
+    await store.save({ leadId: "lead-1", attemptsSent: [] });
+    const guardado = await store.get("lead-1");
+    expect(guardado?.updatedAt).toBeTruthy();
+    expect(new Date(guardado!.updatedAt!).getTime()).not.toBeNaN();
   });
 
   it("save sobrescribe el estado previo del mismo lead", async () => {
