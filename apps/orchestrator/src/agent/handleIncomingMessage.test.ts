@@ -60,7 +60,18 @@ function stubTokko(): TokkoQueries {
     searchProperties: vi.fn(async () => [property]),
     getProperty: vi.fn(async () => property),
     searchLeads: vi.fn(async () => []),
-    getLead: vi.fn(async () => null),
+    // Devuelve un lead resoluble: desde el Bloque 16 el executor de
+    // broker_accion_directa resuelve el teléfono acá, porque el plan que
+    // arma Claude ya no lo trae.
+    getLead: vi.fn(async (id: string) => ({
+      id,
+      tokkoId: "tokko-" + id,
+      nombre: "Lead de Prueba",
+      telefonoWhatsapp: "5491100000001",
+      temperatura: "frio" as const,
+      propiedadesDeInteres: [],
+      diasSinRespuesta: 45,
+    })),
     logActivity: vi.fn(async () => ({ logged: true as const, activityId: "act-1" })),
   };
 }
@@ -492,8 +503,8 @@ describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
   it("plan bulk (más de un contacto): NO ejecuta nada todavía, deja la conversación esperando confirmación", async () => {
     const gcal = stubGcal();
     const bulkActions = [
-      { type: "whatsapp_send_message" as const, leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
-      { type: "whatsapp_send_message" as const, leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+      { type: "whatsapp_send_message" as const, leadId: "lead-1", message: "Bajamos el precio." },
+      { type: "whatsapp_send_message" as const, leadId: "lead-2", message: "Bajamos el precio." },
     ];
 
     const result = await handleIncomingMessage(
@@ -522,7 +533,7 @@ describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
         brokerWhatsappNumber: BROKER_NUMBER,
         sender: { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() },
         brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
-          actions: [{ type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola Juan!" }],
+          actions: [{ type: "whatsapp_send_message", leadId: "lead-1", message: "Hola Juan!" }],
           previewSummary: "x",
         }),
       })
@@ -550,8 +561,8 @@ describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
         classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
         brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
           actions: [
-            { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
-            { type: "whatsapp_send_message", leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-1", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-2", message: "Bajamos el precio." },
           ],
           previewSummary: "Bajamos el precio.",
         }),
@@ -584,8 +595,8 @@ describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
         sender,
         brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
           actions: [
-            { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." },
-            { type: "whatsapp_send_message", leadId: "lead-2", phone: "5491100000002", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-1", message: "Bajamos el precio." },
+            { type: "whatsapp_send_message", leadId: "lead-2", message: "Bajamos el precio." },
           ],
           previewSummary: "Bajamos el precio.",
         }),

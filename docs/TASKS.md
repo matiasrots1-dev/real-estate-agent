@@ -980,7 +980,102 @@ recuerdo", y las visitas no se purgarían jamás.
       **documentar un riesgo no lo mitiga** — una brecha con impacto legal o
       público merece un bloque, no una línea en un documento.
 
-## Bloque 16 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 16 — Sobre-exposición de datos personales al planificador
+Segunda vez seguida del mismo patrón que motivó el Bloque 15: estaba
+documentado como riesgo medio-alto en `docs/ONBOARDING.md` desde varios
+bloques atrás y no se había actuado. **Documentar un riesgo no lo mitiga.**
+
+**El problema**: `brokerAccionDirectaPlan.ts` mandaba a la API de Claude el
+`Lead` completo de **cada** coincidencia — nombre, teléfono y email de todos
+los que matchearan el filtro, no solo de los que terminaban en el plan. Si
+el broker pedía "avisale a los leads fríos" y matcheaban 40 pero el plan
+final tocaba 5, los otros 35 mandaban igual sus datos personales a un
+tercero sin ninguna necesidad.
+
+**Análisis campo por campo, contra lo que las acciones realmente consumen**
+(hecho antes de tocar código, a pedido del dueño del repo):
+- `id`, `temperatura`, `diasSinRespuesta`, `propiedadesDeInteres` →
+  **necesarios** para filtrar y para identificar a quién apunta cada acción.
+- `telefonoWhatsapp` → **no**: lo resuelve el executor a partir del `id`.
+- `email`, `tokkoId`, `ultimaInteraccion` → **no los usa ninguna acción**.
+- `nombre` → el único con tensión real (ver abajo).
+- [x] **Proyección única**: todo lo que sale hacia Claude pasa por
+      `proyectar()`, que devuelve solo `{id, temperatura, diasSinRespuesta,
+      propiedadesDeInteres}`. El filtrado vive en un solo punto en vez de
+      repartido por los callers.
+- [x] **Split del tool de leads en dos**, para que el camino masivo —donde
+      vive el volumen del daño— tenga exposición de identidad cero:
+      `tokko_search_leads` (criterios, sin nombres) y
+      `tokko_buscar_lead_por_nombre` (cuando el broker nombra a alguien).
+- [x] **El tool de nombres nunca devuelve el nombre.** Cambio de diseño que
+      salió de una pregunta del dueño del repo: *"¿puede Claude evadir el
+      split llamando al tool de nombres en loop para reconstruir la base?"*.
+      Con la versión original (`{id, nombre}`) sí podía — y peor, el loop de
+      planificación soporta **tool-use en paralelo**, así que un solo turno
+      admite decenas de llamadas; limitar la tasa habría sido tapar el
+      agujero con cinta. La versión final cierra el agujero
+      **estructuralmente**: el nombre viaja *hacia* la búsqueda (lo escribió
+      el broker, ya estaba en el contexto) y **nunca vuelve**. Llamar en
+      loop con todas las letras devuelve lo mismo que `tokko_search_leads`
+      ya da de forma legítima: no hay nada extra que extraer. **La base de
+      leads no le manda un solo nombre a Anthropic.**
+- [x] **`phone` fuera del schema de la acción** (modo de fallo #1 del
+      pre-mortem): filtrar solo la lectura no alcanzaba. Si el schema seguía
+      pidiendo un teléfono que Claude ya no tiene, lo habría alucinado o
+      tomado del texto del broker. El executor lo resuelve del `leadId` con
+      `tokko.getLead`, y si el lead no existe la acción **falla ruidosamente**
+      en vez de mandarle a un destinatario equivocado.
+- [x] **Personalización por placeholder**: Claude escribe `{nombre}` y el
+      executor lo sustituye al enviar, con el dato real de Tokko. Consistente
+      con cómo el proyecto ya maneja plantillas (`{direccion_corta}`).
+- [x] Tests: ninguno de los datos personales del fixture aparece en lo que
+      viajó a la API (se serializa `create.mock.calls` completo y se verifica
+      contra una lista de valores prohibidos), **incluido el caso del loop de
+      evasión con llamadas en paralelo**, y que un nombre vacío no funcione
+      como comodín. Más los del executor: resolución del teléfono,
+      sustitución del placeholder, y fallo limpio si el lead no existe.
+      282 tests en verde en el monorepo (antes 275).
+- [x] **Alcance honesto**: esto **no** lleva la exposición a cero. Los
+      nombres que el broker escribe en su orden siguen estando en el contexto
+      de Claude, y el texto del mensaje que redacta puede contener datos. Lo
+      que elimina es la exposición *innecesaria* — la de las 35 personas que
+      no tenían nada que ver con el plan final.
+- [x] **Qué pregunta lo habría agarrado antes**: *"¿qué de esto que le mando
+      al modelo necesita realmente para la tarea?"* — nadie la hizo al
+      construir el Bloque 10; se mandó el objeto entero porque era lo que
+      devolvía la función. Para el catálogo: **cuando se le pasa un objeto de
+      dominio a un tercero, el default correcto es proyectar los campos
+      necesarios, no pasar el objeto y confiar en que no importa.**
+
+## Bloque 17 — `leadId` inconsistente entre el flujo del cliente y el del broker
+Encontrado investigando el Bloque 16, **no relacionado con la
+sobre-exposición de datos** — se deja aparte a pedido del dueño del repo,
+porque toca reprogramación del cliente y el barrido de retención (dos áreas
+ya mergeadas) y mezclarlo haría imposible saber cuál cambio causó qué si
+algo falla.
+- [ ] **El bug**: en el flujo del cliente, `Appointment.leadId` es el
+      **teléfono** (`leadId: message.from` en `agendarVisita.ts` y
+      `reprogramarCancelarVisita.ts`). Pero `broker_accion_directa` guarda
+      `leadId: action.leadId`, que sale de Tokko y es un id opaco
+      (`"lead-1"`). Conviven dos formatos distintos en el mismo campo del
+      mismo store.
+- [ ] **Consecuencia concreta**: el broker agenda una visita para un cliente
+      con una orden directa; el cliente después escribe "quiero
+      reprogramar"; `findActiveByLead(message.from)` busca por teléfono, no
+      encuentra la cita guardada con el id de Tokko, y el agente le responde
+      **"no te veo ninguna visita agendada"**. La visita existe en Calendar
+      pero el cliente no puede tocarla.
+- [ ] **Segunda consecuencia, agregada por el Bloque 15**: el purgado por
+      retención cruza los stores por `leadId` para verificar que un lead
+      vencido no deje rastro en ninguno. Con dos formatos conviviendo, ese
+      barrido no es parejo — un mismo cliente puede quedar purgado en un
+      store y vivo en otro, que es justo el modo de fallo que ese bloque
+      quiso evitar.
+- [ ] Al arrancarlo: **hacer su propio pre-mortem**. Toca código ya mergeado
+      y en uso, así que el riesgo no es solo implementarlo mal sino migrar
+      mal los datos que ya están en disco con el formato viejo.
+
+## Bloque 18 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

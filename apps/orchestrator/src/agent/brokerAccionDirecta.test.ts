@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
+import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
@@ -33,6 +34,28 @@ function stubGcal(): GcalQueries {
   };
 }
 
+/**
+ * Desde el Bloque 16 el plan identifica a cada lead solo por `id`: el
+ * teléfono lo resuelve el executor contra Tokko al ejecutar.
+ */
+function tokkoConLead(): TokkoQueries {
+  return {
+    searchProperties: vi.fn(),
+    getProperty: vi.fn(),
+    searchLeads: vi.fn(async () => []),
+    getLead: vi.fn(async (id: string) => ({
+      id,
+      tokkoId: "tokko-" + id,
+      nombre: "Lead de Prueba",
+      telefonoWhatsapp: "5491100000001",
+      temperatura: "frio" as const,
+      propiedadesDeInteres: [],
+      diasSinRespuesta: 45,
+    })),
+    logActivity: vi.fn(),
+  };
+}
+
 function stubSender(): WhatsAppSender & { sent: Array<{ to: string; body: string }> } {
   const sent: Array<{ to: string; body: string }> = [];
   return {
@@ -52,6 +75,7 @@ function baseDeps(overrides: Partial<BrokerAccionDirectaDeps> = {}): BrokerAccio
     confirmationClassifier: stubConfirmation(true),
     gcal: stubGcal(),
     appointmentStore: new InMemoryAppointmentStore(),
+    tokko: tokkoConLead(),
     conversationStateStore: new InMemoryConversationStateStore(),
     sender: stubSender(),
     ...overrides,
@@ -61,7 +85,7 @@ function baseDeps(overrides: Partial<BrokerAccionDirectaDeps> = {}): BrokerAccio
 const singleContactAction: PlannedAction = {
   type: "whatsapp_send_message",
   leadId: "lead-1",
-  phone: "5491100000001",
+
   message: "Hola! Te paso la ficha.",
 };
 
@@ -69,7 +93,7 @@ function bulkActions(n: number): PlannedAction[] {
   return Array.from({ length: n }, (_, i) => ({
     type: "whatsapp_send_message" as const,
     leadId: `lead-${i}`,
-    phone: `549110000000${i}`,
+
     message: "Bajamos el precio del depto de Nuñez.",
   }));
 }
@@ -100,7 +124,7 @@ describe("runBrokerAccionDirecta — el gate bulk nunca ejecuta sin confirmació
   it("plan bulk: cuenta CONTACTOS distintos, no acciones — 2 acciones sobre el mismo lead no cuentan como bulk", async () => {
     const gcal = stubGcal();
     const actions: PlannedAction[] = [
-      { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Te paso la ficha." },
+      { type: "whatsapp_send_message", leadId: "lead-1", message: "Te paso la ficha." },
       {
         type: "gcal_create_event",
         leadId: "lead-1",

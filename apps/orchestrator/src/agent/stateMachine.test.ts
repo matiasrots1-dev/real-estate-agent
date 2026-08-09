@@ -71,6 +71,23 @@ function brokerAccionDirectaDeps(overrides: Partial<BrokerAccionDirectaDeps> = {
     },
     appointmentStore: new InMemoryAppointmentStore(),
     conversationStateStore: new InMemoryConversationStateStore(),
+    // Desde el Bloque 16 el executor resuelve el teléfono contra Tokko: el
+    // plan solo identifica al lead por su id.
+    tokko: {
+      searchProperties: vi.fn(),
+      getProperty: vi.fn(),
+      searchLeads: vi.fn(async () => []),
+      getLead: vi.fn(async (id: string) => ({
+        id,
+        tokkoId: "tokko-" + id,
+        nombre: "Lead de Prueba",
+        telefonoWhatsapp: "5491100000001",
+        temperatura: "frio" as const,
+        propiedadesDeInteres: [],
+        diasSinRespuesta: 45,
+      })),
+      logActivity: vi.fn(),
+    },
     ...overrides,
   };
 }
@@ -168,7 +185,7 @@ describe("continueConversationIfActive", () => {
       sender: { sendText: sentText, sendImage: vi.fn(), sendTemplate: vi.fn() },
     });
     const state = stateFor("broker_accion_directa", "esperando_ok_broker", {
-      actions: [{ type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Bajamos el precio." }],
+      actions: [{ type: "whatsapp_send_message", leadId: "lead-1", message: "Bajamos el precio." }],
     });
 
     const result = await continueConversationIfActive({ from: "5491199999999", messageId: "wamid.x", text: "sí, dale" }, state, {

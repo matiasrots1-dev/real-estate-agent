@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { Lead } from "shared-types";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
+import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
@@ -7,6 +9,12 @@ import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
 export interface BrokerAccionDirectaExecutorDeps {
   gcal: GcalQueries;
   appointmentStore: AppointmentStore;
+  /**
+   * El executor resuelve acá el teléfono y el nombre del lead a partir de su
+   * `id` (docs/TASKS.md Bloque 16). El planificador nunca los ve: mandarlos
+   * a la API de Claude no hacía falta para armar el plan.
+   */
+  tokko: TokkoQueries;
   /** Sin sender configurado, las acciones de whatsapp fallan (best-effort, no rompe las demás). */
   sender?: WhatsAppSender;
 }
@@ -15,6 +23,8 @@ export interface ExecutedAction {
   action: PlannedAction;
   ok: boolean;
   error?: string;
+  /** Teléfono resuelto en ejecución — para que el resumen al broker sea útil. */
+  telefono?: string;
 }
 
 /**
@@ -31,8 +41,8 @@ export async function executeActionPlan(
   const results: ExecutedAction[] = [];
   for (const action of actions) {
     try {
-      await executeOne(action, deps);
-      results.push({ action, ok: true });
+      const telefono = await executeOne(action, deps);
+      results.push({ action, ok: true, telefono });
     } catch (error) {
       results.push({ action, ok: false, error: (error as Error).message });
     }
@@ -40,7 +50,32 @@ export async function executeActionPlan(
   return results;
 }
 
-async function executeOne(action: PlannedAction, deps: BrokerAccionDirectaExecutorDeps): Promise<void> {
+/**
+ * Resuelve el lead que el planificador solo conoce por `id`. Si Tokko no lo
+ * tiene, la acción falla ruidosamente en vez de mandarle un mensaje a un
+ * destinatario equivocado o inventado.
+ */
+async function resolverLead(leadId: string, deps: BrokerAccionDirectaExecutorDeps): Promise<Lead> {
+  const lead = await deps.tokko.getLead(leadId);
+  if (!lead) throw new Error(`No se encontró el lead "${leadId}" en Tokko.`);
+  if (!lead.telefonoWhatsapp) throw new Error(`El lead "${leadId}" no tiene teléfono de WhatsApp cargado.`);
+  return lead;
+}
+
+/**
+ * El planificador escribe `{nombre}` como placeholder porque nunca recibe el
+ * nombre real (docs/TASKS.md Bloque 16). Se reemplaza recién acá, con el
+ * dato que vino de Tokko.
+ */
+function personalizar(texto: string, lead: Lead): string {
+  return texto.replaceAll("{nombre}", lead.nombre);
+}
+
+/** Devuelve el teléfono resuelto, si la acción implicó mandarle algo a alguien. */
+async function executeOne(
+  action: PlannedAction,
+  deps: BrokerAccionDirectaExecutorDeps
+): Promise<string | undefined> {
   switch (action.type) {
     case "gcal_create_event": {
       const event = await deps.gcal.createEvent({
@@ -60,7 +95,7 @@ async function executeOne(action: PlannedAction, deps: BrokerAccionDirectaExecut
         vecesReprogramada: 0,
         remindersSent: [],
       });
-      return;
+      return undefined;
     }
     case "gcal_patch_event": {
       await deps.gcal.patchEvent(action.gcalEventId, {
@@ -68,17 +103,24 @@ async function executeOne(action: PlannedAction, deps: BrokerAccionDirectaExecut
         endDateTime: action.endDateTime,
         summary: action.summary,
       });
-      return;
+      return undefined;
     }
     case "whatsapp_send_message": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
-      await deps.sender.sendText(action.phone, action.message);
-      return;
+      const lead = await resolverLead(action.leadId, deps);
+      await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead));
+      return lead.telefonoWhatsapp;
     }
     case "whatsapp_send_template": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
-      await deps.sender.sendTemplate(action.phone, action.templateName, action.languageCode, action.bodyParams);
-      return;
+      const lead = await resolverLead(action.leadId, deps);
+      await deps.sender.sendTemplate(
+        lead.telefonoWhatsapp,
+        action.templateName,
+        action.languageCode,
+        action.bodyParams.map((p) => personalizar(p, lead))
+      );
+      return lead.telefonoWhatsapp;
     }
   }
 }
@@ -99,21 +141,27 @@ export function toolsCalledForPlan(actions: PlannedAction[]): string[] {
 export function summarizeExecution(results: ExecutedAction[]): string {
   if (results.length === 0) return "No había ninguna acción para ejecutar.";
   const lines = results.map((r) => {
-    const label = describeAction(r.action);
+    const label = describeAction(r.action, r.telefono);
     return r.ok ? `✓ ${label}` : `✗ ${label} (${r.error})`;
   });
   return lines.join("\n");
 }
 
-function describeAction(action: PlannedAction): string {
+/**
+ * El resumen va al broker, que es el dueño de estos datos, así que muestra
+ * el teléfono real — pero el que se resolvió en ejecución, no uno que haya
+ * salido de la planificación (ahí ya no existe).
+ */
+function describeAction(action: PlannedAction, telefono?: string): string {
+  const destinatario = telefono ?? `lead ${action.leadId}`;
   switch (action.type) {
     case "gcal_create_event":
       return `Visita agendada para ${action.leadId} (${action.summary})`;
     case "gcal_patch_event":
       return `Visita modificada para ${action.leadId}`;
     case "whatsapp_send_message":
-      return `Mensaje enviado a ${action.phone}`;
+      return `Mensaje enviado a ${destinatario}`;
     case "whatsapp_send_template":
-      return `Plantilla "${action.templateName}" enviada a ${action.phone}`;
+      return `Plantilla "${action.templateName}" enviada a ${destinatario}`;
   }
 }

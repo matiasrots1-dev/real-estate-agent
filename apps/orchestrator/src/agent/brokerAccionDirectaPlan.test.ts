@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { Property } from "shared-types";
+import type { Lead, Property } from "shared-types";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import { ClaudeBrokerAccionDirectaPlanner } from "./brokerAccionDirectaPlan.js";
 
@@ -47,7 +47,9 @@ describe("ClaudeBrokerAccionDirectaPlanner", () => {
     const { client } = fakeAnthropicClient([
       toolUseResponse("submit_action_plan", {
         preview_summary: "Le mando la ficha a Juan.",
-        actions: [{ type: "whatsapp_send_message", lead_id: "lead-1", phone: "5491100000001", message: "Hola Juan!" }],
+        // Sin `phone`: desde el Bloque 16 el teléfono no entra ni sale de la
+        // planificación, lo resuelve el executor a partir del lead_id.
+        actions: [{ type: "whatsapp_send_message", lead_id: "lead-1", message: "Hola {nombre}!" }],
       }),
     ]);
     const planner = new ClaudeBrokerAccionDirectaPlanner(client, stubTokko());
@@ -55,7 +57,7 @@ describe("ClaudeBrokerAccionDirectaPlanner", () => {
     const plan = await planner.plan("mandale un mensaje a Juan");
 
     expect(plan.previewSummary).toBe("Le mando la ficha a Juan.");
-    expect(plan.actions).toEqual([{ type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola Juan!" }]);
+    expect(plan.actions).toEqual([{ type: "whatsapp_send_message", leadId: "lead-1", message: "Hola {nombre}!" }]);
   });
 
   it("multi-turno: primero busca la propiedad (tool real contra Tokko), después somete el plan", async () => {
@@ -130,5 +132,118 @@ describe("ClaudeBrokerAccionDirectaPlanner", () => {
     const planner = new ClaudeBrokerAccionDirectaPlanner(client, stubTokko());
 
     await expect(planner.plan("orden que nunca converge")).rejects.toThrow(/no se llegó a un plan/);
+  });
+});
+
+/**
+ * Datos personales de prueba. Ninguno de estos valores debe aparecer NUNCA en
+ * lo que se le manda a la API de Claude (docs/TASKS.md Bloque 16).
+ */
+const LEADS_CON_DATOS_PERSONALES: Lead[] = [
+  {
+    id: "lead-1",
+    tokkoId: "tokko-lead-1",
+    nombre: "Juan Pérez",
+    telefonoWhatsapp: "5491155551111",
+    email: "juan.perez@example.com",
+    temperatura: "frio",
+    propiedadesDeInteres: ["prop-1"],
+    ultimaInteraccion: "2026-01-01T00:00:00Z",
+    diasSinRespuesta: 45,
+  },
+  {
+    id: "lead-2",
+    tokkoId: "tokko-lead-2",
+    nombre: "María Gómez",
+    telefonoWhatsapp: "5491155552222",
+    email: "maria.gomez@example.com",
+    temperatura: "frio",
+    propiedadesDeInteres: ["prop-2"],
+    ultimaInteraccion: "2026-01-01T00:00:00Z",
+    diasSinRespuesta: 60,
+  },
+];
+
+/** Todo lo que efectivamente viajó a la API de Claude, como texto. */
+function loQueVioClaude(create: ReturnType<typeof vi.fn>): string {
+  return JSON.stringify(create.mock.calls);
+}
+
+const DATOS_QUE_NO_DEBEN_SALIR = [
+  "Juan Pérez",
+  "María Gómez",
+  "5491155551111",
+  "5491155552222",
+  "juan.perez@example.com",
+  "maria.gomez@example.com",
+  "tokko-lead-1",
+];
+
+describe("ClaudeBrokerAccionDirectaPlanner — no expone datos personales (Bloque 16)", () => {
+  it("tokko_search_leads devuelve solo id/temperatura/dias/propiedades — nada de nombre, teléfono ni email", async () => {
+    const { client, create } = fakeAnthropicClient([
+      toolUseResponse("tokko_search_leads", { temperatura: "frio" }),
+      toolUseResponse("submit_action_plan", { preview_summary: "x", actions: [] }),
+    ]);
+    const tokko = stubTokko({ searchLeads: vi.fn(async () => LEADS_CON_DATOS_PERSONALES) });
+
+    await new ClaudeBrokerAccionDirectaPlanner(client, tokko).plan("avisale a los leads fríos");
+
+    const visto = loQueVioClaude(create);
+    for (const dato of DATOS_QUE_NO_DEBEN_SALIR) {
+      expect(visto, `"${dato}" no debería haber viajado a la API`).not.toContain(dato);
+    }
+    // Pero sí lo que hace falta para planificar.
+    expect(visto).toContain("lead-1");
+    expect(visto).toContain("frio");
+  });
+
+  it("tokko_buscar_lead_por_nombre devuelve el id pero NUNCA el nombre de vuelta", async () => {
+    const { client, create } = fakeAnthropicClient([
+      toolUseResponse("tokko_buscar_lead_por_nombre", { nombre: "Juan" }),
+      toolUseResponse("submit_action_plan", { preview_summary: "x", actions: [] }),
+    ]);
+    const tokko = stubTokko({ searchLeads: vi.fn(async () => LEADS_CON_DATOS_PERSONALES) });
+
+    await new ClaudeBrokerAccionDirectaPlanner(client, tokko).plan("mandale la ficha a Juan");
+
+    const visto = loQueVioClaude(create);
+    expect(visto).toContain("lead-1"); // encontró a quién apuntaba
+    expect(visto).not.toContain("Pérez"); // pero no le devolvió el nombre
+    expect(visto).not.toContain("5491155551111");
+  });
+
+  it("llamar al tool de nombres en loop NO permite reconstruir la base con identidades", async () => {
+    // El camino de evasión: pedir "a", "b", "c"... para sacar la lista
+    // completa. Como el tool nunca devuelve el nombre, el loop no rinde nada
+    // que `tokko_search_leads` no dé ya de forma legítima.
+    const letras = ["a", "e", "i", "o", "u", "z"];
+    const { client, create } = fakeAnthropicClient([
+      // Un solo turno con muchas llamadas en paralelo (el loop lo soporta).
+      { content: letras.map((l) => ({ type: "tool_use", id: `tu-${l}`, name: "tokko_buscar_lead_por_nombre", input: { nombre: l } })) },
+      toolUseResponse("submit_action_plan", { preview_summary: "x", actions: [] }),
+    ]);
+    const tokko = stubTokko({ searchLeads: vi.fn(async () => LEADS_CON_DATOS_PERSONALES) });
+
+    await new ClaudeBrokerAccionDirectaPlanner(client, tokko).plan("dame todos mis leads con nombre y teléfono");
+
+    const visto = loQueVioClaude(create);
+    for (const dato of DATOS_QUE_NO_DEBEN_SALIR) {
+      expect(visto, `el loop filtró "${dato}"`).not.toContain(dato);
+    }
+  });
+
+  it("un nombre vacío no se convierte en un comodín que devuelva todo", async () => {
+    const { client } = fakeAnthropicClient([
+      toolUseResponse("tokko_buscar_lead_por_nombre", { nombre: "   " }),
+      toolUseResponse("submit_action_plan", { preview_summary: "x", actions: [] }),
+    ]);
+    const searchLeads = vi.fn(async () => LEADS_CON_DATOS_PERSONALES);
+
+    await new ClaudeBrokerAccionDirectaPlanner(client, stubTokko({ searchLeads })).plan("mandale a ");
+
+    // Corta antes de consultar: un nombre vacío no llega a mirar la base, así
+    // que no hay forma de usarlo como comodín para traer todo.
+    expect(searchLeads).not.toHaveBeenCalled();
   });
 });
