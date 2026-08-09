@@ -1,6 +1,7 @@
 import type { ConversationState } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
+import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { ConversationStateStore } from "./conversationStateStore.js";
@@ -13,6 +14,8 @@ export interface BrokerAccionDirectaDeps {
   planner: BrokerAccionDirectaPlanner;
   confirmationClassifier: ConfirmationClassifier;
   gcal: GcalQueries;
+  /** Para que el executor resuelva id -> telefono/nombre del lead (docs/TASKS.md Bloque 16). */
+  tokko: TokkoQueries;
   appointmentStore: AppointmentStore;
   conversationStateStore: ConversationStateStore;
   /** Sin sender configurado, las acciones de whatsapp del plan fallan (best-effort). */
@@ -74,6 +77,7 @@ export async function runBrokerAccionDirecta(
 
   const results = await executeActionPlan(plan.actions, {
     gcal: deps.gcal,
+    tokko: deps.tokko,
     appointmentStore: deps.appointmentStore,
     sender: deps.sender,
   });
@@ -121,6 +125,7 @@ export async function continueBrokerAccionDirecta(
   const context = state.context as unknown as BrokerAccionDirectaContext;
   const results = await executeActionPlan(context.actions, {
     gcal: deps.gcal,
+    tokko: deps.tokko,
     appointmentStore: deps.appointmentStore,
     sender: deps.sender,
   });

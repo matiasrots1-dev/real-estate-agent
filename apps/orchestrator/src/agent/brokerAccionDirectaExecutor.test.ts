@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
+import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
@@ -21,6 +22,25 @@ function stubSender(): WhatsAppSender {
     sendText: vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } })),
     sendImage: vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } })),
     sendTemplate: vi.fn(async () => ({ raw: { messaging_product: "whatsapp" } })),
+  };
+}
+
+/** Tokko que resuelve el lead que el plan ahora solo identifica por id (Bloque 16). */
+function tokkoConLead(): TokkoQueries {
+  return {
+    searchProperties: vi.fn(),
+    getProperty: vi.fn(),
+    searchLeads: vi.fn(async () => []),
+    getLead: vi.fn(async () => ({
+      id: "lead-1",
+      tokkoId: "tokko-lead-1",
+      nombre: "Juan Perez",
+      telefonoWhatsapp: "5491100000001",
+      temperatura: "frio" as const,
+      propiedadesDeInteres: [],
+      diasSinRespuesta: 45,
+    })),
+    logActivity: vi.fn(),
   };
 }
 
@@ -58,7 +78,7 @@ describe("executeActionPlan", () => {
       startDateTime: "2026-08-03T15:00:00.000Z",
     };
 
-    await executeActionPlan([action], { gcal, appointmentStore: new InMemoryAppointmentStore() });
+    await executeActionPlan([action], { gcal, appointmentStore: new InMemoryAppointmentStore(), tokko: tokkoConLead() });
 
     expect(gcal.patchEvent).toHaveBeenCalledWith("evt-1", {
       startDateTime: "2026-08-03T15:00:00.000Z",
@@ -69,9 +89,9 @@ describe("executeActionPlan", () => {
 
   it("whatsapp_send_message: manda el texto al teléfono del plan", async () => {
     const sender = stubSender();
-    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola!" };
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola!" };
 
-    await executeActionPlan([action], { gcal: stubGcal(), appointmentStore: new InMemoryAppointmentStore(), sender });
+    await executeActionPlan([action], { gcal: stubGcal(), appointmentStore: new InMemoryAppointmentStore(), tokko: tokkoConLead(), sender });
 
     expect(sender.sendText).toHaveBeenCalledWith("5491100000001", "Hola!");
   });
@@ -81,13 +101,13 @@ describe("executeActionPlan", () => {
     const action: PlannedAction = {
       type: "whatsapp_send_template",
       leadId: "lead-1",
-      phone: "5491100000001",
+
       templateName: "baja_precio",
       languageCode: "es_AR",
       bodyParams: ["Depto Palermo"],
     };
 
-    await executeActionPlan([action], { gcal: stubGcal(), appointmentStore: new InMemoryAppointmentStore(), sender });
+    await executeActionPlan([action], { gcal: stubGcal(), appointmentStore: new InMemoryAppointmentStore(), tokko: tokkoConLead(), sender });
 
     expect(sender.sendTemplate).toHaveBeenCalledWith("5491100000001", "baja_precio", "es_AR", ["Depto Palermo"]);
   });
@@ -95,11 +115,11 @@ describe("executeActionPlan", () => {
   it("acción de whatsapp sin sender configurado: falla esa acción puntual (no revienta el resto del plan)", async () => {
     const gcal = stubGcal();
     const actions: PlannedAction[] = [
-      { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola!" },
+      { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola!" },
       { type: "gcal_patch_event", leadId: "lead-2", gcalEventId: "evt-1", summary: "Reprogramada" },
     ];
 
-    const results = await executeActionPlan(actions, { gcal, appointmentStore: new InMemoryAppointmentStore() });
+    const results = await executeActionPlan(actions, { gcal, appointmentStore: new InMemoryAppointmentStore(), tokko: tokkoConLead() });
 
     expect(results[0].ok).toBe(false);
     expect(results[0].error).toMatch(/WhatsAppSender/);
@@ -124,7 +144,7 @@ describe("executeActionPlan", () => {
       { type: "gcal_patch_event", leadId: "lead-2", gcalEventId: "evt-1", summary: "Reprogramada" },
     ];
 
-    const results = await executeActionPlan(actions, { gcal, appointmentStore: new InMemoryAppointmentStore() });
+    const results = await executeActionPlan(actions, { gcal, appointmentStore: new InMemoryAppointmentStore(), tokko: tokkoConLead() });
 
     expect(results[0]).toMatchObject({ ok: false, error: "Calendar caído" });
     expect(results[1]).toMatchObject({ ok: true });
@@ -147,9 +167,80 @@ describe("summarizeExecution", () => {
   });
 
   it("mezcla de éxitos y fallos: cada línea refleja lo que pasó realmente con esa acción", () => {
-    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", phone: "5491100000001", message: "Hola!" };
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola!" };
     const summary = summarizeExecution([{ action, ok: false, error: "boom" }]);
     expect(summary).toContain("✗");
     expect(summary).toContain("boom");
+  });
+});
+
+describe("executeActionPlan — resuelve el lead en ejecución (Bloque 16)", () => {
+  const leadCompleto = {
+    id: "lead-1",
+    tokkoId: "tokko-lead-1",
+    nombre: "Juan Pérez",
+    telefonoWhatsapp: "5491155551111",
+    email: "juan@example.com",
+    temperatura: "frio" as const,
+    propiedadesDeInteres: ["prop-1"],
+    diasSinRespuesta: 45,
+  };
+
+  function tokkoCon(lead: typeof leadCompleto | null): TokkoQueries {
+    return {
+      searchProperties: vi.fn(),
+      getProperty: vi.fn(),
+      searchLeads: vi.fn(async () => []),
+      getLead: vi.fn(async () => lead),
+      logActivity: vi.fn(),
+    };
+  }
+
+  it("resuelve el teléfono desde el leadId — el plan ya no lo trae", async () => {
+    const sender = stubSender();
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola!" };
+
+    await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoCon(leadCompleto),
+      sender,
+    });
+
+    expect(sender.sendText).toHaveBeenCalledWith("5491155551111", "Hola!");
+  });
+
+  it("sustituye el placeholder {nombre} recién al enviar", async () => {
+    const sender = stubSender();
+    const action: PlannedAction = {
+      type: "whatsapp_send_message",
+      leadId: "lead-1",
+      message: "Hola {nombre}, bajamos el precio.",
+    };
+
+    await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoCon(leadCompleto),
+      sender,
+    });
+
+    expect(sender.sendText).toHaveBeenCalledWith("5491155551111", "Hola Juan Pérez, bajamos el precio.");
+  });
+
+  it("si el lead no existe en Tokko, falla esa acción en vez de mandarle a un destinatario equivocado", async () => {
+    const sender = stubSender();
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-fantasma", message: "Hola!" };
+
+    const results = await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoCon(null),
+      sender,
+    });
+
+    expect(results[0].ok).toBe(false);
+    expect(results[0].error).toMatch(/no se encontró el lead/i);
+    expect(sender.sendText).not.toHaveBeenCalled();
   });
 });

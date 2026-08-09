@@ -276,6 +276,7 @@ function brokerAccionDirectaDeps(deps: HandleMessageDeps): BrokerAccionDirectaDe
     planner: deps.brokerAccionDirectaPlanner,
     confirmationClassifier: deps.confirmationClassifier,
     gcal: deps.gcal,
+    tokko: deps.tokko,
     appointmentStore: deps.appointmentStore,
     conversationStateStore: deps.conversationStateStore,
     sender: deps.sender,
