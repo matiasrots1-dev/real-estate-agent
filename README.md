@@ -32,6 +32,8 @@ real-estate-agent/
 ├── apps/orchestrator/     # servicio principal
 ├── mcp-servers/           # integraciones (Tokko, Google Calendar, Weather) como MCP servers
 ├── packages/shared-types/ # tipos compartidos + loader del intent catalog
+├── scripts/               # tooling del repo (escaneo de datos sensibles, setup de hooks)
+├── .githooks/             # hooks de git versionados; se activan solos en `npm install`
 └── docker-compose.yml     # Postgres, provisionado para cuando se migre desde JSON local (ver docs/TASKS.md)
 ```
 
