@@ -86,6 +86,8 @@ real-estate-agent/
 │   └── mcp-weather/
 ├── packages/shared-types/      # tipos TS compartidos entre orchestrator y MCP servers
 ├── infra/                      # scripts de infra/seed
+├── scripts/                    # tooling del repo (escaneo de datos sensibles, setup de hooks)
+├── .githooks/                  # hooks de git versionados; se activan solos en `npm install`
 └── docker-compose.yml          # postgres + redis para desarrollo local
 ```
 
@@ -131,8 +133,19 @@ preguntale al usuario.
 **Persistencia sigue siendo JSON local** (`apps/orchestrator/data/`,
 gitignoreado), no Postgres — el swap de implementación detrás de las
 interfaces ya existentes (`AuditLogStore`, `AppointmentStore`,
-`ConversationStateStore`) es el Bloque 12/13 de `docs/TASKS.md`, todavía
-sin arrancar.
+`ConversationStateStore`) es el último bloque sin marcar de
+`docs/TASKS.md`, todavía sin arrancar. (No se cita el número acá a
+propósito: se corrió varias veces al insertarse bloques reactivos
+delante, y quedaba desactualizado.)
+
+**Retención de datos: implementada pero con el borrado APAGADO.** El job
+`jobs/retention.ts` cumple la política de privacidad publicada, pero
+arranca en modo simulacro — reporta qué borraría y no borra, hasta que
+alguien ponga `RETENTION_BORRADO_HABILITADO=true`. El default es
+deliberado (borrado irreversible, sin backup de los JSON), pero significa
+que **la política sigue incumpliéndose mientras siga apagado**. No lo
+enciendas por tu cuenta: es una decisión del dueño del repo, después de
+revisar varias corridas del reporte.
 
 **Para una introducción completa pensada para alguien nuevo en el
 proyecto** (no solo para vos, Claude Code, que ya tenés todo este

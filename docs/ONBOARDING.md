@@ -132,6 +132,12 @@ recontacto proactivo por scheduler, y el canal completo del broker
 (resúmenes, pausar, y las órdenes compuestas con su gate de
 confirmación). El detalle bloque por bloque está en `docs/TASKS.md`.
 
+**Funcionando pero deliberadamente apagado**: el purgado por retención de
+datos corre con el resto de los jobs, calcula qué habría que borrar según
+la política publicada, y lo deja por escrito en un reporte — **sin borrar
+nada**. Encenderlo es un paso manual y consciente (ver el pendiente en la
+sección 6).
+
 **No funcionando todavía — bloqueante para uso real**: el camino
 ENTRANTE de WhatsApp. Un mensaje real de un cliente hoy **no le llega**
 al servidor — pero el webhook de prueba que dispara el propio panel de
@@ -171,6 +177,27 @@ Google Calendar y el clima sí corren contra las APIs reales.
    hizo con el port forwarding nativo de VS Code, sin instalar nada) y
    cargar la Callback URL + verify token en Meta for Developers.
 
+**Dos cosas que se activan solas y conviene que sepas de entrada:**
+
+- **Un escaneo de datos sensibles corre antes de cada `git commit` y lo
+  bloquea** si detecta tokens con forma de credencial, URLs de túnel, o
+  números de teléfono con forma real fuera de archivos de test/mock. Se
+  instala solo en tu primer `npm install` (apunta git a los hooks
+  versionados en `.githooks/`), así que no tenés que configurar nada.
+  Existe porque ya pasó tres veces: números de teléfono reales entrando
+  al repo durante sesiones de testing en vivo. Si te bloquea un falso
+  positivo, la salida te sugiere el arreglo; `git commit --no-verify` es
+  el escape, con criterio y explicándolo en el PR. Detalle en
+  `CONTRIBUTING.md`.
+- **Antes de codear un bloque se hace un pre-mortem**: imaginar que ya
+  está mergeado y falló, y plantear 3 modos de fallo concretos, cada uno
+  mitigado o anotado como riesgo asumido. No pide ningún artefacto nuevo
+  — va en el hilo de trabajo. Aplica a cambios de código o comportamiento;
+  para documentación o texto se saltea, dejando una línea en el commit que
+  lo diga. La convención completa (incluido un catálogo de los modos de
+  fallo que este proyecto ya sufrió, para no arrancar de cero) está en
+  `CLAUDE.md` secc. 7 y `CONTRIBUTING.md`.
+
 **Tres trampas operativas que ya costaron horas de diagnóstico — evitalas
 de entrada:**
 - **El token de acceso de WhatsApp (`WHATSAPP_ACCESS_TOKEN`) vence cada
@@ -206,36 +233,50 @@ Para el flujo de git (rama por bloque, PR, nunca commit directo a
   gate de confirmación bulk cuente mal, o que pausar un cliente puntual
   no encuentre la conversación correcta — depende de cuán consistentes
   sean los datos reales de Tokko.
+- **`leadId` significa dos cosas distintas según quién agendó la visita**
+  (encontrado en el Bloque 16, documentado como Bloque 17, sin arreglar).
+  En el flujo del cliente es su **teléfono**; en el del broker es el **id
+  de Tokko**. Consecuencia concreta: si el broker agenda una visita con
+  una orden directa y después el cliente escribe "quiero reprogramar", el
+  agente no la encuentra y le responde *"no te veo ninguna visita
+  agendada"*. Riesgo: **medio-alto** — rompe un flujo real de cara al
+  cliente, y además ensucia el barrido de retención, que cruza los stores
+  por `leadId`.
 - **Sin tracking de entrega de WhatsApp** (delivered/read/failed) — el
   sistema solo sabe si Meta *aceptó* mandar un mensaje, no si realmente
   llegó. Riesgo: **medio-alto** para confiabilidad — el agente puede
   creer que avisó algo a un cliente que nunca lo vio, sin ninguna señal
   de que algo falló.
-- **Retención de datos indefinida** — ningún store tiene borrado
-  automático; todo se acumula para siempre en archivos locales. Riesgo:
-  **alto, no bajo** — la política de privacidad de la app **ya está
-  publicada** y promete 12 meses de retención; el código hoy no borra
-  nada, nunca. Esto no es una brecha futura hipotética, es una promesa
-  pública ya incumplida mientras este párrafo esté vigente.
-- **`brokerAccionDirectaPlan.ts` manda a la API de Claude el `Lead[]`
-  completo que devuelve Tokko** (`runReadTool`, tool `tokko_search_leads`)
-  — nombre, teléfono y email de **todos** los leads que matchearon el
-  filtro de la búsqueda, no solo los que terminan en el plan final que
-  arma Claude. Si el broker pide "avisale a los leads fríos" y hay 40
-  que matchean pero el plan final solo toca a 5, los otros 35 igual
-  viajaron completos a Anthropic. Riesgo: **medio-alto** — es
-  sobre-exposición de datos personales de terceros (los leads no dieron
-  ese consentimiento específico), y es exactamente el tipo de dato que
-  la política de privacidad tiene que declarar con precisión.
+- **Retención de datos: el código está listo pero el borrado está
+  APAGADO.** El purgado por retención existe desde el Bloque 15 y cumple
+  la política publicada (12 meses mensajes/logs, 24 meses desde la última
+  interacción para gestión comercial), pero arranca en **modo simulacro**:
+  reporta qué borraría en `data/retention_reports.jsonl` y no borra nada
+  hasta que alguien ponga `RETENTION_BORRADO_HABILITADO=true`. Riesgo:
+  **alto mientras siga apagado** — la política publicada sigue
+  incumpliéndose. El default es a propósito (el borrado es irreversible y
+  no hay backup de los JSON), pero es un paso pendiente, no un estado
+  final: hay que revisar unas cuantas corridas del reporte y encenderlo.
+- **Sobre-exposición de datos al planificador: resuelta en lo
+  innecesario, no en lo inevitable** (Bloque 16). Antes se le mandaba a
+  la API de Claude el `Lead` entero de cada coincidencia; hoy solo salen
+  `{id, temperatura, diasSinRespuesta, propiedadesDeInteres}` — nunca
+  nombre, teléfono ni email. Lo que **sigue** yendo: los nombres que el
+  broker escribe en su propia orden, y el texto del mensaje que Claude
+  redacta. Riesgo: **bajo**, pero no es cero, y conviene tenerlo presente
+  al declarar tratamiento de datos.
 - **Persistencia en JSON, no Postgres** — no soporta concurrencia real
   entre procesos. Riesgo: **bajo** mientras el volumen sea el de un
   broker individual; es el techo conocido, no una sorpresa.
 - **Cobertura de tests no llega al comportamiento real de la API de
   Claude** (truncamiento por `max_tokens`, respuestas mal formadas,
   etc.) — ya causó un bug real que ningún test automatizado agarró,
-  encontrado recién en testing manual con credenciales reales. Riesgo:
-  **medio** — es plausible que haya bugs parecidos sin descubrir en otros
-  puntos donde se llama a Claude.
+  encontrado recién en testing manual con credenciales reales. Hay una
+  mitigación parcial: varios tests usan un cliente Anthropic falso que
+  simula respuestas truncadas, así que el **código reacciona bien** a
+  una. Lo que sigue sin cubrirse es si el prompt y el schema de cada
+  classifier se truncan **en la práctica** — eso solo se ve contra la API
+  real, y no hay una rutina periódica que lo chequee. Riesgo: **medio**.
 
 Para el detalle de cualquiera de estos puntos, `docs/TASKS.md` tiene la
 investigación completa bloque por bloque.
