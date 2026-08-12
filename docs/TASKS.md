@@ -1187,9 +1187,8 @@ podía recibir la misma respuesta dos o tres veces.
       `BackgroundQueue.idle()` ya existe y es lo único que hace falta (con un
       techo de tiempo, para no colgar el apagado). Se deja afuera a pedido
       del dueño del repo, para no mezclar dos cambios del mismo camino.
-- [ ] **Deduplicación por `id` de mensaje de Meta.** Pendiente de que el
-      proveedor confirme si reintenta al vencer su timeout de 3 s. Ver el
-      análisis más abajo.
+- [x] **Deduplicación por `id` de mensaje de Meta.** Resuelto en el Bloque 19,
+      pero **no por el motivo que se había supuesto** — ver ahí.
 
 ### Pregunta que lo habría agarrado antes
 *"¿Cuánto tarda realmente este camino, medido, y cuánto tiempo me da quien
@@ -1199,7 +1198,77 @@ La clasificación sola se comía hasta el 75% del presupuesto y eso no se supo
 hasta medirlo; el diseño sincrónico venía de cuando el único cliente era el
 panel de pruebas de Meta, que no tiene ese límite.
 
-## Bloque 19 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 19 — Deduplicación de mensajes por `id` de Meta
+Depende del Bloque 18 (engancha justo antes del encolado); mergear después.
+
+### La causa real, que no era la que se había supuesto
+Al cerrar el Bloque 18 se dio por hecho que el ACK rápido eliminaba los
+duplicados de raíz, porque la fuente supuesta era el timeout de 3 s del
+proveedor. **Era falso.** El proveedor confirmó:
+
+- Ellos **no reintentan**: un solo POST por evento, a propósito.
+- Su forward está enganchado **al principio de su webhook, antes de que su
+  propio CRM procese**. Si el CRM devuelve un no-200, **Meta** reintenta el
+  POST aguas arriba y el forward se dispara de nuevo con el mismo message id.
+- Midieron **1,83 POST de Meta por evento** durante un bug.
+
+O sea que la fuente de duplicados está aguas arriba del proveedor y **nuestra
+latencia no interviene en esa cadena**. El ACK rápido eliminó los duplicados
+que causaba *nuestro* timeout, que resultaron no existir; estos son de otra
+fuente y hay que filtrarlos nosotros.
+
+- [x] `LruMessageDeduplicator` (`messageDedup.ts`), consultado en `/webhook`
+      **después** de responder 200 y **antes** de encolar. A un duplicado
+      también se le contesta 200: un no-200 haría que Meta reintente todavía
+      más, que es lo contrario de lo que se busca.
+- [x] **Se marca al recibir, no al terminar.** El reintento de Meta puede
+      llegar mientras todavía se está procesando el original, así que marcar
+      al final no filtraría nada.
+- [x] **`registrarSiEsNuevo()` es sincrónico**, no `async`. Chequear y marcar
+      tienen que ser una sola operación: partido en dos `await`, dos reintentos
+      simultáneos pasan los dos el chequeo antes de que ninguno marque, y el
+      filtro no filtra justo en el caso para el que existe. Cubierto con 8
+      POSTs idénticos en paralelo contra el webhook real.
+- [x] **Ante la duda, se procesa.** Los dos errores posibles no son
+      simétricos: un duplicado de más le manda al cliente una respuesta
+      repetida (molesto y visible), un falso positivo lo deja sin respuesta
+      para siempre y del lado nuestro no se nota nada. Por eso un `id` vacío o
+      en blanco nunca se descarta, y un fallo del callback de logueo no puede
+      hacer perder el mensaje.
+- [x] Techo LRU de 10.000 ids con desalojo del más viejo; un duplicado
+      **refresca** la posición, así que una tanda de reintentos mantiene vivo
+      su id en vez de dejarlo envejecer hacia el desalojo. Aviso (una sola vez)
+      cuando el registro llega al techo: si pasa seguido, la capacidad quedó
+      corta y se están dejando pasar duplicados.
+- [x] Contador acumulado + log por descarte, con el `wamid` (no es dato
+      personal: no es el teléfono ni el texto) para poder cruzar con los logs
+      del proveedor cuando el número empiece a subir.
+- [x] Los fixtures de test tenían el `wamid` **hardcodeado** (`wamid.test123`
+      en `app.test.ts`): con dedup, el segundo mensaje de la suite se
+      descartaba como duplicado y los tests fallaban por una razón ajena a lo
+      que probaban. Ahora el id se deriva del contenido.
+- [x] Verificado por mutación: sacando el filtro de `app.ts`, los tests fallan
+      con `expected [ 'hola', 'hola', 'hola' ] to deeply equal [ 'hola' ]`.
+
+### Riesgo abierto
+- [ ] **El registro es en memoria y se vacía al reiniciar.** Un reintento de
+      Meta posterior a un reinicio se procesa como nuevo. Se eligió memoria a
+      propósito: persistir los ids los metería bajo la política de retención
+      (Bloque 15) sin que tengan valor más allá de la ventana de reintento. Si
+      con uso real aparecen duplicados asociados a reinicios, la solución va
+      junto con la cola durable del Bloque 18 — mismo Redis, misma decisión.
+
+### Pregunta que lo habría agarrado antes
+*"¿De dónde salen los duplicados, exactamente?"* — no *"¿quién reintenta?"*.
+Se asumió que el reintento venía de quien nos llama, y por lo tanto que
+contestarle más rápido lo evitaba. El reintento venía de **dos saltos más
+arriba**, disparado por un tercero que falla, y ninguna mejora de nuestra
+latencia lo toca. Es la misma forma de error que el obituario del Bloque 12
+(dar por buena la causa de un fallo externo sin verificarla): la hipótesis
+encajaba con los hechos conocidos y por eso no se buscó confirmarla — y la
+confirmación, cuando llegó, la contradijo.
+
+## Bloque 20 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
