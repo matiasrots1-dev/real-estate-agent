@@ -106,7 +106,36 @@ async function main() {
     brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     whatsappAppSecret: config.whatsapp.appSecret,
+    skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,
   });
+
+  // Dos formas distintas de quedar sin verificación de firma, las dos ruidosas
+  // al arrancar. La segunda es la traicionera: no requiere prender ningún flag,
+  // alcanza con que falte el App Secret, y antes no avisaba nada.
+  if (config.whatsapp.skipWebhookSignatureCheck) {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  INSEGURO: validación de firma del webhook DESACTIVADA   #\n" +
+        "  ############################################################\n" +
+        "  WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK=true — /webhook acepta\n" +
+        "  CUALQUIER POST, venga de Meta o de quien sea que conozca la URL.\n" +
+        "  Es una escotilla TEMPORAL para probar contra un reenviador que no\n" +
+        "  puede firmar como Meta. Apagala apenas termine la prueba y\n" +
+        "  reemplazala por un secreto compartido con el proveedor\n" +
+        "  (riesgo abierto en docs/TASKS.md).\n"
+    );
+  } else if (!config.whatsapp.appSecret) {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  INSEGURO: WHATSAPP_APP_SECRET vacío                     #\n" +
+        "  ############################################################\n" +
+        "  Sin App Secret no hay nada contra qué validar la firma, así que\n" +
+        "  /webhook acepta cualquier POST igual que si el flag estuviera\n" +
+        "  prendido. Cargá WHATSAPP_APP_SECRET en .env.\n"
+    );
+  }
 
   const httpServer = createServer(listener);
   httpServer.listen(config.port, () => {

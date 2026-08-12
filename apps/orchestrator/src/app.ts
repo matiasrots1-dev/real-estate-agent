@@ -1,11 +1,17 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import { parseIncomingMessage } from "./channels/whatsapp/webhookPayload.js";
-import { verifyWebhookChallenge, verifyWebhookSignature } from "./channels/whatsapp/signature.js";
+import { authorizeWebhookRequest, verifyWebhookChallenge } from "./channels/whatsapp/signature.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
   whatsappAppSecret?: string;
+  /**
+   * Acepta webhooks sin firma HMAC. Temporal, apagado por default — ver el
+   * riesgo abierto en docs/TASKS.md. Con esto prendido el endpoint no
+   * distingue a Meta de cualquiera que conozca la URL.
+   */
+  skipWebhookSignatureCheck?: boolean;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -90,18 +96,33 @@ async function handleIncomingWebhook(
 ): Promise<void> {
   const rawBody = await readRawBody(req);
 
-  if (deps.whatsappAppSecret) {
-    const signatureHeader = req.headers["x-hub-signature-256"];
-    const valid = verifyWebhookSignature(
-      rawBody,
-      Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader,
-      deps.whatsappAppSecret
+  const rawSignature = req.headers["x-hub-signature-256"];
+  const auth = authorizeWebhookRequest({
+    rawBody,
+    signatureHeader: Array.isArray(rawSignature) ? rawSignature[0] : rawSignature,
+    appSecret: deps.whatsappAppSecret,
+    skipSignatureCheck: deps.skipWebhookSignatureCheck,
+  });
+
+  // Todo POST a /webhook deja rastro de por qué se aceptó o se rechazó. Antes
+  // el rechazo era un 401 mudo: si Meta (o un reenviador) mandaba algo que no
+  // validaba, del lado nuestro no quedaba absolutamente nada para diagnosticar.
+  // Nunca se loguea el body: trae teléfonos y el texto del mensaje.
+  if (!auth.aceptado) {
+    console.warn(
+      `[webhook] RECHAZADO (401) motivo=${auth.motivo} bytes=${rawBody.length} ` +
+        `header_presente=${rawSignature !== undefined}`
     );
-    if (!valid) {
-      res.writeHead(401);
-      res.end();
-      return;
-    }
+    res.writeHead(401);
+    res.end();
+    return;
+  }
+
+  if (auth.motivo !== "firma_valida") {
+    console.warn(
+      `[webhook] ACEPTADO SIN VERIFICAR FIRMA motivo=${auth.motivo} bytes=${rawBody.length}. ` +
+        `Este request pudo venir de cualquiera, no necesariamente de Meta.`
+    );
   }
 
   let json: unknown;

@@ -1075,6 +1075,57 @@ algo falla.
       y en uso, así que el riesgo no es solo implementarlo mal sino migrar
       mal los datos que ya están en disco con el formato viejo.
 
+## Riesgo abierto — flag que apaga la validación de firma del webhook
+**Estado: abierto. No es un bloque terminado, es deuda con fecha de
+vencimiento.** Agregado el 2026-08-11 para poder probar contra un proveedor
+que reenvía los webhooks de Meta desde su propia infraestructura, y por lo
+tanto no puede firmarlos con el App Secret de la app.
+
+- [x] `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK` (default apagado). En `"true"`,
+      `/webhook` acepta cualquier POST sin verificar la firma HMAC.
+      Comparación exacta contra el string `"true"`: `"1"`, `"yes"` o `"TRUE"`
+      dejan la validación **prendida**, para que un typo en `.env` no abra el
+      endpoint (`config.test.ts`).
+- [x] Aviso ruidoso al arrancar cuando está prendido, y **además un warning
+      por cada request aceptado sin verificar**. Lo segundo no estaba pedido
+      pero sale del pre-mortem: el aviso del arranque queda enterrado a las
+      horas de proceso corriendo, y es justo cuando la ventana insegura se
+      vuelve invisible.
+- [x] De paso, se cerró un agujero de diagnóstico que ya existía: el rechazo
+      por firma inválida era un **401 mudo**, sin una sola línea de log. Un
+      reenvío fallido del proveedor no habría dejado ningún rastro del lado
+      nuestro. Ahora cada POST rechazado loguea el motivo, distinguiendo
+      `firma_ausente` de `firma_invalida`. Nunca se loguea el body (trae
+      teléfonos y el texto del mensaje) — hay un test que lo verifica.
+
+### Lo que hay que hacer para cerrarlo
+- [ ] **Reemplazarlo por un secreto compartido con el proveedor** antes de
+      operar en serio: que el reenvío llegue con una cabecera propia que el
+      orchestrator valide, en vez de no validar nada. El flag es una
+      escotilla para una prueba puntual, no un modo de operación.
+- [ ] **Apagar el flag apenas termine la prueba.** Mientras esté prendido y
+      el túnel expuesto, cualquiera que conozca la URL puede inyectar un
+      webhook falso: el agente lo procesa, responde por WhatsApp a un número
+      que elige el atacante, agenda visitas y contacta leads. El endpoint no
+      tiene forma de distinguir eso de un mensaje real.
+
+### Hallazgo lateral: apagar el flag no alcanza por sí solo
+`app.ts` sólo validaba la firma `if (deps.whatsappAppSecret)` — con
+`WHATSAPP_APP_SECRET` vacío, el webhook **ya aceptaba cualquier cosa, en
+silencio y sin ningún flag**. El comportamiento no se cambió (hacerlo
+rechazar era ampliar el alcance del pedido y podía romper entornos que hoy
+levantan sin secreto), pero ahora avisa: al arrancar y en cada request, con
+motivo `sin_secreto_configurado`. Además `WHATSAPP_APP_SECRET` faltaba en
+`.env.example` pese a estar en uso — o sea que alguien copiando el ejemplo
+levantaba el proyecto con la firma desactivada sin enterarse nunca.
+
+### Pregunta que lo habría agarrado antes
+*"¿Cuántas formas distintas hay de terminar sin validación de firma, y cuál
+de ellas es silenciosa?"* — había dos, y la que no requería ningún flag era
+la muda. Un pre-mortem enfocado sólo en el flag nuevo se la habría perdido:
+la pregunta útil no era "¿qué puede salir mal con esto que estoy agregando?"
+sino "¿qué otros caminos llegan al mismo estado inseguro?".
+
 ## Bloque 18 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
