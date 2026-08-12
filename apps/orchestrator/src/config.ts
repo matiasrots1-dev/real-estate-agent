@@ -17,6 +17,16 @@ export interface OrchestratorConfig {
     accessToken?: string;
     phoneNumberId?: string;
     brokerWhatsappNumber?: string;
+    /**
+     * TEMPORAL (docs/TASKS.md, riesgo abierto): acepta webhooks sin firma HMAC.
+     * Default `false`. Existe sólo para poder probar contra un proveedor que
+     * reenvía los webhooks de Meta desde su propia infraestructura y por lo
+     * tanto no puede firmarlos con el App Secret. Hay que reemplazarlo por un
+     * secreto compartido con el proveedor antes de operar en serio: mientras
+     * esté prendido, el endpoint no puede distinguir a Meta de cualquiera que
+     * conozca la URL.
+     */
+    skipWebhookSignatureCheck: boolean;
   };
   mcpTokko: {
     entryPath: string;
@@ -84,6 +94,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
       accessToken: env.WHATSAPP_ACCESS_TOKEN,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
       brokerWhatsappNumber: env.BROKER_WHATSAPP_NUMBER,
+      // Comparación explícita contra "true": cualquier otra cosa (incluido
+      // "1", "yes" o la variable vacía) deja la validación PRENDIDA. Para un
+      // flag que apaga un control de seguridad, el default seguro tiene que
+      // ganar ante cualquier valor ambiguo.
+      skipWebhookSignatureCheck: env.WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK === "true",
     },
     mcpTokko: {
       entryPath:

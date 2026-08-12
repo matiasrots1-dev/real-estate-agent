@@ -23,6 +23,59 @@ export function verifyWebhookSignature(
   return timingSafeEqual(expectedBuf, providedBuf);
 }
 
+/**
+ * Por qué se acepta o se rechaza un POST a /webhook. Es un tipo aparte, y no
+ * un boolean, para que quien loguea pueda distinguir "lo dejé pasar porque la
+ * firma estaba bien" de "lo dejé pasar porque alguien apagó la validación" —
+ * son la misma respuesta HTTP y consecuencias de seguridad opuestas.
+ */
+export type WebhookAuthOutcome =
+  | { aceptado: true; motivo: "firma_valida" }
+  | { aceptado: true; motivo: "sin_secreto_configurado" }
+  | { aceptado: true; motivo: "validacion_salteada_por_flag" }
+  | { aceptado: false; motivo: "firma_ausente" | "firma_invalida" };
+
+export interface WebhookAuthOptions {
+  rawBody: Buffer;
+  signatureHeader: string | undefined;
+  appSecret: string | undefined;
+  /**
+   * Escotilla de escape temporal (docs/TASKS.md, riesgo abierto): acepta
+   * webhooks SIN firma. Existe sólo para poder probar contra un reenviador
+   * intermediario que no puede firmar como Meta. Default apagado.
+   */
+  skipSignatureCheck?: boolean;
+}
+
+/**
+ * Decide si un POST a /webhook se procesa o se rechaza. Separado del handler
+ * HTTP para poder testear la matriz completa (flag × secreto × firma) sin
+ * levantar un servidor.
+ */
+export function authorizeWebhookRequest(options: WebhookAuthOptions): WebhookAuthOutcome {
+  // El flag va PRIMERO y a propósito: cuando está prendido no se mira la
+  // firma ni aunque venga bien, así el motivo logueado siempre refleja que la
+  // validación estuvo apagada. Si mirara la firma primero, un request bien
+  // firmado se loguearía como "firma_valida" y la ventana insegura quedaría
+  // invisible en el log justo cuando más importa verla.
+  if (options.skipSignatureCheck) {
+    return { aceptado: true, motivo: "validacion_salteada_por_flag" };
+  }
+
+  if (!options.appSecret) {
+    return { aceptado: true, motivo: "sin_secreto_configurado" };
+  }
+
+  if (!options.signatureHeader) {
+    return { aceptado: false, motivo: "firma_ausente" };
+  }
+
+  const valida = verifyWebhookSignature(options.rawBody, options.signatureHeader, options.appSecret);
+  return valida
+    ? { aceptado: true, motivo: "firma_valida" }
+    : { aceptado: false, motivo: "firma_invalida" };
+}
+
 export interface WebhookVerificationQuery {
   "hub.mode"?: string;
   "hub.verify_token"?: string;
