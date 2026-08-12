@@ -37,6 +37,20 @@ import { createRetentionJob } from "./jobs/retention.js";
 // path buscaría apps/orchestrator/.env y nunca encontraría el de la raíz.
 loadDotenv({ path: path.join(REPO_ROOT, ".env") });
 
+// Última red, por debajo del catch de la cola de background. La cola ya
+// contiene todo lo suyo (backgroundQueue.ts), pero desde que el webhook
+// responde 200 y procesa después, cualquier promesa suelta en cualquier parte
+// del proceso deja de tener a alguien que la espere — y Node 24 termina el
+// proceso ante un unhandledRejection. Preferimos un orchestrator vivo con un
+// error ruidoso en el log a uno caído por un mensaje raro.
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "[proceso] promesa rechazada sin manejar. El proceso sigue vivo a propósito; " +
+      "esto es un bug que hay que arreglar, no un estado normal:",
+    reason
+  );
+});
+
 async function main() {
   const config = loadConfigFromEnv();
 

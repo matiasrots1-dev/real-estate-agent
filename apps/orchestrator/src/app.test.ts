@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createRequestListener } from "./app.js";
+import { SerialConversationQueue } from "./backgroundQueue.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { InMemoryAuditLogStore } from "./agent/auditLog.js";
 import { InMemoryAppointmentStore } from "./agent/appointmentStore.js";
@@ -127,6 +128,29 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
   let tokko: TokkoMcpClient;
   let auditLog: InMemoryAuditLogStore;
   let brokerNotifier: BrokerNotifier & { notifications: BrokerNotification[] };
+  let queue: SerialConversationQueue;
+
+  /**
+   * POSTea el webhook y **espera a que termine el procesamiento**.
+   *
+   * Desde que `/webhook` responde 200 antes de procesar (el proveedor corta a
+   * los 3s), assertar apenas vuelve el fetch es una carrera: el audit log
+   * todavía puede estar vacío. Los tests de acá abajo verifican el resultado
+   * del procesamiento, no la respuesta HTTP, así que tienen que esperarlo.
+   *
+   * Está encapsulado en un helper a propósito: si cada test hiciera el fetch
+   * por su cuenta, olvidarse el `idle()` en uno nuevo daría un verde que no
+   * prueba nada (docs/TASKS.md, Bloque 10).
+   */
+  async function postWebhook(body: string): Promise<Response> {
+    const res = await fetch(`${baseUrl}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
+      body,
+    });
+    await queue.idle();
+    return res;
+  }
 
   beforeAll(async () => {
     const catalog = loadCatalog(path.join(repoRoot, "docs/intent_catalog.yaml"));
@@ -138,6 +162,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
     auditLog = new InMemoryAuditLogStore();
     brokerNotifier = recordingBrokerNotifier();
+    queue = new SerialConversationQueue();
 
     const listener = createRequestListener({
       catalog,
@@ -162,6 +187,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
       brokerNotifier,
       whatsappWebhookVerifyToken: WEBHOOK_VERIFY_TOKEN,
       whatsappAppSecret: APP_SECRET,
+      backgroundQueue: queue,
     });
 
     server = createServer(listener);
@@ -196,11 +222,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
   it("procesa el mensaje de prueba de punta a punta y audita el resultado", async () => {
     const body = metaTextMessagePayload("5491100000001", "¿el depto de Palermo sigue disponible?");
-    const res = await fetch(`${baseUrl}/webhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
-      body,
-    });
+    const res = await postWebhook(body);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
@@ -222,11 +244,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
   it("Bloque 4: un mensaje que escala responde con el template y notifica al broker con el borrador", async () => {
     const body = metaTextMessagePayload("5491100000003", "esto es un desastre, nadie me atiende");
-    const res = await fetch(`${baseUrl}/webhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
-      body,
-    });
+    const res = await postWebhook(body);
 
     expect(res.status).toBe(200);
 
@@ -247,11 +265,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
   it("Bloque 5: consulta_precio_condiciones también corre de punta a punta contra mcp-tokko real", async () => {
     const body = metaTextMessagePayload("5491100000004", "¿cuánto son las expensas del depto de Palermo?");
-    const res = await fetch(`${baseUrl}/webhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": sign(body) },
-      body,
-    });
+    const res = await postWebhook(body);
 
     expect(res.status).toBe(200);
 
