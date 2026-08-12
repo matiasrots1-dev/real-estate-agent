@@ -2,6 +2,7 @@ import type { IncomingMessage, RequestListener, ServerResponse } from "node:http
 import { parseIncomingMessage } from "./channels/whatsapp/webhookPayload.js";
 import { authorizeWebhookRequest, verifyWebhookChallenge } from "./channels/whatsapp/signature.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
+import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
@@ -12,6 +13,13 @@ export interface AppDeps extends HandleMessageDeps {
    * distingue a Meta de cualquiera que conozca la URL.
    */
   skipWebhookSignatureCheck?: boolean;
+  /**
+   * Dónde se procesa el mensaje después de haber respondido 200. Inyectable
+   * para que los tests puedan **esperar** el trabajo en vuelo (`idle()`) en
+   * vez de dormir un rato y cruzar los dedos. Si no se pasa, cada listener
+   * crea la suya — nunca una global, que se filtraría entre tests.
+   */
+  backgroundQueue?: BackgroundQueue;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -34,17 +42,25 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  * credenciales reales.
  */
 export function createRequestListener(deps: AppDeps): RequestListener {
+  const queue = deps.backgroundQueue ?? new SerialConversationQueue();
   return async (req, res) => {
     try {
-      await route(req, res, deps);
+      await route(req, res, deps, queue);
     } catch (error) {
       console.error("Error manejando request:", error);
+      // Con el ACK adelantado, para cuando algo falla acá la respuesta ya salió
+      // en el camino feliz. El guard de headersSent deja de ser una formalidad.
       if (!res.headersSent) sendJson(res, 500, { error: "internal_error" });
     }
   };
 }
 
-async function route(req: IncomingMessage, res: ServerResponse, deps: AppDeps): Promise<void> {
+async function route(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: AppDeps,
+  queue: BackgroundQueue
+): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") {
@@ -64,7 +80,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: AppDeps): 
   }
 
   if (req.method === "POST") {
-    await handleIncomingWebhook(req, res, deps);
+    await handleIncomingWebhook(req, res, deps, queue);
     return;
   }
 
@@ -92,7 +108,8 @@ function handleVerification(url: URL, res: ServerResponse, deps: AppDeps): void 
 async function handleIncomingWebhook(
   req: IncomingMessage,
   res: ServerResponse,
-  deps: AppDeps
+  deps: AppDeps,
+  queue: BackgroundQueue
 ): Promise<void> {
   const rawBody = await readRawBody(req);
 
@@ -135,25 +152,30 @@ async function handleIncomingWebhook(
   }
 
   const message = parseIncomingMessage(json);
-  if (message) {
-    try {
-      const result = await handleIncomingMessage(message, deps);
-      // responseText es null cuando el agente está pausado para este
-      // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
-      // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
-      if (deps.sender && result.responseText !== null) {
-        await deps.sender.sendText(message.from, result.responseText);
-        for (const mediaUrl of result.mediaUrls ?? []) {
-          await deps.sender.sendImage(message.from, mediaUrl);
-        }
-      }
-    } catch (error) {
-      // No dejamos caer el webhook por un intent sin handler todavía o un
-      // error de un tool: se loguea y no se responde nada a este mensaje.
-      console.error("Error procesando mensaje entrante:", error);
-    }
-  }
 
-  // Siempre 200 a Meta para que no reintente el webhook indefinidamente.
+  // El 200 sale ACÁ, antes de procesar. El proveedor que reenvía los webhooks
+  // corta a los 3 segundos y el camino completo (clasificar con Claude ~1.7-2.2s,
+  // tools, redactar, enviar) tarda bastante más: procesando primero nos cortaban
+  // por timeout y, peor, reintentaban mientras seguíamos procesando el original,
+  // así que el cliente podía recibir la misma respuesta dos o tres veces.
   sendJson(res, 200, { received: true });
+
+  if (!message) return;
+
+  // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
+  // procesan uno después del otro. Sin esto, al contestar rápido se pierde la
+  // serialización que antes daba de casualidad la lentitud del handler, y los
+  // stores JSON (leer-entero → mutar → escribir-entero, sin lock) se pisan.
+  queue.enqueue(message.from, async () => {
+    const result = await handleIncomingMessage(message, deps);
+    // responseText es null cuando el agente está pausado para este
+    // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
+    // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
+    if (deps.sender && result.responseText !== null) {
+      await deps.sender.sendText(message.from, result.responseText);
+      for (const mediaUrl of result.mediaUrls ?? []) {
+        await deps.sender.sendImage(message.from, mediaUrl);
+      }
+    }
+  });
 }

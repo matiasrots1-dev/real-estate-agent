@@ -1126,7 +1126,80 @@ la muda. Un pre-mortem enfocado sólo en el flag nuevo se la habría perdido:
 la pregunta útil no era "¿qué puede salir mal con esto que estoy agregando?"
 sino "¿qué otros caminos llegan al mismo estado inseguro?".
 
-## Bloque 18 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 18 — `/webhook` responde 200 primero y procesa en background
+El proveedor que reenvía los webhooks de Meta corta a los 3 segundos.
+`/webhook` procesaba todo antes de responder, y **sólo la clasificación con
+Claude tarda 1686-2241 ms** (medido contra la API real, tres mensajes), más
+la llamada MCP, la redacción con una segunda llamada a Claude, y el envío por
+Graph API. No entraba. Peor: al vencer el timeout el proveedor podía
+reintentar mientras seguíamos procesando el original, así que el cliente
+podía recibir la misma respuesta dos o tres veces.
+
+- [x] El `200 { received: true }` sale antes de procesar. El 401 por firma y
+      el 400 por JSON inválido siguen adelante del ACK: sólo se difiere el
+      procesamiento del mensaje.
+- [x] **Cola serializada por conversación desde el arranque**
+      (`backgroundQueue.ts`), no como mejora posterior. Es el único modo de
+      fallo *nuevo* que introduce el cambio: mientras el procesamiento era
+      sincrónico, el reenviador esperaba la respuesta y eso serializaba las
+      conversaciones **de casualidad**. Al contestar al toque esa protección
+      se pierde, y los stores JSON (leer-entero → mutar → escribir-entero, sin
+      lock) se pisan entre dos mensajes seguidos del mismo cliente. Ahora dos
+      mensajes del mismo teléfono corren uno después del otro; teléfonos
+      distintos siguen en paralelo.
+- [x] **Contención de errores en tres anillos**: la tarea encolada tiene su
+      `.catch` dentro de la cadena (así una tarea que falla no arrastra a la
+      siguiente de la misma conversación), el reporte de error está a su vez
+      envuelto por si el propio `onError` explota, y `server.ts` registra un
+      `process.on("unhandledRejection")` que loguea en vez de dejar morir el
+      proceso. Con el ACK adelantado ya no hay nadie esperando esas promesas,
+      y Node 24 termina el proceso ante un rechazo sin manejar.
+- [x] **Watchdog por tarea** (60 s por default). Sin él, una llamada HTTP
+      colgada dejaba la cadena de ese teléfono bloqueada **para siempre**: ese
+      cliente no recibiría respuesta nunca más y, como ya devolvimos 200,
+      nadie reintenta. Falla en silencio y sólo para una persona. El watchdog
+      no cancela el trabajo colgado (no se puede desde acá), libera la cadena
+      — o sea que en ese caso patológico puede haber dos tareas de la misma
+      conversación solapadas. Intercambio deliberado y anotado en el código.
+- [x] **Tests que esperan de verdad el trabajo en vuelo**: `queue.idle()`, en
+      loop hasta que no quede nada pendiente (un `idle()` que espera sólo las
+      cadenas existentes al entrar resuelve antes de tiempo si una tarea
+      encola más trabajo, y los tests que lo usen pasan en verde sin haber
+      esperado nada). En `app.test.ts` el fetch está encapsulado en un helper
+      `postWebhook()` que ya incluye el `idle()`, para que un test nuevo no
+      pueda olvidárselo.
+- [x] **Los tests se verificaron por mutación**, no sólo por estar en verde:
+      quitando el encadenado de la cola, el test de serialización falla con
+      `expected [ 'a', 'b' ] to deeply equal [ 'a' ]`; volviendo a esperar el
+      procesamiento antes de responder, los tres tests de ACK y orden se
+      cuelgan. Sin este paso no había forma de saber si probaban algo.
+
+### Riesgos abiertos que este bloque NO resuelve
+- [ ] **Cola durable.** Con el ACK adelantado, si el proceso muere mientras
+      procesa, el mensaje se pierde **en silencio**: ya dijimos "recibido" y
+      nadie reintenta. Antes, la caída dejaba al reenviador sin respuesta y
+      había reintento. La solución de verdad es una cola persistida —
+      **Redis ya está previsto para fase 2 en `CLAUDE.md` secc. 3 y en
+      `docker-compose.yml`**, así que no hay que introducir infraestructura
+      nueva, sólo usar la que ya está decidida.
+- [ ] **Drain del shutdown.** `server.ts` hace `httpServer.close()` y
+      `process.exit(0)` directo: un Ctrl-C descarta lo que esté en vuelo.
+      `BackgroundQueue.idle()` ya existe y es lo único que hace falta (con un
+      techo de tiempo, para no colgar el apagado). Se deja afuera a pedido
+      del dueño del repo, para no mezclar dos cambios del mismo camino.
+- [ ] **Deduplicación por `id` de mensaje de Meta.** Pendiente de que el
+      proveedor confirme si reintenta al vencer su timeout de 3 s. Ver el
+      análisis más abajo.
+
+### Pregunta que lo habría agarrado antes
+*"¿Cuánto tarda realmente este camino, medido, y cuánto tiempo me da quien
+me llama?"* — el presupuesto del proveedor (3 s) y el costo real del camino
+(dos llamadas a Claude en serie) nunca se habían puesto uno al lado del otro.
+La clasificación sola se comía hasta el 75% del presupuesto y eso no se supo
+hasta medirlo; el diseño sincrónico venía de cuando el único cliente era el
+panel de pruebas de Meta, que no tiene ese límite.
+
+## Bloque 19 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
