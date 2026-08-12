@@ -1,5 +1,9 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
-import { parseIncomingMessage } from "./channels/whatsapp/webhookPayload.js";
+import {
+  describirPayloadSinMensaje,
+  parseIncomingMessage,
+} from "./channels/whatsapp/webhookPayload.js";
+import { InMemoryWebhookMetrics, type WebhookMetrics } from "./webhookMetrics.js";
 import { authorizeWebhookRequest, verifyWebhookChallenge } from "./channels/whatsapp/signature.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
@@ -26,6 +30,11 @@ export interface AppDeps extends HandleMessageDeps {
    * si no se pasa, cada listener crea el suyo.
    */
   messageDeduplicator?: MessageDeduplicator;
+  /**
+   * Contador de qué pasó con cada POST. Inyectable para los tests; si no se
+   * pasa, cada listener crea el suyo. Se expone en `GET /health`.
+   */
+  webhookMetrics?: WebhookMetrics;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -50,9 +59,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 export function createRequestListener(deps: AppDeps): RequestListener {
   const queue = deps.backgroundQueue ?? new SerialConversationQueue();
   const dedup = deps.messageDeduplicator ?? new LruMessageDeduplicator();
+  const metrics = deps.webhookMetrics ?? new InMemoryWebhookMetrics();
   return async (req, res) => {
     try {
-      await route(req, res, deps, queue, dedup);
+      await route(req, res, deps, queue, dedup, metrics);
     } catch (error) {
       console.error("Error manejando request:", error);
       // Con el ACK adelantado, para cuando algo falla acá la respuesta ya salió
@@ -67,12 +77,16 @@ async function route(
   res: ServerResponse,
   deps: AppDeps,
   queue: BackgroundQueue,
-  dedup: MessageDeduplicator
+  dedup: MessageDeduplicator,
+  metrics: WebhookMetrics
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") {
-    sendJson(res, 200, { ok: true });
+    // El resumen va acá para poder preguntarle al sistema "¿cuántos webhooks
+    // recibí y qué pasó con cada uno?" sin depender del scrollback de una
+    // terminal que ya se cerró — que es exactamente lo que faltó el 2026-08-12.
+    sendJson(res, 200, { ok: true, webhook: metrics.resumen() });
     return;
   }
 
@@ -88,7 +102,7 @@ async function route(
   }
 
   if (req.method === "POST") {
-    await handleIncomingWebhook(req, res, deps, queue, dedup);
+    await handleIncomingWebhook(req, res, deps, queue, dedup, metrics);
     return;
   }
 
@@ -118,7 +132,8 @@ async function handleIncomingWebhook(
   res: ServerResponse,
   deps: AppDeps,
   queue: BackgroundQueue,
-  dedup: MessageDeduplicator
+  dedup: MessageDeduplicator,
+  metrics: WebhookMetrics
 ): Promise<void> {
   const rawBody = await readRawBody(req);
 
@@ -135,6 +150,13 @@ async function handleIncomingWebhook(
   // validaba, del lado nuestro no quedaba absolutamente nada para diagnosticar.
   // Nunca se loguea el body: trae teléfonos y el texto del mensaje.
   if (!auth.aceptado) {
+    metrics.registrar(
+      auth.motivo === "firma_invalida"
+        ? "rechazado_firma_invalida"
+        : auth.motivo === "firma_ausente"
+          ? "rechazado_firma_ausente"
+          : "rechazado_sin_secreto"
+    );
     console.warn(
       `[webhook] RECHAZADO (401) motivo=${auth.motivo} bytes=${rawBody.length} ` +
         `header_presente=${rawSignature !== undefined}` +
@@ -160,6 +182,10 @@ async function handleIncomingWebhook(
   try {
     json = rawBody.length > 0 ? JSON.parse(rawBody.toString("utf-8")) : {};
   } catch {
+    // Antes salía en absoluto silencio: un reenviador mandando algo mal
+    // formado era indistinguible de no recibir nada.
+    metrics.registrar("json_invalido");
+    console.warn(`[webhook] DESCARTADO (400) motivo=json_invalido bytes=${rawBody.length}`);
     res.writeHead(400);
     res.end();
     return;
@@ -174,7 +200,17 @@ async function handleIncomingWebhook(
   // así que el cliente podía recibir la misma respuesta dos o tres veces.
   sendJson(res, 200, { received: true });
 
-  if (!message) return;
+  // El punto ciego más grande de los cuatro: acá caen los webhooks de status
+  // de Meta (sent/delivered/read), que son varios por cada mensaje saliente, y
+  // los tipos de mensaje que no soportamos. Es la mayor parte del volumen y no
+  // dejaba ni una línea. `describirPayloadSinMensaje` mira sólo la FORMA del
+  // payload, nunca su contenido.
+  if (!message) {
+    const tipo = describirPayloadSinMensaje(json);
+    metrics.registrar("sin_mensaje", tipo);
+    console.log(`[webhook] sin mensaje procesable tipo=${tipo} bytes=${rawBody.length}`);
+    return;
+  }
 
   // Meta reintenta el POST cuando el webhook del proveedor devuelve un no-200,
   // y como el forward del proveedor está enganchado ANTES de su propio CRM, el
@@ -183,7 +219,12 @@ async function handleIncomingWebhook(
   //
   // Va después del 200: a un duplicado también hay que confirmarle recepción.
   // Contestarle un no-200 haría que Meta reintente todavía más.
-  if (!dedup.registrarSiEsNuevo(message.messageId)) return;
+  if (!dedup.registrarSiEsNuevo(message.messageId)) {
+    metrics.registrar("duplicado");
+    return;
+  }
+
+  metrics.registrar("procesado");
 
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la

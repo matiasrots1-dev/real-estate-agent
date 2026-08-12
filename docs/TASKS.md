@@ -1375,7 +1375,9 @@ Anotado acá porque en un diagnóstico futuro es fácil confundirlos con envíos
 del sistema y perseguir un fantasma.
 
 ### Pendiente relacionado, sin resolver
-- [ ] **Los POSTs que no son mensajes no dejan ningún rastro.** Del incidente
+- [x] **Resuelto en el Bloque 23.** Se deja el texto original abajo porque
+      explica de dónde salió el número 39.
+- [ ] ~~**Los POSTs que no son mensajes no dejan ningún rastro.**~~ Del incidente
       del Bloque 21: el proveedor midió **39 POST** en la ventana y el
       `audit_log` sólo tiene **6**. Los otros 33 salieron por alguna de las
       cuatro salidas tempranas de `app.ts` (401 por firma, 400 por JSON
@@ -1395,7 +1397,43 @@ del sistema y perseguir un fantasma.
       ninguna entrada del número del broker en el `audit_log`), pero hay que
       confirmarlo **antes** de apagar el modo silencioso.
 
-## Bloque 23 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 23 — Observabilidad del webhook: cerrar los cuatro puntos ciegos
+Para que no vuelva a haber un "39 POST y 6 respuestas" sin explicación.
+
+- [x] Contador por resultado (`webhookMetrics.ts`), con **una categoría por
+      salida** del camino POST: `procesado`, `duplicado`, `sin_mensaje`,
+      `json_invalido`, `rechazado_firma_invalida`, `rechazado_firma_ausente`,
+      `rechazado_sin_secreto`. Hay un test que verifica que **la suma de las
+      partes es el total**: ningún POST queda sin clasificar.
+- [x] Las dos salidas que eran completamente mudas (400 por JSON inválido y
+      `!message`) ahora logean.
+- [x] `describirPayloadSinMensaje()` desglosa el punto ciego más grande:
+      distingue `status` de `mensaje_tipo:image` de `payload_no_reconocido`.
+      "Me llegaron 30 statuses" y "me llegaron 30 mensajes de un tipo que no
+      soporto" son problemas opuestos y antes eran el mismo silencio. Es
+      **aditiva**: se llama sólo cuando `parseIncomingMessage` ya devolvió
+      null, así que no puede romper el parseo de un mensaje bueno.
+- [x] `GET /health` devuelve el resumen. Es lo que faltó el 2026-08-12: la
+      respuesta estaba en el scrollback de una terminal que se cerró.
+- [x] El resumen incluye **desde cuándo cuenta**. Sin eso, un reinicio hace
+      leer la ventana equivocada y se saca la conclusión de otro rato.
+- [x] Nunca se loguea el contenido ni el teléfono: el log de descartes no
+      puede convertirse en un almacén de datos personales fuera de la política
+      de retención. Con test.
+- [x] El contador vive **fuera del `audit_log`**, a propósito: el audit_log
+      audita mensajes clasificados, que es su trabajo. Un webhook de status no
+      es un mensaje y no tiene por qué ensuciar la auditoría de conversaciones
+      ni quedar sujeto a su retención.
+
+### Lo que apareció al escribir los tests
+Un body mal formado **con firma inválida** nunca llega al parse de JSON: se
+rechaza antes, porque la firma se valida sobre los bytes crudos. O sea que
+`json_invalido` sólo puede provenir de alguien que **firma bien y manda
+basura** — es una señal mucho más específica de lo que parecía (un problema
+del reenviador, no ruido de internet). El primer test estaba mal escrito por
+no tener esto en cuenta.
+
+## Bloque 24 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
