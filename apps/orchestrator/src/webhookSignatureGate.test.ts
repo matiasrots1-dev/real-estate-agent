@@ -152,15 +152,35 @@ describe("puerta de entrada de /webhook", () => {
     });
   });
 
-  // Este caso no requiere prender ningún flag y ya existía antes del bloque:
-  // sin App Secret no hay contra qué validar y todo entra igual.
   describe("sin App Secret cargado", () => {
-    it("acepta sin firma aunque el flag esté apagado, y lo dice en el log", async () => {
+    it("rechaza todo con 401 en vez de aceptarlo en silencio", async () => {
+      const baseUrl = await levantar(deps({ whatsappAppSecret: undefined }));
+
+      expect(await postear(baseUrl, {})).toBe(401);
+      expect(
+        await postear(baseUrl, { "X-Hub-Signature-256": firmar(PAYLOAD, APP_SECRET) })
+      ).toBe(401);
+    });
+
+    // El síntoma de este rechazo ("no llega nada") es idéntico al del blocker
+    // del Bloque 11, que costó días. El log tiene que decir qué hacer.
+    it("el log dice cuál es el arreglo, no sólo que rechazó", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const baseUrl = await levantar(deps({ whatsappAppSecret: undefined }));
 
+      await postear(baseUrl, {});
+
+      const linea = String(warn.mock.calls[0]?.[0]);
+      expect(linea).toContain("sin_secreto_configurado");
+      expect(linea).toContain("WHATSAPP_APP_SECRET");
+    });
+
+    it("con el flag prendido sigue aceptando: la escotilla no se rompe", async () => {
+      const baseUrl = await levantar(
+        deps({ whatsappAppSecret: undefined, skipWebhookSignatureCheck: true })
+      );
+
       expect(await postear(baseUrl, {})).toBe(200);
-      expect(String(warn.mock.calls[0]?.[0])).toContain("sin_secreto_configurado");
     });
   });
 });

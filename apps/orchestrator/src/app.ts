@@ -137,7 +137,12 @@ async function handleIncomingWebhook(
   if (!auth.aceptado) {
     console.warn(
       `[webhook] RECHAZADO (401) motivo=${auth.motivo} bytes=${rawBody.length} ` +
-        `header_presente=${rawSignature !== undefined}`
+        `header_presente=${rawSignature !== undefined}` +
+        // Este motivo tiene el mismo síntoma que el blocker del Bloque 11 ("no
+        // llega nada"), que costó días de diagnóstico. El log dice qué hacer.
+        (auth.motivo === "sin_secreto_configurado"
+          ? " -> cargá WHATSAPP_APP_SECRET en .env; se rechaza TODO hasta entonces"
+          : "")
     );
     res.writeHead(401);
     res.end();

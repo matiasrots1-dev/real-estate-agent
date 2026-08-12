@@ -8,6 +8,7 @@
 // después la tarea falle no molesta — lo que se observa es el ORDEN en que
 // arrancan, y la cola contiene el error.
 
+import { createHmac } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,14 @@ import type { IntentClassification } from "./agent/classifier.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const catalog = loadCatalog(path.resolve(__dirname, "../../..", "docs/intent_catalog.yaml"));
+
+// Los POSTs van firmados como los manda Meta. Estos tests no son sobre la
+// firma, pero desde que un `.env` sin App Secret hace rechazar todo, mandar
+// sin firmar los haría fallar por una razón ajena a lo que prueban.
+const APP_SECRET = "test-app-secret";
+function firmar(body: string): string {
+  return `sha256=${createHmac("sha256", APP_SECRET).update(body).digest("hex")}`;
+}
 
 function payload(from: string, text: string): string {
   return JSON.stringify({
@@ -84,7 +93,7 @@ async function levantar(
         return { intentId: "no_existe_en_el_catalogo", confidence: 1 };
       },
     },
-    whatsappAppSecret: undefined,
+    whatsappAppSecret: APP_SECRET,
     backgroundQueue: queue,
   } as unknown as AppDeps;
 
@@ -97,10 +106,11 @@ async function levantar(
 }
 
 function postear(baseUrl: string, from: string, texto: string): Promise<Response> {
+  const body = payload(from, texto);
   return fetch(`${baseUrl}/webhook`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: payload(from, texto),
+    headers: { "Content-Type": "application/json", "X-Hub-Signature-256": firmar(body) },
+    body,
   });
 }
 
@@ -130,10 +140,11 @@ describe("/webhook responde antes de procesar", () => {
 
   it("un payload sin mensajes no encola nada", async () => {
     const { baseUrl, queue } = await levantar();
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
     const res = await fetch(`${baseUrl}/webhook`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ object: "whatsapp_business_account", entry: [] }),
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": firmar(body) },
+      body,
     });
 
     expect(res.status).toBe(200);
@@ -142,10 +153,11 @@ describe("/webhook responde antes de procesar", () => {
 
   it("el JSON inválido sigue devolviendo 400 y no encola", async () => {
     const { baseUrl, queue } = await levantar();
+    const body = "{ esto no es json";
     const res = await fetch(`${baseUrl}/webhook`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{ esto no es json",
+      headers: { "Content-Type": "application/json", "X-Hub-Signature-256": firmar(body) },
+      body,
     });
 
     expect(res.status).toBe(400);

@@ -31,9 +31,8 @@ export function verifyWebhookSignature(
  */
 export type WebhookAuthOutcome =
   | { aceptado: true; motivo: "firma_valida" }
-  | { aceptado: true; motivo: "sin_secreto_configurado" }
   | { aceptado: true; motivo: "validacion_salteada_por_flag" }
-  | { aceptado: false; motivo: "firma_ausente" | "firma_invalida" };
+  | { aceptado: false; motivo: "firma_ausente" | "firma_invalida" | "sin_secreto_configurado" };
 
 export interface WebhookAuthOptions {
   rawBody: Buffer;
@@ -62,8 +61,14 @@ export function authorizeWebhookRequest(options: WebhookAuthOptions): WebhookAut
     return { aceptado: true, motivo: "validacion_salteada_por_flag" };
   }
 
+  // Sin App Secret no hay nada contra qué validar, así que se RECHAZA. Antes
+  // se aceptaba: era la segunda forma de quedar sin verificación de firma, no
+  // requería prender ningún flag y era completamente silenciosa — bastaba con
+  // que la variable estuviera vacía. Desactivar la validación tiene que ser un
+  // acto deliberado (el flag de arriba), nunca el resultado de un `.env`
+  // incompleto.
   if (!options.appSecret) {
-    return { aceptado: true, motivo: "sin_secreto_configurado" };
+    return { aceptado: false, motivo: "sin_secreto_configurado" };
   }
 
   if (!options.signatureHeader) {
