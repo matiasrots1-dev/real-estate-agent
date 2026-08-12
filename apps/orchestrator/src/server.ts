@@ -24,6 +24,7 @@ import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
 import { WeatherMcpClient } from "./mcp/weatherMcpClient.js";
 import { GraphApiWhatsAppSender } from "./channels/whatsapp/sender.js";
+import { SilentModeSender } from "./channels/whatsapp/silentModeSender.js";
 import { createRequestListener } from "./app.js";
 import { Scheduler } from "./jobs/scheduler.js";
 import { createReminderJob } from "./jobs/reminders.js";
@@ -68,13 +69,48 @@ async function main() {
   const weather = new WeatherMcpClient({ entryPath: config.mcpWeather.entryPath, cwd: config.mcpWeather.cwd });
   await Promise.all([tokko.connect(), gcal.connect(), weather.connect()]);
 
-  const sender =
+  const senderReal =
     config.whatsapp.phoneNumberId && config.whatsapp.accessToken
       ? new GraphApiWhatsAppSender(config.whatsapp.phoneNumberId, config.whatsapp.accessToken)
       : undefined;
+
+  // En modo silencioso el sender queda envuelto: cualquier envío que no vaya
+  // al broker se bloquea acá, venga del webhook, de un job o de donde sea.
+  // Es la segunda línea — la primera es que handleIncomingMessage no devuelve
+  // texto para el cliente y los jobs de mensajería ni se registran.
+  const sender =
+    senderReal && config.modoSilencioso
+      ? new SilentModeSender(senderReal, config.whatsapp.brokerWhatsappNumber)
+      : senderReal;
   if (!sender) {
     console.warn(
       "WHATSAPP_PHONE_NUMBER_ID/WHATSAPP_ACCESS_TOKEN no configurados: las respuestas se procesan y auditan pero no se envían por WhatsApp."
+    );
+  }
+
+  // Ruidoso en las DOS direcciones. El aviso que importa no es el del modo
+  // silencioso: es el de que está apagado, porque ahí el agente le contesta
+  // solo a cualquiera que escriba.
+  if (config.modoSilencioso) {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  MODO SILENCIOSO ACTIVO — el cliente NO recibe nada      #\n" +
+        "  ############################################################\n" +
+        "  El agente recibe, clasifica y te manda el borrador a vos, pero no\n" +
+        "  le responde nada al cliente. Los jobs de mensajería (recordatorios,\n" +
+        "  recontacto, seguimiento) NO se registran.\n" +
+        "  Para operar de verdad: AGENTE_MODO_SILENCIOSO=false en .env.\n"
+    );
+  } else {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  MODO SILENCIOSO APAGADO — el agente RESPONDE SOLO       #\n" +
+        "  ############################################################\n" +
+        "  Todo mensaje entrante, de quien sea, va a recibir una respuesta\n" +
+        "  automática sin que vos intervengas. Verificá que la línea conectada\n" +
+        "  sea la que querés (docs/TASKS.md Bloque 21).\n"
     );
   }
 
@@ -118,6 +154,7 @@ async function main() {
     sender,
     brokerNotifier,
     brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
+    modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     whatsappAppSecret: config.whatsapp.appSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,
@@ -157,7 +194,11 @@ async function main() {
   });
 
   const scheduler = new Scheduler({ intervalMs: config.schedulerIntervalMs });
-  if (sender) {
+  // En modo silencioso los jobs de mensajería no se registran, en vez de
+  // dejar que el sender les bloquee los envíos: si los dejáramos correr,
+  // marcarían el estado ("a este lead ya lo recontacté") sin haber mandado
+  // nada, y al apagar el modo silencioso ese lead no se contactaría nunca.
+  if (sender && !config.modoSilencioso) {
     scheduler.register(
       createReminderJob({
         catalog,
@@ -192,7 +233,9 @@ async function main() {
     );
   } else {
     console.warn(
-      "Jobs de mensajería (recordatorios, recontacto, seguimiento) sin registrar: no hay WhatsAppSender configurado."
+      `Jobs de mensajería (recordatorios, recontacto, seguimiento) sin registrar: ${
+        config.modoSilencioso ? "modo silencioso activo" : "no hay WhatsAppSender configurado"
+      }.`
     );
   }
 

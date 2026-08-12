@@ -55,6 +55,10 @@ export class NotImplementedIntentError extends Error {
   }
 }
 
+/** Motivo que se registra en el audit log y se le manda al broker en modo silencioso. */
+const MOTIVO_SILENCIOSO =
+  "Modo silencioso activo: el cliente NO recibió respuesta. Este borrador es para que respondas vos a mano.";
+
 export interface HandleMessageDeps {
   catalog: IntentCatalog;
   classifier: IntentClassifier;
@@ -82,6 +86,16 @@ export interface HandleMessageDeps {
   brokerWhatsappNumber?: string;
   /** Sin esto, broker_accion_directa igual arma el plan pero las acciones de whatsapp del plan fallan (best-effort). */
   sender?: WhatsAppSender;
+  /**
+   * Modo silencioso (docs/TASKS.md Bloque 21): se recibe, se clasifica y se le
+   * manda **siempre** el borrador al broker, pero al cliente **no se le
+   * responde nada**. Prendido por default.
+   *
+   * No es lo mismo que la pausa del Bloque 9: la pausa corta antes de
+   * clasificar y no notifica a nadie. Acá el trabajo se hace completo, lo
+   * único que no ocurre es el envío al cliente.
+   */
+  modoSilencioso?: boolean;
 }
 
 export interface HandleMessageResult {
@@ -315,6 +329,18 @@ async function finalizeNonEscalating(
   responseText: string,
   mediaUrls?: string[]
 ): Promise<HandleMessageResult> {
+  // Modo silencioso: el cliente no recibe nada, pero el broker sí tiene que
+  // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
+  // que el problema que el modo silencioso vino a resolver.
+  if (deps.modoSilencioso) {
+    await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO);
+    // `responseSent: undefined` a propósito: no se envió nada, y el audit log
+    // no puede decir lo contrario. Es el registro que se usa para reconstruir
+    // qué recibió cada persona.
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, undefined, MOTIVO_SILENCIOSO, undefined);
+    return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: false };
+  }
+
   await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, undefined, undefined, responseText);
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: false, mediaUrls };
 }
@@ -330,6 +356,12 @@ async function finalizeEscalation(
   reason: string | undefined
 ): Promise<HandleMessageResult> {
   await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
+  if (deps.modoSilencioso) {
+    // Ya escalaba y ya notificaba al broker; lo único que cambia es que la
+    // plantilla de espera tampoco sale.
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, undefined);
+    return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
+  }
   await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, responseText);
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: true };
 }

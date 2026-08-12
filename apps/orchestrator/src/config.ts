@@ -71,6 +71,19 @@ export interface OrchestratorConfig {
    * sí (eso lo devuelve weather.get_forecast), solo la ubicación a
    * consultar cuando no hay una más precisa.
    */
+  /**
+   * Modo silencioso (docs/TASKS.md Bloque 21): el agente recibe, clasifica y
+   * le manda el borrador al broker, pero **no le responde nada al cliente**.
+   *
+   * **Default `true`, a diferencia de todos los demás flags del proyecto.** Los
+   * dos errores no son simétricos: silencioso cuando lo querías activo
+   * significa que al broker le llegan los borradores y responde a mano —
+   * molesto, y se nota en el acto. Activo cuando lo querías silencioso
+   * significa mandarle mensajes de un bot a personas reales, y eso no se
+   * deshace. Ya pasó una vez (2026-08-12). Se apaga sólo con el string exacto
+   * `"false"`.
+   */
+  modoSilencioso: boolean;
   defaultLat: number;
   defaultLng: number;
   /** Cada cuánto corre el scheduler de jobs (recordatorios, etc). Ver jobs/scheduler.ts. */
@@ -135,6 +148,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
         : 24,
       borradoHabilitado: env.RETENTION_BORRADO_HABILITADO === "true",
     },
+    // Invertido respecto de los demás flags a propósito: acá el valor seguro
+    // es el `true`, así que cualquier cosa que no sea exactamente "false"
+    // (incluido un typo, un "0" o la variable vacía) deja el modo PRENDIDO.
+    modoSilencioso: env.AGENTE_MODO_SILENCIOSO !== "false",
     defaultLat: env.DEFAULT_LAT ? Number(env.DEFAULT_LAT) : -34.6037,
     defaultLng: env.DEFAULT_LNG ? Number(env.DEFAULT_LNG) : -58.3816,
     schedulerIntervalMs: env.SCHEDULER_INTERVAL_MS ? Number(env.SCHEDULER_INTERVAL_MS) : 5 * 60 * 1000,

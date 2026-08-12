@@ -1268,7 +1268,77 @@ latencia lo toca. Es la misma forma de error que el obituario del Bloque 12
 encajaba con los hechos conocidos y por eso no se buscó confirmarla — y la
 confirmación, cuando llegó, la contradijo.
 
-## Bloque 20 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 21 — Modo silencioso (después del incidente del 2026-08-12)
+
+### El incidente
+Al activarse el reenvío del proveedor entraron mensajes de **personas
+reales** y el agente les respondió solo. Ventana: 13:08:17 → 13:10:46 UTC,
+dos minutos y medio, tres números (uno de ellos el del propio proveedor
+probando). Uno de los contactos recibió **cuatro** respuestas automáticas a
+una conversación personal.
+
+Qué salvó que no fuera peor: los seis mensajes cayeron en
+`fallback_low_confidence` (0.05–0.15), así que la política de escalamiento
+actuó — plantilla de espera y escalar, **sin llamar a ningún tool**. Los seis
+tienen `toolsCalled: []`, o sea que **no salió ni un dato de propiedad del
+mock**. No se agendó nada. Si esos mensajes hubieran clasificado con
+confianza alta, habrían salido precios y direcciones inventados.
+
+Los registros de los dos contactos reales se borraron del `audit_log` y de
+`last_interaction` a pedido del dueño del repo: no son leads, y no
+correspondía que les arrancara el reloj de retención de 24 meses.
+
+### La causa
+No había ningún estado intermedio entre "el agente no está conectado" y "el
+agente le contesta solo a cualquiera que escriba". El proyecto se construyó
+entero asumiendo que la conexión de una línea real iba a ser un acto
+deliberado y controlado, y el modo por default era responder.
+
+- [x] `AGENTE_MODO_SILENCIOSO`, **prendido por default**. Único flag del
+      proyecto cuyo valor seguro es `true`: se apaga sólo con el string exacto
+      `"false"`, cualquier otra cosa lo deja prendido. La asimetría es el
+      argumento — silencioso cuando lo querías activo significa que al broker
+      le llegan los borradores y responde a mano (molesto, y se nota en el
+      acto); activo cuando lo querías silencioso es esto, y no se deshace.
+- [x] **El filtro vive en el sender** (`SilentModeSender`), no en el llamador.
+      Los mensajes a clientes salen del webhook, de los tres jobs del
+      scheduler y de `broker_accion_directa`; un `if` por llamador deja afuera
+      al que se escriba mañana. El decorador bloquea `sendText`, `sendImage` y
+      `sendTemplate` hacia cualquier destino que no sea el broker, y **sin
+      número de broker configurado no deja pasar nada** (falla cerrado).
+- [x] **El broker recibe el borrador SIEMPRE**, escale o no el intent. Sin
+      esto el modo silencioso sería peor que el problema: el cliente sin
+      respuesta y nadie enterado de que escribió.
+- [x] **Los jobs de mensajería no se registran** en modo silencioso, en vez de
+      dejar que el sender les bloquee los envíos: si corrieran, marcarían el
+      estado ("a este lead ya lo recontacté") sin haber mandado nada, y al
+      apagar el modo ese lead no se contactaría nunca.
+- [x] **El audit log dice la verdad**: en modo silencioso `responseSent` queda
+      `undefined`, porque no se envió nada. Es el registro que se usa para
+      reconstruir un incidente — si dijera que se mandó algo que no se mandó,
+      el próximo informe saldría mal. Este incidente se reconstruyó con él.
+- [x] Aviso ruidoso al arrancar en **las dos direcciones**. El que importa no
+      es el del modo activo: es el de que está apagado.
+- [x] Verificado por mutación: neutralizando la rama del modo silencioso,
+      fallan 4 tests (`expected 'respuesta para el cliente' to be null`,
+      `expected [] to have a length of 1`).
+
+### Riesgo abierto
+- [ ] El modo silencioso **no impide recibir ni clasificar**, o sea que cada
+      mensaje de un desconocido sigue gastando llamadas a Claude y quedando
+      en el audit log. Es deliberado (el broker necesita el borrador), pero si
+      se conecta una línea con volumen real conviene revisar el costo.
+
+### Pregunta que lo habría agarrado antes
+*"¿Qué pasa si esto se conecta y funciona **antes** de que yo esté listo?"* —
+todos los pre-mortems anteriores preguntaron qué pasa si algo falla. Acá no
+falló nada: el webhook entrante, que llevaba bloqueado desde el Bloque 11,
+**funcionó por primera vez**, y funcionar era el modo peligroso. Un
+componente que se destraba solo hay que tratarlo como un despliegue: la
+pregunta no es sólo "¿qué se rompe?" sino "¿qué se enciende, y hacia quién
+apunta cuando lo haga?".
+
+## Bloque 22 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
