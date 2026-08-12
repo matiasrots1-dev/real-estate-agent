@@ -40,7 +40,14 @@ function sign(body: string): string {
   return `sha256=${createHmac("sha256", APP_SECRET).update(body).digest("hex")}`;
 }
 
-function metaTextMessagePayload(from: string, text: string) {
+/**
+ * El `id` se deriva del contenido y NO es fijo a propósito: desde que hay
+ * deduplicación por message id (docs/TASKS.md Bloque 19), dos payloads
+ * distintos con el mismo `wamid` harían que el segundo se descarte como
+ * duplicado y el test fallara por una razón que no tiene nada que ver con lo
+ * que está probando.
+ */
+function metaTextMessagePayload(from: string, text: string, id = `wamid.${from}.${text.length}`) {
   return JSON.stringify({
     object: "whatsapp_business_account",
     entry: [
@@ -52,7 +59,7 @@ function metaTextMessagePayload(from: string, text: string) {
               messages: [
                 {
                   from,
-                  id: "wamid.test123",
+                  id,
                   timestamp: String(Math.floor(Date.now() / 1000)),
                   type: "text",
                   text: { body: text },

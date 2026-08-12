@@ -3,6 +3,7 @@ import { parseIncomingMessage } from "./channels/whatsapp/webhookPayload.js";
 import { authorizeWebhookRequest, verifyWebhookChallenge } from "./channels/whatsapp/signature.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
+import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup.js";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
@@ -20,6 +21,11 @@ export interface AppDeps extends HandleMessageDeps {
    * crea la suya — nunca una global, que se filtraría entre tests.
    */
   backgroundQueue?: BackgroundQueue;
+  /**
+   * Filtro de mensajes ya vistos, por `id` de Meta. Inyectable para los tests;
+   * si no se pasa, cada listener crea el suyo.
+   */
+  messageDeduplicator?: MessageDeduplicator;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -43,9 +49,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  */
 export function createRequestListener(deps: AppDeps): RequestListener {
   const queue = deps.backgroundQueue ?? new SerialConversationQueue();
+  const dedup = deps.messageDeduplicator ?? new LruMessageDeduplicator();
   return async (req, res) => {
     try {
-      await route(req, res, deps, queue);
+      await route(req, res, deps, queue, dedup);
     } catch (error) {
       console.error("Error manejando request:", error);
       // Con el ACK adelantado, para cuando algo falla acá la respuesta ya salió
@@ -59,7 +66,8 @@ async function route(
   req: IncomingMessage,
   res: ServerResponse,
   deps: AppDeps,
-  queue: BackgroundQueue
+  queue: BackgroundQueue,
+  dedup: MessageDeduplicator
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -80,7 +88,7 @@ async function route(
   }
 
   if (req.method === "POST") {
-    await handleIncomingWebhook(req, res, deps, queue);
+    await handleIncomingWebhook(req, res, deps, queue, dedup);
     return;
   }
 
@@ -109,7 +117,8 @@ async function handleIncomingWebhook(
   req: IncomingMessage,
   res: ServerResponse,
   deps: AppDeps,
-  queue: BackgroundQueue
+  queue: BackgroundQueue,
+  dedup: MessageDeduplicator
 ): Promise<void> {
   const rawBody = await readRawBody(req);
 
@@ -161,6 +170,15 @@ async function handleIncomingWebhook(
   sendJson(res, 200, { received: true });
 
   if (!message) return;
+
+  // Meta reintenta el POST cuando el webhook del proveedor devuelve un no-200,
+  // y como el forward del proveedor está enganchado ANTES de su propio CRM, el
+  // reintento nos llega de nuevo con el mismo id. Sin este filtro el cliente
+  // recibe la respuesta dos veces (o las veces que Meta reintente).
+  //
+  // Va después del 200: a un duplicado también hay que confirmarle recepción.
+  // Contestarle un no-200 haría que Meta reintente todavía más.
+  if (!dedup.registrarSiEsNuevo(message.messageId)) return;
 
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la
