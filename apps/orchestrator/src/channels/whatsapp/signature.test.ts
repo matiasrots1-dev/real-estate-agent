@@ -53,17 +53,34 @@ describe("authorizeWebhookRequest", () => {
       ).toEqual({ aceptado: false, motivo: "firma_ausente" });
     });
 
-    // El agujero silencioso que ya existía antes de este bloque: sin App
-    // Secret no hay contra qué validar y todo pasa igual. Se testea para que
-    // quede explícito que apagar el flag NO alcanza por sí solo.
-    it("sin App Secret acepta cualquier cosa, y el motivo lo delata", () => {
+    // Este test antes afirmaba lo contrario: sin App Secret se aceptaba todo.
+    // Era la segunda forma de quedar sin verificación de firma, no requería
+    // ningún flag y era silenciosa. Ahora rechaza — desactivar la validación
+    // tiene que ser deliberado, no la consecuencia de un `.env` incompleto.
+    it("sin App Secret RECHAZA todo, incluso una firma bien formada", () => {
       expect(
         authorizeWebhookRequest({ rawBody: body, signatureHeader: undefined, appSecret: undefined })
-      ).toEqual({ aceptado: true, motivo: "sin_secreto_configurado" });
+      ).toEqual({ aceptado: false, motivo: "sin_secreto_configurado" });
 
       expect(
         authorizeWebhookRequest({ rawBody: body, signatureHeader: firmaInvalida, appSecret: "" })
-      ).toEqual({ aceptado: true, motivo: "sin_secreto_configurado" });
+      ).toEqual({ aceptado: false, motivo: "sin_secreto_configurado" });
+
+      // Ni siquiera una firma que sería válida contra OTRO secreto: sin
+      // secreto propio no hay forma de saber que lo es.
+      expect(
+        authorizeWebhookRequest({ rawBody: body, signatureHeader: firmaValida, appSecret: "" })
+      ).toEqual({ aceptado: false, motivo: "sin_secreto_configurado" });
+    });
+
+    it("el motivo distingue 'falta el secreto' de 'la firma está mal'", () => {
+      const sinSecreto = authorizeWebhookRequest({ rawBody: body, signatureHeader: undefined, appSecret: "" });
+      const conSecreto = authorizeWebhookRequest({ rawBody: body, signatureHeader: undefined, appSecret });
+
+      // Los dos rechazan, pero se arreglan de formas distintas: uno es un
+      // `.env` incompleto, el otro es quien llama mandando mal la firma.
+      expect(sinSecreto.motivo).toBe("sin_secreto_configurado");
+      expect(conSecreto.motivo).toBe("firma_ausente");
     });
   });
 
@@ -85,6 +102,20 @@ describe("authorizeWebhookRequest", () => {
           rawBody: body,
           signatureHeader: firmaInvalida,
           appSecret,
+          skipSignatureCheck: true,
+        })
+      ).toEqual({ aceptado: true, motivo: "validacion_salteada_por_flag" });
+    });
+
+    // La escotilla tiene que seguir funcionando aunque no haya secreto: es
+    // justamente el escenario para el que existe (un reenviador que no puede
+    // firmar). El flag se evalúa antes que el chequeo del secreto.
+    it("sigue aceptando sin App Secret: el flag manda", () => {
+      expect(
+        authorizeWebhookRequest({
+          rawBody: body,
+          signatureHeader: undefined,
+          appSecret: undefined,
           skipSignatureCheck: true,
         })
       ).toEqual({ aceptado: true, motivo: "validacion_salteada_por_flag" });

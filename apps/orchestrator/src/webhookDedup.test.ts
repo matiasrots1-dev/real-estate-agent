@@ -7,6 +7,7 @@
 // forward está enganchado antes de su CRM. Si el CRM devuelve un no-200, Meta
 // reintenta el POST y el forward se dispara otra vez con el MISMO wamid.
 
+import { createHmac } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,13 @@ import type { IntentClassification } from "./agent/classifier.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const catalog = loadCatalog(path.resolve(__dirname, "../../..", "docs/intent_catalog.yaml"));
+
+// Firmados como los manda Meta: sin App Secret el webhook rechaza todo, y
+// estos tests fallarían por una razón que no tiene que ver con la dedup.
+const APP_SECRET = "test-app-secret";
+function firmar(body: string): string {
+  return `sha256=${createHmac("sha256", APP_SECRET).update(body).digest("hex")}`;
+}
 
 function payload(from: string, text: string, wamid: string): string {
   return JSON.stringify({
@@ -73,6 +81,7 @@ async function levantar(capacidad?: number): Promise<Banco> {
         return { intentId: "no_existe_en_el_catalogo", confidence: 1 };
       },
     },
+    whatsappAppSecret: APP_SECRET,
     backgroundQueue: queue,
     messageDeduplicator: dedup,
   } as unknown as AppDeps;
@@ -86,10 +95,11 @@ async function levantar(capacidad?: number): Promise<Banco> {
 }
 
 function postear(baseUrl: string, from: string, texto: string, wamid: string): Promise<Response> {
+  const body = payload(from, texto, wamid);
   return fetch(`${baseUrl}/webhook`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: payload(from, texto, wamid),
+    headers: { "Content-Type": "application/json", "X-Hub-Signature-256": firmar(body) },
+    body,
   });
 }
 

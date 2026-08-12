@@ -1338,7 +1338,64 @@ componente que se destraba solo hay que tratarlo como un despliegue: la
 pregunta no es sólo "¿qué se rompe?" sino "¿qué se enciende, y hacia quién
 apunta cuando lo haga?".
 
-## Bloque 22 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 22 — Rechazo duro cuando falta `WHATSAPP_APP_SECRET`
+Cerrado el hallazgo lateral del bloque del flag de firma. Antes,
+`authorizeWebhookRequest` devolvía `aceptado: true` con motivo
+`sin_secreto_configurado`: era la **segunda** forma de quedar sin verificación
+de firma, no requería prender ningún flag, y bastaba con que la variable
+estuviera vacía. Ahora rechaza con 401.
+
+- [x] Desactivar la validación pasa a ser un acto deliberado (el flag
+      `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`), nunca la consecuencia de un
+      `.env` incompleto.
+- [x] El flag se evalúa **antes** que el chequeo del secreto, así que la
+      escotilla del proveedor sigue funcionando sin App Secret. Con test.
+- [x] El motivo distingue `sin_secreto_configurado` de `firma_ausente`: se
+      arreglan de formas distintas (un `.env` incompleto vs. quien llama
+      mandando mal la firma). El log del rechazo dice cuál es el arreglo, no
+      sólo que rechazó — este fallo tiene **el mismo síntoma que el blocker
+      del Bloque 11** ("no llega nada"), que costó días.
+
+### Lo que el pre-mortem subestimó
+Se anticipó que habría "un test que afirma que sin secreto se acepta". Eran
+**13 tests en dos archivos**: los harnesses de `webhookAckPrimero.test.ts` y
+`webhookDedup.test.ts` no configuraban App Secret y dependían *implícitamente*
+de que sin secreto todo pasara. No lo declaraban en ningún lado — se apoyaban
+en el agujero sin saberlo. Se arreglaron **firmando los POSTs de verdad**, que
+además los acerca a producción, en vez de prenderles el flag de escape.
+
+Lección para el próximo cambio de este tipo: buscar quién *depende* del
+comportamiento viejo no es lo mismo que buscar quién lo *afirma*. Lo primero
+es un `grep` que no existe; hay que dejar que la suite lo diga.
+
+### Anotación operativa: el espejo de coexistencia
+Los mensajes **salientes** que el proveedor ve en sus métricas los manda el
+broker desde su celular, **no el agente**. Es el espejo de coexistencia.
+Anotado acá porque en un diagnóstico futuro es fácil confundirlos con envíos
+del sistema y perseguir un fantasma.
+
+### Pendiente relacionado, sin resolver
+- [ ] **Los POSTs que no son mensajes no dejan ningún rastro.** Del incidente
+      del Bloque 21: el proveedor midió **39 POST** en la ventana y el
+      `audit_log` sólo tiene **6**. Los otros 33 salieron por alguna de las
+      cuatro salidas tempranas de `app.ts` (401 por firma, 400 por JSON
+      inválido, `!message` — statuses/tipos no-texto/echos —, y descarte por
+      dedup) y **ninguna de las cuatro audita**; dos ni siquiera loguean.
+      La hipótesis que mejor encaja: 12 salientes (6 del broker + 6 del
+      agente) × ~3 webhooks de status cada uno ≈ 33. **Sin confirmar** — hay
+      que pedirle al proveedor el desglose por tipo de payload, o instrumentar
+      un contador por motivo de salida. Mientras tanto, la pregunta "¿cuántos
+      webhooks recibí y qué pasó con cada uno?" no tiene respuesta desde
+      adentro del sistema.
+- [ ] **Verificar si el espejo de coexistencia manda los salientes como
+      `messages`** y no sólo como `statuses`. Si lo hiciera, el parser los
+      tomaría como entrantes y, al venir del número del broker, caerían en el
+      canal `broker`: el agente interpretaría lo que el broker le escribe a un
+      cliente como una orden dirigida a él. En el incidente no pasó (no hay
+      ninguna entrada del número del broker en el `audit_log`), pero hay que
+      confirmarlo **antes** de apagar el modo silencioso.
+
+## Bloque 23 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

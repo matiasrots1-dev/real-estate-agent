@@ -180,11 +180,14 @@ async function main() {
     console.warn(
       "\n" +
         "  ############################################################\n" +
-        "  #  INSEGURO: WHATSAPP_APP_SECRET vacío                     #\n" +
+        "  #  WHATSAPP_APP_SECRET vacío: /webhook RECHAZA TODO        #\n" +
         "  ############################################################\n" +
-        "  Sin App Secret no hay nada contra qué validar la firma, así que\n" +
-        "  /webhook acepta cualquier POST igual que si el flag estuviera\n" +
-        "  prendido. Cargá WHATSAPP_APP_SECRET en .env.\n"
+        "  Sin App Secret no hay contra qué validar la firma, así que todo\n" +
+        "  POST entrante se responde 401 y NO se procesa. No es un fallo\n" +
+        "  silencioso: cada rechazo queda logueado con el motivo.\n" +
+        "  Cargá WHATSAPP_APP_SECRET en .env. (Si necesitás recibir sin firma\n" +
+        "  para una prueba puntual, está WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK,\n" +
+        "  pero eso abre el endpoint a cualquiera — ver docs/TASKS.md.)\n"
     );
   }
 
