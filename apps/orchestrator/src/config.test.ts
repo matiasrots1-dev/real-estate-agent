@@ -22,3 +22,24 @@ describe("loadConfigFromEnv — flag de firma del webhook", () => {
     }
   );
 });
+
+describe("loadConfigFromEnv — modo silencioso", () => {
+  // Es el único flag del proyecto cuyo default es `true`. La asimetría:
+  // silencioso cuando lo querías activo = te llegan los borradores y respondés
+  // a mano, y te enterás en el acto. Activo cuando lo querías silencioso =
+  // mensajes de un bot a personas reales, y no se deshace (2026-08-12).
+  it("viene PRENDIDO cuando la variable no está", () => {
+    expect(loadConfigFromEnv({}).modoSilencioso).toBe(true);
+  });
+
+  it('se apaga sólo con el string exacto "false"', () => {
+    expect(loadConfigFromEnv({ AGENTE_MODO_SILENCIOSO: "false" }).modoSilencioso).toBe(false);
+  });
+
+  it.each(["", "0", "no", "FALSE", "False", "true", " false", "apagado"])(
+    "queda prendido con el valor %o",
+    (valor) => {
+      expect(loadConfigFromEnv({ AGENTE_MODO_SILENCIOSO: valor }).modoSilencioso).toBe(true);
+    }
+  );
+});
