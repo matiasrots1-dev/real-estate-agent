@@ -42,6 +42,64 @@ export interface IncomingWhatsAppMessage {
  * mensaje de texto (ej. es un status update, o un tipo de mensaje no
  * soportado todavía).
  */
+const DescriptorSchema = z.object({
+  entry: z
+    .array(
+      z.object({
+        changes: z
+          .array(
+            z.object({
+              field: z.string().optional(),
+              value: z
+                .object({
+                  statuses: z.array(z.unknown()).optional(),
+                  messages: z.array(z.object({ type: z.string().optional() }).passthrough()).optional(),
+                })
+                .passthrough()
+                .optional(),
+            })
+          )
+          .optional(),
+      })
+    )
+    .optional(),
+});
+
+/**
+ * Etiqueta corta de POR QUÉ un payload no produjo un mensaje procesable.
+ *
+ * Sólo se llama cuando `parseIncomingMessage` devolvió null, y es
+ * deliberadamente **aditiva**: no toca el camino de parseo real, así que no
+ * puede romper el procesamiento de un mensaje bueno. Su única función es que
+ * el contador pueda distinguir "me llegaron 30 statuses" de "me llegaron 30
+ * mensajes de un tipo que no soporto", que son problemas opuestos.
+ *
+ * Nunca devuelve contenido del mensaje: sólo la forma del payload.
+ */
+export function describirPayloadSinMensaje(rawBody: unknown): string {
+  const parsed = DescriptorSchema.safeParse(rawBody);
+  if (!parsed.success || !parsed.data.entry) return "payload_no_reconocido";
+
+  const tipos: string[] = [];
+  let huboStatuses = false;
+  let huboChanges = false;
+
+  for (const entry of parsed.data.entry) {
+    for (const change of entry.changes ?? []) {
+      huboChanges = true;
+      if (change.value?.statuses?.length) huboStatuses = true;
+      for (const mensaje of change.value?.messages ?? []) {
+        tipos.push(mensaje.type ?? "sin_tipo");
+      }
+    }
+  }
+
+  if (tipos.length > 0) return `mensaje_tipo:${[...new Set(tipos)].sort().join("+")}`;
+  if (huboStatuses) return "status";
+  if (huboChanges) return "change_sin_mensajes_ni_status";
+  return "entry_vacio";
+}
+
 export function parseIncomingMessage(rawBody: unknown): IncomingWhatsAppMessage | null {
   const payload = WhatsAppWebhookPayloadSchema.safeParse(rawBody);
   if (!payload.success) return null;
