@@ -14,6 +14,13 @@ export interface OrchestratorConfig {
   whatsapp: {
     webhookVerifyToken?: string;
     appSecret?: string;
+    /**
+     * Secreto compartido con el proveedor que reenvia los webhooks
+     * (header `X-DoubleTick-Secret`). Convive con la HMAC de Meta: si el
+     * header no viene, se valida la firma como siempre. Vacio = no
+     * configurado, y el header se ignora.
+     */
+    providerSecret?: string;
     accessToken?: string;
     phoneNumberId?: string;
     brokerWhatsappNumber?: string;
@@ -104,6 +111,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
     whatsapp: {
       webhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
       appSecret: env.WHATSAPP_APP_SECRET,
+      providerSecret: env.DOUBLETICK_WEBHOOK_SECRET,
       accessToken: env.WHATSAPP_ACCESS_TOKEN,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID,
       brokerWhatsappNumber: env.BROKER_WHATSAPP_NUMBER,

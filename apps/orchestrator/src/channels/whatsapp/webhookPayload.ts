@@ -54,6 +54,7 @@ const DescriptorSchema = z.object({
                 .object({
                   statuses: z.array(z.unknown()).optional(),
                   messages: z.array(z.object({ type: z.string().optional() }).passthrough()).optional(),
+                  message_echoes: z.array(z.unknown()).optional(),
                 })
                 .passthrough()
                 .optional(),
@@ -64,6 +65,45 @@ const DescriptorSchema = z.object({
     )
     .optional(),
 });
+
+/** Cómo identifica Meta el espejo de coexistencia (confirmado por el proveedor). */
+const CAMPO_ECO = "smb_message_echoes";
+
+/**
+ * ¿Este payload es el espejo de coexistencia — un mensaje que el broker mandó
+ * desde su propio celular, que Meta nos reenvía para mantener sincronizada la
+ * API?
+ *
+ * Se descarta **explícitamente** en vez de confiar en que no traiga
+ * `value.messages`, por recomendación del proveedor: apoyarse en la ausencia
+ * de una clave es depender de que Meta nunca cambie la forma del payload. Si
+ * algún día el eco viniera además con `messages`, el agente leería los
+ * mensajes que el broker le escribe a un cliente como órdenes dirigidas a él
+ * (vienen de su número, o sea del canal `broker`).
+ *
+ * **Nunca descarta un payload que contenga un mensaje de verdad.** Meta agrupa
+ * varios `changes` en un mismo POST, así que un eco puede viajar junto a un
+ * mensaje legítimo; en ese caso gana el mensaje. Descartar el POST entero por
+ * ver una marca de eco sería perder mensajes de clientes, que es peor que
+ * procesar un eco de más.
+ */
+export function esEcoDeCoexistencia(rawBody: unknown): boolean {
+  const parsed = DescriptorSchema.safeParse(rawBody);
+  if (!parsed.success || !parsed.data.entry) return false;
+
+  let hayMarcaDeEco = false;
+
+  for (const entry of parsed.data.entry) {
+    for (const change of entry.changes ?? []) {
+      if (change.value?.messages?.length) return false;
+      if (change.field === CAMPO_ECO || change.value?.message_echoes?.length) {
+        hayMarcaDeEco = true;
+      }
+    }
+  }
+
+  return hayMarcaDeEco;
+}
 
 /**
  * Etiqueta corta de POR QUÉ un payload no produjo un mensaje procesable.
