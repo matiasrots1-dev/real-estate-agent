@@ -1433,7 +1433,54 @@ basura** — es una señal mucho más específica de lo que parecía (un problem
 del reenviador, no ruido de internet). El primer test estaba mal escrito por
 no tener esto en cuenta.
 
-## Bloque 24 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 24 — Descarte explícito del eco + auth por header del proveedor
+
+### El eco: confirmado sobre payloads reales
+El proveedor confirmó la forma: el espejo de coexistencia llega con
+`field: "smb_message_echoes"` y el array en `value.message_echoes`, **sin**
+`value.messages`. O sea que el canal broker nunca estuvo en riesgo — el
+parser ya lo descartaba. Pero lo descartaba **por la ausencia de una clave**,
+que es depender de que Meta nunca cambie la forma del payload.
+
+- [x] `esEcoDeCoexistencia()`: descarte **explícito**, antes de parsear, con
+      categoría propia (`eco_descartado`) en el contador. Si algún día el eco
+      viniera además con `messages`, hoy el agente leería lo que el broker le
+      escribe a un cliente como una orden dirigida a él (sale de su número, o
+      sea del canal `broker`).
+- [x] **Nunca descarta un payload que contenga un mensaje real.** Meta agrupa
+      varios `changes` en un mismo POST, así que un eco puede viajar junto a
+      un mensaje legítimo; en ese caso gana el mensaje. Descartar el POST
+      entero por ver una marca de eco sería perder mensajes de clientes, que
+      es peor que procesar un eco de más. Con test de payload mixto.
+- [x] Verificado por mutación: sin el descarte explícito el eco cae en
+      `sin_mensaje` (`expected { sin_mensaje: 1 } to deeply equal
+      { eco_descartado: 1 }`) — se descartaba igual, pero sin distinguirse de
+      un status y por el motivo equivocado.
+
+### Auth por header del proveedor
+- [x] `DOUBLETICK_WEBHOOK_SECRET` valida el header `X-DoubleTick-Secret`,
+      **conviviendo** con la HMAC de Meta: el header sólo se evalúa si vino,
+      así que la entrega directa de Meta (que no lo trae) sigue entrando por
+      la firma. Test de los dos caminos con la misma configuración.
+- [x] Comparación de **tiempo constante**: un `===` sobre un secreto
+      compartido filtra por timing cuántos caracteres acertó quien lo adivina.
+- [x] **Vacío o en blanco = no configurado**, y el header se ignora por
+      completo. Sin esto, un `DOUBLETICK_WEBHOOK_SECRET=` vacío haría que un
+      header vacío matcheara y el endpoint quedaba abierto — la misma trampa
+      que el App Secret vacío del Bloque 22.
+- [x] Rechazo con motivo propio (`rechazado_secreto_proveedor`) y su categoría
+      en el contador, para distinguir "el proveedor tiene el secreto mal" de
+      "alguien está probando" de "falló la firma de Meta".
+
+### Consecuencia: se puede retirar la escotilla
+Cuando el proveedor active el header, `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`
+deja de tener razón de existir: ya no hace falta aceptar sin autenticar. Eso
+**cierra el riesgo abierto** que quedó del bloque del flag de firma.
+- [ ] Retirar el flag una vez confirmado que el header funciona en producción.
+      No se hace ahora para no quedarse sin ninguna vía si el header falla en
+      el primer intento.
+
+## Bloque 25 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

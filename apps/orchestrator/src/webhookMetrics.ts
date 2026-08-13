@@ -20,11 +20,14 @@ export type WebhookOutcome =
   | "rechazado_firma_invalida"
   | "rechazado_firma_ausente"
   | "rechazado_sin_secreto"
+  | "rechazado_secreto_proveedor"
   | "json_invalido"
   /** Payload válido pero sin mensaje de texto: statuses, tipos no soportados. */
   | "sin_mensaje"
   /** Reintento de Meta con un id ya visto. */
-  | "duplicado";
+  | "duplicado"
+  /** Espejo de coexistencia: un mensaje que el broker mando desde su celular. */
+  | "eco_descartado";
 
 export interface WebhookTally {
   /** Desde cuándo se cuenta. Sin esto, un reinicio hace leer mal la ventana. */

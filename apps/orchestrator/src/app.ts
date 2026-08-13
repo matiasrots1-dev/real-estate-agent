@@ -1,10 +1,15 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import {
   describirPayloadSinMensaje,
+  esEcoDeCoexistencia,
   parseIncomingMessage,
 } from "./channels/whatsapp/webhookPayload.js";
 import { InMemoryWebhookMetrics, type WebhookMetrics } from "./webhookMetrics.js";
-import { authorizeWebhookRequest, verifyWebhookChallenge } from "./channels/whatsapp/signature.js";
+import {
+  authorizeWebhookRequest,
+  verifyWebhookChallenge,
+  HEADER_SECRETO_PROVEEDOR,
+} from "./channels/whatsapp/signature.js";
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
 import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup.js";
@@ -12,6 +17,8 @@ import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
   whatsappAppSecret?: string;
+  /** Secreto compartido con el proveedor (header `X-DoubleTick-Secret`). */
+  webhookProviderSecret?: string;
   /**
    * Acepta webhooks sin firma HMAC. Temporal, apagado por default — ver el
    * riesgo abierto en docs/TASKS.md. Con esto prendido el endpoint no
@@ -138,10 +145,13 @@ async function handleIncomingWebhook(
   const rawBody = await readRawBody(req);
 
   const rawSignature = req.headers["x-hub-signature-256"];
+  const rawProviderSecret = req.headers[HEADER_SECRETO_PROVEEDOR];
   const auth = authorizeWebhookRequest({
     rawBody,
     signatureHeader: Array.isArray(rawSignature) ? rawSignature[0] : rawSignature,
     appSecret: deps.whatsappAppSecret,
+    providerSecretHeader: Array.isArray(rawProviderSecret) ? rawProviderSecret[0] : rawProviderSecret,
+    providerSecret: deps.webhookProviderSecret,
     skipSignatureCheck: deps.skipWebhookSignatureCheck,
   });
 
@@ -155,7 +165,9 @@ async function handleIncomingWebhook(
         ? "rechazado_firma_invalida"
         : auth.motivo === "firma_ausente"
           ? "rechazado_firma_ausente"
-          : "rechazado_sin_secreto"
+          : auth.motivo === "secreto_proveedor_invalido"
+            ? "rechazado_secreto_proveedor"
+            : "rechazado_sin_secreto"
     );
     console.warn(
       `[webhook] RECHAZADO (401) motivo=${auth.motivo} bytes=${rawBody.length} ` +
@@ -191,7 +203,15 @@ async function handleIncomingWebhook(
     return;
   }
 
-  const message = parseIncomingMessage(json);
+  // Espejo de coexistencia (`smb_message_echoes`): lo que el broker mandó
+  // desde su propio celular, que Meta nos reenvía. Se descarta ACÁ, explícito
+  // y antes de parsear, en vez de confiar en que el payload no traiga
+  // `value.messages` — apoyarse en la ausencia de una clave es depender de que
+  // Meta nunca cambie la forma. Si el eco alguna vez viniera con `messages`,
+  // como sale del número del broker caería en el canal `broker` y el agente
+  // leería lo que el broker le escribe a un cliente como una orden para él.
+  const esEco = esEcoDeCoexistencia(json);
+  const message = esEco ? null : parseIncomingMessage(json);
 
   // El 200 sale ACÁ, antes de procesar. El proveedor que reenvía los webhooks
   // corta a los 3 segundos y el camino completo (clasificar con Claude ~1.7-2.2s,
@@ -205,6 +225,12 @@ async function handleIncomingWebhook(
   // los tipos de mensaje que no soportamos. Es la mayor parte del volumen y no
   // dejaba ni una línea. `describirPayloadSinMensaje` mira sólo la FORMA del
   // payload, nunca su contenido.
+  if (esEco) {
+    metrics.registrar("eco_descartado");
+    console.log(`[webhook] eco de coexistencia descartado bytes=${rawBody.length}`);
+    return;
+  }
+
   if (!message) {
     const tipo = describirPayloadSinMensaje(json);
     metrics.registrar("sin_mensaje", tipo);

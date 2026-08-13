@@ -157,6 +157,7 @@ async function main() {
     modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     whatsappAppSecret: config.whatsapp.appSecret,
+    webhookProviderSecret: config.whatsapp.providerSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,
   });
 

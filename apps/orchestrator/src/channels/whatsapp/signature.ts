@@ -31,8 +31,36 @@ export function verifyWebhookSignature(
  */
 export type WebhookAuthOutcome =
   | { aceptado: true; motivo: "firma_valida" }
+  | { aceptado: true; motivo: "secreto_proveedor_valido" }
   | { aceptado: true; motivo: "validacion_salteada_por_flag" }
-  | { aceptado: false; motivo: "firma_ausente" | "firma_invalida" | "sin_secreto_configurado" };
+  | {
+      aceptado: false;
+      motivo:
+        | "firma_ausente"
+        | "firma_invalida"
+        | "sin_secreto_configurado"
+        | "secreto_proveedor_invalido";
+    };
+
+/** Header con el que el proveedor autentica sus reenvíos. */
+export const HEADER_SECRETO_PROVEEDOR = "x-doubletick-secret";
+
+/**
+ * Comparación de tiempo constante. Un `===` sobre un secreto compartido filtra
+ * por timing cuántos caracteres iniciales acertó quien lo está adivinando.
+ * La longitud sí se filtra, y es aceptable.
+ */
+function secretosIguales(a: string, b: string): boolean {
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+/** Vacío o sólo espacios cuenta como NO configurado (ver el pre-mortem). */
+function configurado(valor: string | undefined): valor is string {
+  return typeof valor === "string" && valor.trim() !== "";
+}
 
 export interface WebhookAuthOptions {
   rawBody: Buffer;
@@ -44,6 +72,15 @@ export interface WebhookAuthOptions {
    * intermediario que no puede firmar como Meta. Default apagado.
    */
   skipSignatureCheck?: boolean;
+  /**
+   * Valor del header `X-DoubleTick-Secret` que vino en el request, si vino.
+   */
+  providerSecretHeader?: string;
+  /**
+   * Secreto compartido con el proveedor, de `.env`. Vacío = no configurado, y
+   * entonces el header se ignora por completo.
+   */
+  providerSecret?: string;
 }
 
 /**
@@ -59,6 +96,20 @@ export function authorizeWebhookRequest(options: WebhookAuthOptions): WebhookAut
   // invisible en el log justo cuando más importa verla.
   if (options.skipSignatureCheck) {
     return { aceptado: true, motivo: "validacion_salteada_por_flag" };
+  }
+
+  // Autenticación del proveedor, ANTES de la HMAC de Meta y conviviendo con
+  // ella: el reenvío del proveedor sale de su infraestructura y no puede
+  // firmar con nuestro App Secret, pero Meta también puede entregarnos
+  // directo, y esa entrega sí viene firmada y sin este header.
+  //
+  // La convivencia está en que el header sólo se evalúa si vino: ausente cae
+  // al camino HMAC de siempre. Configurar el secreto del proveedor no rompe la
+  // entrega directa de Meta.
+  if (configurado(options.providerSecret) && options.providerSecretHeader !== undefined) {
+    return secretosIguales(options.providerSecretHeader, options.providerSecret)
+      ? { aceptado: true, motivo: "secreto_proveedor_valido" }
+      : { aceptado: false, motivo: "secreto_proveedor_invalido" };
   }
 
   // Sin App Secret no hay nada contra qué validar, así que se RECHAZA. Antes
