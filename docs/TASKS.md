@@ -1544,7 +1544,60 @@ loop que leyo todo.
       **el agente no puede contactar al 22% de la base**. No lo resuelve el
       codigo: hay que editarlos en el CRM.
 
-## Bloque 26 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 26 — RealTokkoClient
+Reemplaza al mock. Se elige por presencia de `TOKKO_API_KEY` y **se anuncia
+siempre al arrancar**: correr contra el mock creyendo que son datos reales es
+peor que no tener datos, porque el agente cita precios inventados con total
+confianza.
+
+- [x] La key va como **query param**. Con `Authorization: Token` la API
+      devuelve 200 pero con **7605** propiedades en vez de 76 — un listado que
+      no es el de esta cuenta. Usar el header habria hecho que el agente le
+      cite a los clientes propiedades de otras inmobiliarias, sin ningun error.
+- [x] **El filtro de sucursal se aplica de nuestro lado.** El del servidor no
+      funciona: `/property/?branch_id=X` devuelve 200 y todas las propiedades
+      igual, y en `/contact/` cualquier parametro inventado se ignora sin
+      error. Todas las lecturas pasan por un unico metodo privado, asi que
+      ningun metodo puede olvidarselo. `TOKKO_BRANCH_ID=94185` (moderna matias).
+- [x] **El offset avanza por lo que la API devolvio**, no por lo pedido: Tokko
+      topea la pagina en 50 aunque se pida 200. Es el mismo bug que aparecio en
+      el reporte de telefonos del Bloque 25.
+- [x] **El precio no se prioriza.** Si una propiedad esta publicada en venta y
+      en alquiler, `precio` queda sin definir y las dos operaciones viajan en
+      `operaciones`, para que el agente pregunte en vez de cotizar la que no
+      es. Validado en vivo: *Olleros al 3700* tiene alquiler USD 4000 y venta
+      USD 550000.
+- [x] Lo que no se puede mapear se descarta **avisando**, nunca en silencio: una
+      propiedad que desaparece del catalogo hace que el agente conteste "no la
+      encontre" sobre algo que si existe.
+- [x] Los leads sin telefono usable quedan fuera de `searchLeads`, para que
+      ningun job los de por contactados. `npm run tokko:telefonos` dice cuales.
+- [x] `logActivity` **falla ruidosamente** en vez de simular que escribio:
+      es la unica operacion de escritura y sigue sin confirmarse con Tokko el
+      permiso ni si hay sandbox.
+
+### Verificado en vivo contra la cuenta real
+Las 4 propiedades de la sucursal, con estado resuelto, tipo traducido,
+coordenadas presentes (el intent del clima funciona) y fotos separadas de
+planos.
+
+## Bloque 27 — Recontacto seguro (BLOQUEANTE para apagar el modo silencioso)
+Pedido explicito del dueno del repo. Con **3649 contactos contactables**, el
+job de recontacto es lo que mas riesgo tiene de todo el sistema: es el unico
+que escribe a gente que **no escribio primero**.
+
+- [ ] **Tope duro** de mensajes por corrida. Sin esto, el primer barrido puede
+      salir a contactar cientos de personas de una.
+- [ ] **Modo simulacro** por default, igual que el purgado por retencion del
+      Bloque 15: reporta a quien le escribiria y no manda nada, hasta que
+      alguien lo habilite explicitamente.
+- [ ] **Resolver a que contactos les escribe.** Los 4682 son de toda la
+      empresa; hoy `searchLeads` no distingue de quien es cada uno. Hay que
+      definir el criterio (agente asignado, etiqueta, antiguedad) antes de que
+      pueda mandar algo.
+- [ ] Recien con las tres cosas se puede evaluar apagar el modo silencioso.
+
+## Bloque 28 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
