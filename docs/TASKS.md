@@ -1480,7 +1480,71 @@ deja de tener razón de existir: ya no hace falta aceptar sin autenticar. Eso
       No se hace ahora para no quedarse sin ninguna vía si el header falla en
       el primer intento.
 
-## Bloque 25 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 25 — Normalizacion de telefonos con libphonenumber
+Decision del dueno del repo: no armar reglas por pais a mano. Argentina es de
+los peores casos y ya rompio entregas dos veces en este proyecto.
+
+- [x] `normalizarTelefono()` en `shared-types`, con `libphonenumber-js/max` y
+      region `AR` por defecto. Devuelve `paraEnviar` (E.164 **sin `+`**, lo que
+      espera la Graph API) y `paraMostrar` (formato nacional) en **campos
+      separados**: mezclarlos es lo que hace que alguien mande a la API un
+      numero con espacios.
+- [x] **No alcanza con `isValid()`.** Medido: `1155551234` (un celular cargado
+      sin el 9 y sin el 15) parsea como `FIXED_LINE` y `isValid()` devuelve
+      `true`. Pasaria el filtro y el mensaje no llegaria a ningun lado, sin
+      error visible. Se exige `getType() === "MOBILE"`.
+- [x] Se usa la build `/max`: la default no trae metadata de tipo y
+      `getType()` devuelve `undefined` siempre.
+- [x] Lo que no se puede parsear con confianza **queda fuera de los envios
+      automaticos**, mismo criterio que el estado indeterminado de una
+      propiedad.
+
+### Los que quedan afuera son visibles, no silenciosos
+`npm run tokko:telefonos` — resumen, `--lista` para ver quienes son, `--csv`
+para exportarlos. Corrida real sobre los 4682 contactos:
+
+    Contactables por WhatsApp: 3649 (77.9%)
+    NO contactables:           1033 (22.1%)
+      793  Es linea fija (o falta el 9 del celular)  <- RECUPERABLES
+      145  Sin telefono cargado
+       84  Numero incompleto o invalido
+       11  No se entiende como numero
+
+Los 793 se arreglan editandolos en Tokko. El reporte imprime nombre y telefono
+a proposito (el objetivo es ir a corregirlos) y **no escribe ningun archivo en
+el repo**: sale por consola y se va con la terminal.
+
+### El wa_id de Meta corrige la normalizacion
+- [x] `TelefonoCanonicoStore` guarda el `contacts[].wa_id` que devuelve
+      `POST /messages` — **el id canonico segun Meta**. `CanonicalizingSender`
+      lo aplica antes de enviar y lo aprende despues. La normalizacion deja de
+      depender de que acertemos las reglas de cada pais.
+- [x] **La clave es el numero al que se envio**, en E.164 sin `+`, nunca el
+      nombre ni el id de lead: una colision de clave mandaria el mensaje de un
+      cliente a otro.
+- [x] Un fallo del store **nunca impide un envio**: es exactitud, no requisito.
+- [x] Nace implementando `purgeOlderThan`: es un archivo con telefonos, o sea
+      datos personales, y no puede quedar fuera de la politica de retencion
+      (Bloque 15).
+
+### Bug encontrado al correr el reporte
+La primera version paginaba con `offset += 200`, pero **Tokko topea la pagina
+en 50 aunque se pida 200**. Leia 50 y salteaba 150: una muestra dispersa del
+25% que se presentaba como un barrido completo. Los porcentajes salian
+parecidos de casualidad; el `--lista` habria ocultado 3 de cada 4 contactos con
+problema. Ahora el offset avanza por lo que la API **devolvio**, y si no se
+pudo leer todo el reporte lo dice.
+
+**Pregunta que lo habria agarrado antes**: *"el paginado, lo verifique contra
+el total o solo confie en que el loop termina?"* — un loop que termina no es un
+loop que leyo todo.
+
+### Riesgo abierto
+- [ ] Los 793 recuperables siguen sin corregir en Tokko. Hasta que se corrijan,
+      **el agente no puede contactar al 22% de la base**. No lo resuelve el
+      codigo: hay que editarlos en el CRM.
+
+## Bloque 26 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

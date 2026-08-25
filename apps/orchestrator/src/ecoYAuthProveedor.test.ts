@@ -255,6 +255,43 @@ describe("autenticación por header del proveedor", () => {
       expect(metrics.resumen().porResultado).toEqual({ rechazado_secreto_proveedor: 1 });
     });
 
+    // Contrato con el proveedor: el nombre del header es case-insensitive
+    // porque Node normaliza los headers entrantes a minúsculas. Se fija con un
+    // test para no tener que confirmarlo en producción — perder una ventana de
+    // prueba por una mayúscula sería un costo absurdo.
+    it.each([
+      "X-DoubleTick-Secret",
+      "x-doubletick-secret",
+      "X-DOUBLETICK-SECRET",
+      "X-doubletick-Secret",
+    ])("acepta el header escrito como %s", async (nombreHeader) => {
+      const { baseUrl, queue, procesados } = await levantar({
+        webhookProviderSecret: SECRETO_PROVEEDOR,
+      });
+
+      const res = await postear(baseUrl, mensajeCliente(nombreHeader, `wamid.${nombreHeader}`), {
+        [nombreHeader]: SECRETO_PROVEEDOR,
+      });
+      await queue.idle();
+
+      expect(res.status).toBe(200);
+      expect(procesados).toEqual([nombreHeader]);
+    });
+
+    // Los guiones sí importan: no hay normalización que los arregle.
+    it.each(["XDoubleTickSecret", "X_DoubleTick_Secret", "DoubleTick-Secret"])(
+      "NO reconoce %s (los guiones y el prefijo sí importan)",
+      async (nombreHeader) => {
+        const { baseUrl } = await levantar({ webhookProviderSecret: SECRETO_PROVEEDOR });
+
+        const res = await postear(baseUrl, mensajeCliente("x", "wamid.y"), {
+          [nombreHeader]: SECRETO_PROVEEDOR,
+        });
+
+        expect(res.status).toBe(401);
+      }
+    );
+
     it("sin header y sin firma sigue rechazando", async () => {
       const { baseUrl } = await levantar({ webhookProviderSecret: SECRETO_PROVEEDOR });
 
