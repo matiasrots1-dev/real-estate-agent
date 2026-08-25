@@ -42,6 +42,13 @@ export interface AppDeps extends HandleMessageDeps {
    * pasa, cada listener crea el suyo. Se expone en `GET /health`.
    */
   webhookMetrics?: WebhookMetrics;
+  /**
+   * De dónde salen las propiedades: `real` o `mock`. Se resuelve una vez al
+   * arrancar y se expone en `GET /health`, para poder confirmarlo sin depender
+   * de un banner en la terminal — los logs de un server MCP por stdio no
+   * llegan a la consola de quien levantó el orchestrator.
+   */
+  tokkoFuente?: { fuente: string; branchId: number | null };
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -93,7 +100,7 @@ async function route(
     // El resumen va acá para poder preguntarle al sistema "¿cuántos webhooks
     // recibí y qué pasó con cada uno?" sin depender del scrollback de una
     // terminal que ya se cerró — que es exactamente lo que faltó el 2026-08-12.
-    sendJson(res, 200, { ok: true, webhook: metrics.resumen() });
+    sendJson(res, 200, { ok: true, tokko: deps.tokkoFuente ?? { fuente: "desconocido", branchId: null }, webhook: metrics.resumen() });
     return;
   }
 

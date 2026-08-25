@@ -69,6 +69,27 @@ async function main() {
   const weather = new WeatherMcpClient({ entryPath: config.mcpWeather.entryPath, cwd: config.mcpWeather.cwd });
   await Promise.all([tokko.connect(), gcal.connect(), weather.connect()]);
 
+  // Se pregunta una sola vez, al arrancar. Si falla no se cae el arranque: se
+  // reporta como desconocido, que es mas honesto que asumir cualquiera de las dos.
+  let tokkoFuente: { fuente: string; branchId: number | null };
+  try {
+    tokkoFuente = await tokko.fuenteDatos();
+  } catch (error) {
+    console.warn("No se pudo determinar la fuente de datos de Tokko:", error);
+    tokkoFuente = { fuente: "desconocido", branchId: null };
+  }
+  if (tokkoFuente.fuente === "mock") {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  TOKKO EN MOCK — las propiedades son INVENTADAS          #\n" +
+        "  ############################################################\n" +
+        "  Cargá TOKKO_API_KEY en .env. Verificalo en GET /health.\n"
+    );
+  } else {
+    console.log(`Tokko: ${tokkoFuente.fuente}` + (tokkoFuente.branchId ? ` (sucursal ${tokkoFuente.branchId})` : " — SIN filtro de sucursal"));
+  }
+
   const senderReal =
     config.whatsapp.phoneNumberId && config.whatsapp.accessToken
       ? new GraphApiWhatsAppSender(config.whatsapp.phoneNumberId, config.whatsapp.accessToken)
@@ -156,6 +177,7 @@ async function main() {
     brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
     modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
+    tokkoFuente,
     whatsappAppSecret: config.whatsapp.appSecret,
     webhookProviderSecret: config.whatsapp.providerSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,

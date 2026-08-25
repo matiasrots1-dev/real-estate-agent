@@ -54,6 +54,15 @@ export class TokkoMcpClient implements TokkoQueries {
     return this.client.close();
   }
 
+  /**
+   * Qué fuente de datos está usando el server MCP. Deliberadamente **no** está
+   * en la interfaz `TokkoQueries`: es diagnóstico, no algo con lo que el
+   * agente decida nada.
+   */
+  fuenteDatos(): Promise<{ fuente: string; branchId: number | null }> {
+    return this.client.callTool("tokko_fuente_datos", {});
+  }
+
   searchProperties(filters: TokkoPropertySearchFilters): Promise<Property[]> {
     return this.client.callTool<Property[]>("search_properties", filters);
   }
