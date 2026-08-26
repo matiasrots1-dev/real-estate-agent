@@ -29,6 +29,7 @@ import {
 } from "../apps/orchestrator/src/jobs/recontactoPolicy.js";
 import { FileUltimoContactoStore } from "../apps/orchestrator/src/agent/ultimoContactoStore.js";
 import { FileTopeDiarioStore } from "../apps/orchestrator/src/jobs/topeDiarioStore.js";
+import { NumerosInternos } from "../apps/orchestrator/src/jobs/numerosInternos.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = Object.fromEntries(
@@ -106,16 +107,50 @@ for (const c of candidatos) {
 }
 const estados = { porLead, porTelefono };
 
+// Números a los que el job NUNCA puede escribir. Tres fuentes, porque ninguna
+// alcanza sola: el .env puede tener un número viejo (de hecho lo tenía), y los
+// usuarios de Tokko no incluyen la línea de WhatsApp Business.
+//  1. la línea de WhatsApp Business, preguntándosela a Meta (es la autoridad);
+//  2. BROKER_WHATSAPP_NUMBER del .env;
+//  3. los teléfonos de todos los usuarios de la cuenta de Tokko.
+const internos = new NumerosInternos();
+internos.agregar(env.BROKER_WHATSAPP_NUMBER);
+
+if (env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID) {
+  try {
+    const r = await fetch(
+      `https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}?fields=display_phone_number`,
+      { headers: { Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}` } }
+    );
+    const j = (await r.json()) as { display_phone_number?: string };
+    if (j.display_phone_number) internos.agregar(j.display_phone_number);
+    else console.error("  AVISO: Meta no devolvió display_phone_number; la línea NO quedó excluida");
+  } catch (e) {
+    console.error("  AVISO: no se pudo consultar la línea a Meta:", e);
+  }
+} else {
+  console.error("  AVISO: sin WHATSAPP_ACCESS_TOKEN/PHONE_NUMBER_ID, la línea NO queda excluida");
+}
+
+try {
+  const r = await fetch(`${BASE}/user/?limit=100&key=${encodeURIComponent(KEY)}&format=json`);
+  const usuarios = (JSON.parse(await r.text()).objects ?? []) as Array<Record<string, unknown>>;
+  for (const u of usuarios) internos.agregar(String(u.phone ?? ""), String(u.cellphone ?? ""));
+} catch (e) {
+  console.error("  AVISO: no se pudieron leer los usuarios de Tokko:", e);
+}
+
 const topeDiario = new FileTopeDiarioStore(
   env.TOPE_DIARIO_STORE_PATH || path.join(REPO, "apps/orchestrator/data/tope_diario.json")
 );
 const ahora = new Date();
 const enviadosHoy = await topeDiario.enviadosEn(ahora);
 
-const plan = planificarRecontacto(candidatos, estados, enviadosHoy, ahora, CONFIG_POR_DEFECTO);
+const plan = planificarRecontacto(candidatos, estados, enviadosHoy, ahora, CONFIG_POR_DEFECTO, internos);
 
 console.log("");
 console.log(`Candidatos que pasan el criterio y tienen teléfono usable: ${candidatos.length}`);
+console.log(`Números internos registrados (nunca reciben): ${internos.size} formas`);
 console.log(`Ya enviados hoy: ${enviadosHoy} (tope diario: ${CONFIG_POR_DEFECTO.topePorDia})`);
 const ventana = puedeCorrer(ahora, undefined, CONFIG_POR_DEFECTO);
 console.log(

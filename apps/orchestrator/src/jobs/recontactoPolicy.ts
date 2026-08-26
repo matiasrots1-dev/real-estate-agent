@@ -41,6 +41,8 @@ export const CONFIG_POR_DEFECTO: RecontactoConfig = {
 };
 
 export type MotivoSupresion =
+  /** La linea del broker, su numero, o el telefono de un usuario de la cuenta. */
+  | "numero_interno"
   | "sin_telefono_usable"
   | "contactado_hace_poco"
   | "agotó_intentos"
@@ -178,7 +180,8 @@ export function planificarRecontacto(
   estados: EstadosDeContacto,
   enviadosHoy: number,
   ahora: Date,
-  config: RecontactoConfig = CONFIG_POR_DEFECTO
+  config: RecontactoConfig = CONFIG_POR_DEFECTO,
+  internos?: { contiene(t: string): boolean }
 ): PlanDeRecontacto {
   // El orden se fija ACÁ y no en el llamador: si lo hiciera cada llamador, el
   // simulacro y el job podrían ordenar distinto y el simulacro dejaría de
@@ -196,6 +199,20 @@ export function planificarRecontacto(
 
     if (!lead.telefonoWhatsapp) {
       suprimidos.push({ leadId: lead.id, nombre, motivo: "sin_telefono_usable" });
+      continue;
+    }
+
+    // PRIMERO de todo: la linea de WhatsApp Business del broker esta cargada
+    // como un contacto mas en el CRM y pasa el criterio. Escribirle es
+    // escribirle a la misma linea que recibe a los clientes, y ese numero le
+    // manda mensajes al sistema: puede armar un lazo.
+    if (internos?.contiene(lead.telefonoWhatsapp)) {
+      suprimidos.push({
+        leadId: lead.id,
+        nombre,
+        motivo: "numero_interno",
+        detalle: "es la linea del broker o de un usuario de la cuenta",
+      });
       continue;
     }
 
