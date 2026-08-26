@@ -293,8 +293,19 @@ precio no es un valor único.
 - **Página recomendada: 20** — documentado. Medido: `/contact/` topea en 50.
 - **Errores**: los 400 devuelven JSON con `{"error": "…"}` y un mensaje
   legible (`Invalid limit '-5' provided…`). Los 401 devuelven **cuerpo vacío**.
-- **Rate limits**: **no verificado.** No se observó throttling leyendo los 4684
-  contactos en ~94 requests seguidos, pero no se buscó el límite a propósito.
+- **Rate limits: SÍ hay, vía Cloudflare** *(verificado 2026-08-25)*. Repetir el
+  barrido completo de los 4684 contactos varias veces en pocos minutos hace que
+  la API devuelva un **desafío de Cloudflare en HTML** (`<!DOCTYPE html>… "Just
+  a moment…"`) en lugar de JSON. El parseo revienta con `Unexpected token '<'`.
+  No se buscó el umbral exacto a propósito.
+
+  **Consecuencia de diseño**: un barrido completo por corrida **no es viable
+  para un job periódico**. Con el scheduler cada 45 minutos serían ~94 requests
+  × ~30 corridas = **~2800 requests por día** sólo para elegir 3 destinatarios.
+  Alternativas, de menor a mayor cambio: usar `agent=<user_id>` del lado del
+  servidor (baja de 4684 a 1354, verificado), sumar `created_at__gte`, y sobre
+  todo **cachear la lista de candidatos** y recalcularla una vez por día en vez
+  de en cada corrida.
 - **Escritura**: **no verificado.** `logActivity` no está implementado porque
   falta confirmar con el soporte de Tokko si el plan lo permite y si hay
   ambiente de prueba.
