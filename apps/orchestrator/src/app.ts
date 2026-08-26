@@ -13,6 +13,9 @@ import {
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
 import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup.js";
+import { extraerContactosSalientes } from "./channels/whatsapp/ecoContacto.js";
+import type { UltimoContactoStore } from "./agent/ultimoContactoStore.js";
+import type { ContactosConocidos } from "./agent/contactosConocidos.js";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
@@ -49,6 +52,18 @@ export interface AppDeps extends HandleMessageDeps {
    * llegan a la consola de quien levantó el orchestrator.
    */
   tokkoFuente?: { fuente: string; branchId: number | null };
+  /**
+   * Dónde se registra que el broker contactó a alguien **a mano desde su
+   * celular**, vía el eco de coexistencia. Sin esto el sistema no se entera y
+   * puede recontactar a alguien con quien el broker habló ayer.
+   */
+  ultimoContactoStore?: UltimoContactoStore;
+  /**
+   * Filtro de privacidad del eco: sólo se registra el contacto si el
+   * destinatario ya escribió al agente alguna vez. Sin esto se armaría una
+   * base de "a quién le escribió el broker" que incluye su vida personal.
+   */
+  contactosConocidos?: ContactosConocidos;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -235,6 +250,25 @@ async function handleIncomingWebhook(
   if (esEco) {
     metrics.registrar("eco_descartado");
     console.log(`[webhook] eco de coexistencia descartado bytes=${rawBody.length}`);
+
+    // El eco se sigue descartando como mensaje entrante — el canal broker no
+    // se toca. Lo único que se aprovecha es "el broker le escribió a esta
+    // persona en este momento", que es lo que evita recontactar a alguien con
+    // quien acaba de hablar.
+    //
+    // Va al background y no acá: ya respondimos 200 y esto no puede demorar
+    // ni romper la respuesta.
+    if (deps.ultimoContactoStore && deps.contactosConocidos) {
+      const { ultimoContactoStore: store, contactosConocidos: conocidos } = deps;
+      for (const contacto of extraerContactosSalientes(json)) {
+        // Filtro de privacidad: sólo se registra si ya es un contacto del
+        // negocio. La vida personal del broker no entra al sistema.
+        if (!conocidos.conoce(contacto.telefono)) continue;
+        queue.enqueue(contacto.telefono, async () => {
+          await store.registrar(contacto.telefono, contacto.cuando, "manual");
+        });
+      }
+    }
     return;
   }
 
@@ -252,6 +286,10 @@ async function handleIncomingWebhook(
   //
   // Va después del 200: a un duplicado también hay que confirmarle recepción.
   // Contestarle un no-200 haría que Meta reintente todavía más.
+  // Quien nos escribe pasa a ser un contacto conocido: a partir de ahí, si el
+  // broker le responde desde el celular, ese contacto sí se registra.
+  deps.contactosConocidos?.agregar(message.from);
+
   if (!dedup.registrarSiEsNuevo(message.messageId)) {
     metrics.registrar("duplicado");
     return;

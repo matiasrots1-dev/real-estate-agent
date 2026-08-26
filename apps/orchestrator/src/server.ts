@@ -19,6 +19,8 @@ import { FileConversationStateStore } from "./agent/conversationStateStore.js";
 import { FileRecontactStateStore } from "./agent/recontactStateStore.js";
 import { FileGlobalPauseStore } from "./agent/globalPauseStore.js";
 import { FileLastInteractionStore } from "./agent/lastInteractionStore.js";
+import { FileUltimoContactoStore } from "./agent/ultimoContactoStore.js";
+import { ContactosConocidos } from "./agent/contactosConocidos.js";
 import { FileRetentionReportStore } from "./agent/retentionReportStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
@@ -150,6 +152,14 @@ async function main() {
   const recontactStateStore = new FileRecontactStateStore(config.recontactStateStorePath);
   const lastInteractionStore = new FileLastInteractionStore(config.lastInteractionStorePath);
   const auditLog = new FileAuditLogStore(config.auditLogPath);
+
+  // Quienes ya escribieron alguna vez. Es el filtro de privacidad del eco de
+  // coexistencia: solo se registra un contacto saliente del broker si el
+  // destinatario ya es un contacto del negocio.
+  const contactosConocidos = new ContactosConocidos();
+  await contactosConocidos.cargarDesde(auditLog);
+  const ultimoContactoStore = new FileUltimoContactoStore(config.ultimoContactoStorePath);
+  console.log(`Contactos conocidos cargados del audit log: ${contactosConocidos.size}`);
   const composer = new ClaudeResponseComposer(anthropic);
 
   const listener = createRequestListener({
@@ -178,6 +188,8 @@ async function main() {
     modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
     tokkoFuente,
+    ultimoContactoStore,
+    contactosConocidos,
     whatsappAppSecret: config.whatsapp.appSecret,
     webhookProviderSecret: config.whatsapp.providerSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,

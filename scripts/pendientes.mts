@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizarTelefono } from "shared-types";
+import { FileUltimoContactoStore } from "../apps/orchestrator/src/agent/ultimoContactoStore.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = Object.fromEntries(
@@ -144,6 +145,21 @@ function nombreDe(telefono: string): string | null {
   return null;
 }
 
+// Lo que el broker contesto A MANO desde el celular, registrado via el eco de
+// coexistencia. Sin esto, alguien a quien ya respondio sigue apareciendo como
+// pendiente: el audit log solo sabe lo que mando el sistema.
+const respondidoAMano = new Map<string, string>();
+try {
+  const store = new FileUltimoContactoStore(
+    env.ULTIMO_CONTACTO_STORE_PATH || path.join(REPO, "apps/orchestrator/data/ultimo_contacto.json")
+  );
+  for (const r of await store.all()) {
+    if (r.origen === "manual") respondidoAMano.set(r.leadId, r.contactadoAt);
+  }
+} catch {
+  // Si el archivo todavia no existe, no hay nada que cruzar.
+}
+
 const ahora = Date.now();
 function haceCuanto(iso: string): string {
   const min = Math.floor((ahora - new Date(iso).getTime()) / 60_000);
@@ -154,13 +170,22 @@ function haceCuanto(iso: string): string {
 }
 
 const lista = [...porConversacion.values()]
-  .filter((c) => todos || !c.respondida)
+  .filter((c) => todos || (!c.respondida && !respondioElBroker(c)))
   .sort((a, b) => {
     const p = prioridadDe(a.mejorIntent) - prioridadDe(b.mejorIntent);
     if (p !== 0) return p;
     // Dentro de la misma prioridad, primero el más reciente: sigue caliente.
     return b.ultimo.timestamp.localeCompare(a.ultimo.timestamp);
   });
+
+/** El broker le contesto a mano DESPUES del ultimo mensaje del cliente. */
+function respondioElBroker(c: Conversacion): boolean {
+  for (const k of clavesDe(c.id)) {
+    const cuando = respondidoAMano.get(k);
+    if (cuando && cuando > c.ultimo.timestamp) return true;
+  }
+  return false;
+}
 
 const mostrarTel = (t: string) => (masked ? "•••" + t.slice(-4) : t);
 const ETIQUETA: Record<number, string> = {
@@ -188,7 +213,7 @@ for (const c of lista) {
   console.log(`    "${texto}"`);
   console.log(
     `    ${haceCuanto(c.ultimo.timestamp)} · ${c.mejorIntent} · ${c.mensajes} ${c.mensajes === 1 ? "mensaje" : "mensajes"}` +
-      `${c.respondida ? " · YA RESPONDIDA" : ""}`
+      `${c.respondida ? " · respondida por el agente" : ""}${respondioElBroker(c) ? " · YA LE CONTESTASTE VOS" : ""}`
   );
   console.log("");
 }
