@@ -1597,7 +1597,63 @@ que escribe a gente que **no escribio primero**.
       pueda mandar algo.
 - [ ] Recien con las tres cosas se puede evaluar apagar el modo silencioso.
 
-## Bloque 28 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 28 — El catalogo de intents no resiste el trafico real (BLOQUEANTE)
+Salio de mirar las 41 conversaciones reales que entraron entre el 2026-08-25 y
+el 26, con el modo silencioso puesto. **Hay que revisarlo contra estas
+conversaciones antes de siquiera pensar en apagar el modo silencioso**: son la
+primera muestra de trafico de verdad que tiene el proyecto.
+
+Los numeros, de `npm run pendientes`:
+
+    38 conversaciones sin respuesta del agente
+      10  agendar_visita / negociacion_precio
+       5  reclamo_queja / reprogramar
+       6  consulta de precio, ficha o disponibilidad
+       2  consulta_clima_visita
+      15  fallback_low_confidence   <- 39% de las conversaciones
+
+A nivel mensaje individual es peor: **186 de 250 entradas del audit_log
+cayeron en `fallback_low_confidence`** (74%).
+
+- [ ] **Revisar el catalogo contra las 38 conversaciones reales.** El catalogo
+      se escribio para el trafico que imaginabamos, no para el que llega. Casi
+      4 de cada 10 conversaciones no matchean nada.
+- [ ] **Un caso concreto de mala clasificacion**: "Fiedotin Propiedades" quedo
+      como `reclamo_queja`. Es **otra inmobiliaria**, no un cliente enojado.
+      El catalogo no contempla que escriban colegas, portales o proveedores —
+      y con el modo silencioso apagado, a un colega le contestaria el bot.
+- [ ] **Revisar tambien los umbrales de confianza**, no solo los intents: un
+      fallback tan alto puede ser falta de intents o un umbral demasiado exigente.
+
+**Por que es bloqueante**: con el modo silencioso apagado, cada uno de esos 15
+recibe la plantilla de espera y un escalamiento. Eso es aceptable como red,
+pero no como comportamiento del 39% de las conversaciones.
+
+## Bloque 29 — Leads que llegan por WhatsApp y no quedan en el CRM
+No es un problema de codigo: es un agujero de la operacion, detectado por el
+sistema. Anotado a pedido del dueno del repo.
+
+De las 41 conversaciones que entraron, **18 no tienen ninguna ficha en Tokko**
+(23 si). O sea que **el 44% de la gente que escribe por WhatsApp no queda
+registrada en el CRM**.
+
+Entre ellos, al menos uno entro por un portal:
+
+    "Hola! Quiero que me contacten por esta propiedad en venta
+     que vi en Zonaprop..."
+
+- [ ] **Decision del dueno del repo**: que se hace con un lead que escribe y no
+      esta en Tokko. Hay al menos tres caminos y ninguno es obvio:
+      cargarlo automaticamente (requiere escritura en Tokko, que sigue sin
+      confirmarse), avisarle al broker para que lo cargue el, o dejarlo asi y
+      asumir que WhatsApp es el registro.
+- [ ] **Consecuencia que ya se nota**: todo lo que cruza contra Tokko (nombre
+      del contacto, temperatura, candidatos a recontacto) ignora al 44%. El
+      job de recontacto, por definicion, nunca los va a alcanzar.
+- [ ] Cuando el eco de coexistencia este enganchado, esto ademas se puede
+      medir en el tiempo en vez de estimarlo una vez.
+
+## Bloque 30 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

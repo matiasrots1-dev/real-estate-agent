@@ -16,7 +16,8 @@
     "prepare": "node scripts/setup-git-hooks.mjs",
     "check:sensitive-data": "node scripts/check-sensitive-data.mjs",
     "tokko:telefonos": "node scripts/reporte-telefonos.mjs",
-    "recontacto:simulacro": "tsx scripts/simulacro-recontacto.mts"
+    "recontacto:simulacro": "tsx scripts/simulacro-recontacto.mts",
+    "pendientes": "tsx scripts/pendientes.mts"
   },
   "engines": {
     "node": ">=20"
