@@ -40,8 +40,19 @@ export interface RealTokkoClientOptions {
 
 const BASE_POR_DEFECTO = "https://www.tokkobroker.com/api/v1";
 const TIMEOUT_POR_DEFECTO = 25_000;
-/** Tokko topea la página acá aunque se pida más. */
+/** Tokko topea la página acá aunque se pida más (verificado en `/contact/`). */
 const PAGINA = 50;
+
+/**
+ * Qué `order_by` acepta cada endpoint. **No es uniforme**: `/contact/` acepta
+ * `created_at`, pero el mismo valor en `/property/` devuelve HTTP 400, igual
+ * que en `/branch/` y `/user/`. Medido, no leído — ver `docs/tokko-api.md`.
+ *
+ * Un endpoint sin entrada acá se pide sin `order_by`.
+ */
+const ORDEN_POR_ENDPOINT: Record<string, string | undefined> = {
+  "/contact/": "created_at",
+};
 
 function avisarDescarte(que: string, motivo: string): void {
   // Se loguea a propósito: un registro que desaparece del catálogo en silencio
@@ -84,12 +95,17 @@ export class RealTokkoClient implements TokkoClient {
     const todos: any[] = [];
     let offset = 0;
     for (;;) {
-      // order_by fijo: sin el, el paginado sobre un dataset VIVO devuelve un
-      // subconjunto distinto en cada corrida -- un contacto nuevo corre todos
-      // los offsets y algunos registros no se leen nunca. Con created_at
-      // ascendente, lo nuevo se agrega al final y el recorrido es estable.
-      // (order_by=id devuelve HTTP 400; created_at es de los que acepta.)
-      const json = await this.pedir(ruta, { ...params, order_by: "created_at", limit: PAGINA, offset });
+      // El `order_by` estabiliza el paginado sobre un dataset VIVO: sin él, un
+      // registro nuevo corre todos los offsets y cada corrida lee un
+      // subconjunto distinto. Pero sólo se manda donde el endpoint lo acepta —
+      // en `/property/` el mismo parámetro devuelve 400.
+      const orden = ORDEN_POR_ENDPOINT[ruta];
+      const json = await this.pedir(ruta, {
+        ...params,
+        ...(orden ? { order_by: orden } : {}),
+        limit: PAGINA,
+        offset,
+      });
       const lote: any[] = json?.objects ?? [];
       todos.push(...lote);
       offset += lote.length;

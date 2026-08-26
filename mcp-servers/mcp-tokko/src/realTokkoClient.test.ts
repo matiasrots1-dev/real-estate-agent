@@ -27,10 +27,24 @@ function prop(over: Record<string, unknown> = {}) {
   };
 }
 
-/** Simula la API: pagina de a 50, como hace Tokko de verdad. */
+/**
+ * Simula la API: pagina de a 50 y **rechaza lo que Tokko rechaza**.
+ *
+ * Que el doble aceptara cualquier query param dejó pasar una regresión real:
+ * se agregó `order_by=created_at` a TODAS las llamadas y en `/property/` eso
+ * devuelve HTTP 400. Los 16 tests siguieron en verde y `searchProperties`
+ * quedó roto contra la API de verdad. Un doble más permisivo que el original
+ * no prueba compatibilidad, prueba que el doble es permisivo.
+ */
 function apiFalsa(propiedades: unknown[], contactos: unknown[] = []) {
   const impl = (async (url: string) => {
     const u = new URL(url);
+    // Medido: `/contact/` acepta order_by=created_at, `/property/` da 400.
+    const orden = u.searchParams.get("order_by");
+    const esContacto = u.pathname.includes("/contact");
+    if (orden !== null && !(esContacto && orden === "created_at")) {
+      return { ok: false, status: 400, text: async () => '{"error":"invalid order_by"}' } as Response;
+    }
     const offset = Number(u.searchParams.get("offset") ?? 0);
     const fuente = u.pathname.includes("/contact") ? contactos : propiedades;
     const lote = fuente.slice(offset, offset + 50);
