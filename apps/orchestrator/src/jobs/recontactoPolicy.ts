@@ -150,16 +150,40 @@ export function detectarDuplicados(candidatos: Lead[]): Duplicado[] {
 }
 
 /**
+ * Orden determinístico de los candidatos.
+ *
+ * Sin esto la selección no es estable: Tokko **no garantiza orden** en
+ * `/contact/?offset=N` (no hay `order_by`), así que el orden depende de cómo
+ * devuelva las páginas y de que el dataset se mueve mientras se lee. Dos
+ * corridas seguidas mostraban tres personas distintas — y una lista que
+ * cambia sola no se puede revisar antes de aprobarla.
+ *
+ * Criterio: primero los que llevan más tiempo sin respuesta (son los que más
+ * sentido tiene recontactar), y el id como desempate para que el resultado
+ * sea idéntico corrida a corrida.
+ */
+export function ordenarCandidatos(candidatos: Lead[]): Lead[] {
+  return [...candidatos].sort((a, b) => {
+    if (b.diasSinRespuesta !== a.diasSinRespuesta) return b.diasSinRespuesta - a.diasSinRespuesta;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/**
  * Arma el plan. **No manda nada ni toca ningún store**: es una función pura,
  * así que el simulacro y la ejecución real comparten exactamente esta lógica.
  */
 export function planificarRecontacto(
-  candidatos: Lead[],
+  candidatosSinOrdenar: Lead[],
   estados: EstadosDeContacto,
   enviadosHoy: number,
   ahora: Date,
   config: RecontactoConfig = CONFIG_POR_DEFECTO
 ): PlanDeRecontacto {
+  // El orden se fija ACÁ y no en el llamador: si lo hiciera cada llamador, el
+  // simulacro y el job podrían ordenar distinto y el simulacro dejaría de
+  // mostrar lo que va a pasar.
+  const candidatos = ordenarCandidatos(candidatosSinOrdenar);
   const aEnviar: Destinatario[] = [];
   const suprimidos: Suprimido[] = [];
   const duplicados = detectarDuplicados(candidatos);

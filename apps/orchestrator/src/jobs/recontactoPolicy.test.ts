@@ -4,6 +4,7 @@ import {
   CONFIG_POR_DEFECTO,
   detectarDuplicados,
   formatearReporte,
+  ordenarCandidatos,
   planificarRecontacto,
   puedeCorrer,
   type EstadoDeContacto,
@@ -326,5 +327,61 @@ describe("cuando se puede correr", () => {
 
     expect(r.puede).toBe(false);
     if (!r.puede) expect(r.motivo).toBe("fuera_de_horario");
+  });
+});
+
+describe("el orden de seleccion es estable", () => {
+  // Tokko no garantiza orden en /contact/?offset=N, y el dataset se mueve
+  // mientras se lee. Sin un orden propio, dos corridas seguidas mostraban
+  // tres personas distintas -- y una lista que cambia sola no se puede
+  // revisar antes de aprobarla.
+  it("el mismo conjunto en distinto orden produce la MISMA seleccion", () => {
+    const base = [
+      { ...lead("300"), diasSinRespuesta: 10 },
+      { ...lead("100"), diasSinRespuesta: 90 },
+      { ...lead("200"), diasSinRespuesta: 50 },
+      { ...lead("400"), diasSinRespuesta: 90 },
+    ];
+
+    const a = planificarRecontacto(base, estados([]), 0, AHORA);
+    const b = planificarRecontacto([...base].reverse(), estados([]), 0, AHORA);
+    const c = planificarRecontacto([base[2], base[0], base[3], base[1]], estados([]), 0, AHORA);
+
+    expect(a.aEnviar.map((d) => d.leadId)).toEqual(b.aEnviar.map((d) => d.leadId));
+    expect(a.aEnviar.map((d) => d.leadId)).toEqual(c.aEnviar.map((d) => d.leadId));
+  });
+
+  it("primero los que llevan mas tiempo sin respuesta", () => {
+    const plan = planificarRecontacto(
+      [
+        { ...lead("1"), diasSinRespuesta: 10 },
+        { ...lead("2"), diasSinRespuesta: 200 },
+        { ...lead("3"), diasSinRespuesta: 100 },
+      ],
+      estados([]),
+      0,
+      AHORA
+    );
+
+    expect(plan.aEnviar.map((d) => d.leadId)).toEqual(["2", "3", "1"]);
+  });
+
+  it("con la misma antiguedad desempata por id, no al azar", () => {
+    const mismos = [
+      { ...lead("zzz"), diasSinRespuesta: 50 },
+      { ...lead("aaa"), diasSinRespuesta: 50 },
+      { ...lead("mmm"), diasSinRespuesta: 50 },
+    ];
+
+    expect(ordenarCandidatos(mismos).map((l) => l.id)).toEqual(["aaa", "mmm", "zzz"]);
+  });
+
+  it("ordenarCandidatos no muta el array original", () => {
+    const original = [{ ...lead("2"), diasSinRespuesta: 1 }, { ...lead("1"), diasSinRespuesta: 99 }];
+    const copia = [...original];
+
+    ordenarCandidatos(original);
+
+    expect(original).toEqual(copia);
   });
 });

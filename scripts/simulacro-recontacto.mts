@@ -15,11 +15,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Lead } from "shared-types";
-import { normalizarTelefono } from "shared-types";
 import {
   CRITERIO_POR_DEFECTO,
   esCandidatoARecontacto,
 } from "../mcp-servers/mcp-tokko/src/candidatosRecontacto.js";
+import { mapearLead } from "../mcp-servers/mcp-tokko/src/tokkoMapper.js";
 import {
   CONFIG_POR_DEFECTO,
   formatearReporte,
@@ -54,7 +54,9 @@ async function traerContactos(): Promise<any[]> {
   const porId = new Map<string, any>();
   let offset = 0;
   for (;;) {
-    const url = `${BASE}/contact/?limit=200&offset=${offset}&key=${encodeURIComponent(KEY)}&format=json`;
+    // order_by fijo: sin el, el paginado sobre un dataset vivo lee un
+    // subconjunto distinto en cada corrida y la lista a revisar cambia sola.
+    const url = `${BASE}/contact/?order_by=created_at&limit=200&offset=${offset}&key=${encodeURIComponent(KEY)}&format=json`;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 30000);
     const res = await fetch(url, { signal: ctrl.signal });
@@ -75,21 +77,16 @@ async function traerContactos(): Promise<any[]> {
 
 const crudos = await traerContactos();
 
+// Se usa `mapearLead`, el MISMO mapeo que el cliente real de Tokko. Armar el
+// Lead a mano acá haría que el simulacro trabajara con datos distintos a los
+// del job — entre otras cosas, con un `diasSinRespuesta` inventado, que es
+// justo el campo por el que se ordenan los candidatos.
 const candidatos: Lead[] = [];
 for (const c of crudos) {
   if (!esCandidatoARecontacto(c, CRITERIO_POR_DEFECTO)) continue;
-  const crudo = [c.cellphone, c.phone, c.other_phone].map((v: unknown) => String(v ?? "").trim()).find(Boolean) ?? "";
-  const tel = normalizarTelefono(crudo);
-  if (!tel.usable) continue;
-  candidatos.push({
-    id: String(c.id),
-    tokkoId: String(c.id),
-    nombre: String(c.name ?? "").trim() || "(sin nombre)",
-    telefonoWhatsapp: tel.paraEnviar!,
-    temperatura: "frio",
-    propiedadesDeInteres: [],
-    diasSinRespuesta: 999,
-  });
+  const mapeado = mapearLead(c);
+  if (!mapeado || !mapeado.contactable) continue;
+  candidatos.push(mapeado.lead);
 }
 
 // Estado real: lo que el sistema ya sabe de contactos previos, del sistema o

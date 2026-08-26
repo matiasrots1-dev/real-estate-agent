@@ -84,7 +84,12 @@ export class RealTokkoClient implements TokkoClient {
     const todos: any[] = [];
     let offset = 0;
     for (;;) {
-      const json = await this.pedir(ruta, { ...params, limit: PAGINA, offset });
+      // order_by fijo: sin el, el paginado sobre un dataset VIVO devuelve un
+      // subconjunto distinto en cada corrida -- un contacto nuevo corre todos
+      // los offsets y algunos registros no se leen nunca. Con created_at
+      // ascendente, lo nuevo se agrega al final y el recorrido es estable.
+      // (order_by=id devuelve HTTP 400; created_at es de los que acepta.)
+      const json = await this.pedir(ruta, { ...params, order_by: "created_at", limit: PAGINA, offset });
       const lote: any[] = json?.objects ?? [];
       todos.push(...lote);
       offset += lote.length;
