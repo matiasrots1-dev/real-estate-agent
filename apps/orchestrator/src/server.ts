@@ -21,6 +21,7 @@ import { FileGlobalPauseStore } from "./agent/globalPauseStore.js";
 import { FileLastInteractionStore } from "./agent/lastInteractionStore.js";
 import { FileUltimoContactoStore } from "./agent/ultimoContactoStore.js";
 import { ContactosConocidos } from "./agent/contactosConocidos.js";
+import { FileEstiloBrokerStore } from "./agent/estiloBrokerStore.js";
 import { FileRetentionReportStore } from "./agent/retentionReportStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
@@ -159,6 +160,7 @@ async function main() {
   const contactosConocidos = new ContactosConocidos();
   await contactosConocidos.cargarDesde(auditLog);
   const ultimoContactoStore = new FileUltimoContactoStore(config.ultimoContactoStorePath);
+  const estiloBrokerStore = new FileEstiloBrokerStore(config.estiloBrokerStorePath);
   console.log(`Contactos conocidos cargados del audit log: ${contactosConocidos.size}`);
   const composer = new ClaudeResponseComposer(anthropic);
 
@@ -190,6 +192,7 @@ async function main() {
     tokkoFuente,
     ultimoContactoStore,
     contactosConocidos,
+    estiloBrokerStore,
     whatsappAppSecret: config.whatsapp.appSecret,
     webhookProviderSecret: config.whatsapp.providerSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,

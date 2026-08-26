@@ -27,6 +27,7 @@ const EcoSchema = z.object({
                       to: z.string().optional(),
                       timestamp: z.union([z.string(), z.number()]).optional(),
                       type: z.string().optional(),
+                      text: z.object({ body: z.string().optional() }).passthrough().optional(),
                     })
                     .passthrough()
                 )
@@ -44,12 +45,21 @@ export interface ContactoSaliente {
   /** Teléfono del destinatario, tal como lo manda Meta (E.164 sin `+`). */
   telefono: string;
   cuando: Date;
+  /**
+   * Lo que escribió el broker. **Se devuelve pero NO se guarda en crudo**: el
+   * llamador lo anonimiza antes de persistirlo (ver estiloBrokerStore.ts).
+   * Ausente para tipos sin texto (revoke, imagen).
+   */
+  texto?: string;
 }
 
 /**
- * Devuelve un contacto por cada destinatario del eco. Nunca incluye el texto
- * del mensaje: para suprimir un recontacto alcanza con saber a quién y cuándo,
- * y guardar el contenido sería crear un archivo de conversaciones privadas.
+ * Devuelve un contacto por cada destinatario del eco.
+ *
+ * Incluye el texto **para que el llamador lo anonimice**, no para guardarlo:
+ * el corpus de estilo persiste sólo la versión sin identificadores, y el
+ * registro de último contacto no guarda texto en absoluto. Persistir esto en
+ * crudo sería armar un archivo de conversaciones privadas.
  */
 export function extraerContactosSalientes(rawBody: unknown): ContactoSaliente[] {
   const parsed = EcoSchema.safeParse(rawBody);
@@ -69,7 +79,7 @@ export function extraerContactosSalientes(rawBody: unknown): ContactoSaliente[] 
         const segundos = Number(eco.timestamp);
         const cuando = Number.isFinite(segundos) && segundos > 0 ? new Date(segundos * 1000) : new Date();
 
-        salida.push({ telefono, cuando });
+        salida.push({ telefono, cuando, texto: eco.text?.body });
       }
     }
   }

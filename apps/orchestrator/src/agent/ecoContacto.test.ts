@@ -20,14 +20,23 @@ describe("extraer el contacto saliente del eco", () => {
     expect(r[0]?.cuando.getTime()).toBe(1756000000 * 1000);
   });
 
-  // No se guarda el texto: alcanza con saber a quién y cuándo. Guardar el
-  // contenido seria crear un archivo de conversaciones privadas.
-  it("nunca devuelve el contenido del mensaje", () => {
+  // El texto se devuelve PARA QUE EL LLAMADOR LO ANONIMICE, no para guardarlo.
+  // Que nunca se persista en crudo se verifica en webhookEco.test.ts, que es
+  // donde ocurre la escritura.
+  it("devuelve el texto para que el llamador lo anonimice", () => {
     const r = extraerContactosSalientes(
-      eco([{ to: "5491133339999", timestamp: "1756000000", type: "text", text: { body: "algo privado" } }])
+      eco([{ to: "5491133339999", timestamp: "1756000000", type: "text", text: { body: "algo que dijo" } }])
     );
 
-    expect(JSON.stringify(r)).not.toContain("algo privado");
+    expect(r[0]?.texto).toBe("algo que dijo");
+  });
+
+  it("sin texto (revoke, imagen) el campo queda ausente, no vacío", () => {
+    const r = extraerContactosSalientes(
+      eco([{ to: "5491133339999", timestamp: "1756000000", type: "revoke", original_message_id: "wamid.y" }])
+    );
+
+    expect(r[0]?.texto).toBeUndefined();
   });
 
   it("un revoke cuenta como contacto igual", () => {

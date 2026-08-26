@@ -16,6 +16,9 @@ import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup
 import { extraerContactosSalientes } from "./channels/whatsapp/ecoContacto.js";
 import type { UltimoContactoStore } from "./agent/ultimoContactoStore.js";
 import type { ContactosConocidos } from "./agent/contactosConocidos.js";
+import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
+import type { AuditLogStore } from "./agent/auditLog.js";
+import { anonimizar } from "shared-types";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
@@ -64,6 +67,40 @@ export interface AppDeps extends HandleMessageDeps {
    * base de "a quién le escribió el broker" que incluye su vida personal.
    */
   contactosConocidos?: ContactosConocidos;
+  /**
+   * Corpus de cómo escribe el broker, para que los borradores suenen a él. El
+   * texto se guarda **anonimizado**; el original nunca toca el disco.
+   */
+  estiloBrokerStore?: EstiloBrokerStore;
+  /** Direcciones de la cartera, para redactarlas del corpus de estilo. */
+  direccionesConocidas?: string[];
+}
+
+/**
+ * A qué intent estaba respondiendo el broker: el del último mensaje del
+ * cliente **anterior** a esa respuesta.
+ *
+ * Sin esto un ejemplo no se puede elegir por contexto — mostrarle a Claude una
+ * respuesta de negociación cuando tiene que agendar una visita enseña el tono
+ * equivocado. Si no hay ningún mensaje previo, no se guarda: probablemente sea
+ * un mensaje que el broker inició, no una respuesta.
+ */
+async function intentQueRespondia(
+  auditLog: AuditLogStore | undefined,
+  telefono: string,
+  cuando: Date
+): Promise<string | null> {
+  if (!auditLog) return null;
+  const limite = cuando.toISOString();
+  let mejor: { timestamp: string; intent: string } | null = null;
+  for (const entrada of await auditLog.readAll()) {
+    if (entrada.conversationId !== telefono) continue;
+    if (entrada.timestamp > limite) continue;
+    if (!mejor || entrada.timestamp > mejor.timestamp) {
+      mejor = { timestamp: entrada.timestamp, intent: entrada.matchedIntentId };
+    }
+  }
+  return mejor?.intent ?? null;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -260,12 +297,33 @@ async function handleIncomingWebhook(
     // ni romper la respuesta.
     if (deps.ultimoContactoStore && deps.contactosConocidos) {
       const { ultimoContactoStore: store, contactosConocidos: conocidos } = deps;
+      const estilo = deps.estiloBrokerStore;
+      const auditLog = deps.auditLog;
+
       for (const contacto of extraerContactosSalientes(json)) {
         // Filtro de privacidad: sólo se registra si ya es un contacto del
         // negocio. La vida personal del broker no entra al sistema.
         if (!conocidos.conoce(contacto.telefono)) continue;
+
         queue.enqueue(contacto.telefono, async () => {
           await store.registrar(contacto.telefono, contacto.cuando, "manual");
+
+          // Corpus de estilo: cómo escribe el broker, para que los borradores
+          // suenen a él. Se guarda ANONIMIZADO — el texto crudo nunca toca el
+          // disco (ver estiloBrokerStore.ts).
+          if (!estilo || !contacto.texto || !sirveComoEjemplo(contacto.texto)) return;
+
+          // El intent al que estaba respondiendo sale del último mensaje del
+          // cliente anterior a esta respuesta. Sin eso el ejemplo no se puede
+          // elegir por contexto y serviría de poco.
+          const intent = await intentQueRespondia(auditLog, contacto.telefono, contacto.cuando);
+          if (!intent) return;
+
+          await estilo.guardar({
+            intent,
+            texto: anonimizar(contacto.texto, { nombres: conocidos.nombres(), direcciones: deps.direccionesConocidas }),
+            cuando: contacto.cuando.toISOString(),
+          });
         });
       }
     }

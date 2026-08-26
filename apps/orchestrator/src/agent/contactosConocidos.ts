@@ -22,6 +22,12 @@ import type { AuditLogStore } from "./auditLog.js";
 export class ContactosConocidos {
   private readonly canonicos = new Set<string>();
   private readonly crudos = new Set<string>();
+  /**
+   * Nombres de contactos conocidos. Se usan para redactarlos del corpus de
+   * estilo: un ejemplo con el nombre de un cliente puede terminar citado en el
+   * borrador para otro.
+   */
+  private readonly nombresConocidos = new Set<string>();
 
   /** Carga el histórico. Se llama una vez, al arrancar. */
   async cargarDesde(auditLog: AuditLogStore): Promise<void> {
@@ -50,6 +56,16 @@ export class ContactosConocidos {
 
     const digitos = texto.replace(/\D/g, "");
     return digitos.length >= 6 && this.crudos.has(digitos);
+  }
+
+  /** Registra un nombre para que el anonimizador pueda sacarlo del corpus. */
+  agregarNombre(nombre: string | null | undefined): void {
+    const limpio = String(nombre ?? "").trim();
+    if (limpio.length >= 3) this.nombresConocidos.add(limpio);
+  }
+
+  nombres(): Iterable<string> {
+    return this.nombresConocidos;
   }
 
   get size(): number {
