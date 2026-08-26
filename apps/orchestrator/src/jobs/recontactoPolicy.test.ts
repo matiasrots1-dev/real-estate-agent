@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { Lead } from "shared-types";
 import {
   CONFIG_POR_DEFECTO,
+  detectarDuplicados,
   formatearReporte,
   planificarRecontacto,
+  puedeCorrer,
   type EstadoDeContacto,
 } from "./recontactoPolicy.js";
 
 const AHORA = new Date("2026-08-25T12:00:00Z");
 
-function lead(id: string, nombre = "Cliente " + id, telefono = "5491155551234"): Lead {
+// Cada lead con un telefono DISTINTO por default: desde que la supresion
+// mira tambien el telefono, compartirlo haria que se deduplicaran entre si y
+// los tests medirian otra cosa.
+function lead(id: string, nombre = "Cliente " + id, telefono = "54911555" + String(id).padStart(5, "0")): Lead {
   return {
     id,
     tokkoId: id,
@@ -25,8 +30,11 @@ function haceDias(n: number): string {
   return new Date(AHORA.getTime() - n * 86_400_000).toISOString();
 }
 
-function estados(pares: Array<[string, EstadoDeContacto]>): Map<string, EstadoDeContacto> {
-  return new Map(pares);
+function estados(
+  pares: Array<[string, EstadoDeContacto]>,
+  porTelefono: Array<[string, EstadoDeContacto]> = []
+) {
+  return { porLead: new Map(pares), porTelefono: new Map(porTelefono) };
 }
 
 describe("ventana de 60 días", () => {
@@ -200,12 +208,123 @@ describe("el reporte muestra nombres, no sólo conteos", () => {
 });
 
 describe("los valores por defecto son los acordados", () => {
-  it("60 días, 2 intentos, 3 por corrida, 10 por día", () => {
+  it("60 dias, 2 intentos, 3 por corrida, 10 por dia, 45 min, 9 a 20", () => {
     expect(CONFIG_POR_DEFECTO).toEqual({
       diasEntreMensajes: 60,
       intentosMaximos: 2,
       topePorCorrida: 3,
       topePorDia: 10,
+      intervaloEntreCorridasMinutos: 45,
+      horaInicio: 9,
+      horaFin: 20,
     });
+  });
+});
+
+describe("fichas duplicadas en Tokko", () => {
+  const MISMO_TEL = "5491155559999";
+
+  // Dos fichas de la misma persona en el CRM no pueden significar dos
+  // mensajes. La supresion mira el telefono ademas del leadId.
+  it("dos fichas con el mismo telefono reciben UN solo mensaje", () => {
+    const plan = planificarRecontacto(
+      [lead("1", "Clara", MISMO_TEL), lead("2", "Clara Duplicada", MISMO_TEL)],
+      estados([]),
+      0,
+      AHORA
+    );
+
+    expect(plan.aEnviar).toHaveLength(1);
+    expect(plan.suprimidos[0]).toMatchObject({ motivo: "duplicado_en_esta_corrida", nombre: "Clara Duplicada" });
+  });
+
+  it("hereda la historia de la otra ficha: si a una ya se le escribio, la otra no escribe", () => {
+    const plan = planificarRecontacto(
+      [lead("2", "Clara Duplicada", MISMO_TEL)],
+      estados([], [[MISMO_TEL, { intentos: 0, ultimoContactoAt: haceDias(3) }]]),
+      0,
+      AHORA
+    );
+
+    expect(plan.aEnviar).toEqual([]);
+    expect(plan.suprimidos[0]).toMatchObject({ motivo: "contactado_hace_poco" });
+  });
+
+  it("los intentos tambien se heredan por telefono", () => {
+    const plan = planificarRecontacto(
+      [lead("2", "Clara Duplicada", MISMO_TEL)],
+      estados([], [[MISMO_TEL, { intentos: 2, ultimoContactoAt: haceDias(400) }]]),
+      0,
+      AHORA
+    );
+
+    expect(plan.suprimidos[0]).toMatchObject({ motivo: "agotó_intentos" });
+  });
+
+  it("los detecta y los lista para poder unificarlos en el CRM", () => {
+    const plan = planificarRecontacto(
+      [lead("1", "Clara", MISMO_TEL), lead("2", "Clara Duplicada", MISMO_TEL), lead("3", "Otra")],
+      estados([]),
+      0,
+      AHORA
+    );
+
+    expect(plan.duplicados).toHaveLength(1);
+    expect(plan.duplicados[0]?.leads.map((l) => l.nombre)).toEqual(["Clara", "Clara Duplicada"]);
+    const texto = formatearReporte(plan, true);
+    expect(texto).toContain("FICHAS DUPLICADAS EN TOKKO");
+    expect(texto).toContain("Clara Duplicada");
+  });
+
+  it("detectarDuplicados no reporta a los que tienen telefono propio", () => {
+    expect(detectarDuplicados([lead("1"), lead("2"), lead("3")])).toEqual([]);
+  });
+});
+
+describe("cuando se puede correr", () => {
+  const enHorario = (h: number) => new Date(2026, 7, 25, h, 0, 0);
+
+  // Nadie quiere un WhatsApp de la inmobiliaria a las 3 de la manana.
+  it.each([0, 3, 6, 8, 20, 22, 23])("a las %i:00 NO corre", (hora) => {
+    const r = puedeCorrer(enHorario(hora), undefined);
+
+    expect(r.puede).toBe(false);
+    if (!r.puede) expect(r.motivo).toBe("fuera_de_horario");
+  });
+
+  it.each([9, 12, 15, 19])("a las %i:00 si corre", (hora) => {
+    expect(puedeCorrer(enHorario(hora), undefined).puede).toBe(true);
+  });
+
+  it("respeta el intervalo minimo entre corridas", () => {
+    const ahora = enHorario(12);
+    const haceRato = new Date(ahora.getTime() - 20 * 60_000).toISOString();
+
+    const r = puedeCorrer(ahora, haceRato);
+
+    expect(r.puede).toBe(false);
+    if (!r.puede) {
+      expect(r.motivo).toBe("muy_pronto_desde_la_ultima");
+      expect(r.detalle).toContain("20 min");
+    }
+  });
+
+  it("pasado el intervalo, corre", () => {
+    const ahora = enHorario(12);
+    const haceRato = new Date(ahora.getTime() - 46 * 60_000).toISOString();
+
+    expect(puedeCorrer(ahora, haceRato).puede).toBe(true);
+  });
+
+  // El horario se evalua primero: aunque haya pasado el intervalo, a las 3 AM
+  // no se manda.
+  it("el horario manda sobre el intervalo", () => {
+    const madrugada = enHorario(3);
+    const haceMucho = new Date(madrugada.getTime() - 500 * 60_000).toISOString();
+
+    const r = puedeCorrer(madrugada, haceMucho);
+
+    expect(r.puede).toBe(false);
+    if (!r.puede) expect(r.motivo).toBe("fuera_de_horario");
   });
 });
