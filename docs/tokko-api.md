@@ -47,6 +47,12 @@ Un 200 no significa que el parámetro se haya aplicado.
 | **Sin key** | 200 | 7613 | ⚠️ **Devuelve datos igual** |
 | `?api_key=<válida>` | 200 | 7613 | ⚠️ Nombre de parámetro equivocado, ignorado |
 
+**Verificación al arranque**: `mcp-tokko` no sirve nada hasta confirmar que la
+key autentica. La comprobación es **diferencial** — pide el total con key y sin
+key, y falla si dan lo mismo — y no por umbral: un umbral del tipo "más de N
+propiedades es sospechoso" rompería para una inmobiliaria grande y es una
+adivinanza. Ver `RealTokkoClient.verificarAutenticacion()`.
+
 **Lo peligroso**: cualquier forma que no sea `?key=` devuelve **200 con datos**
 — no un 401. Los 7613 son el catálogo público de Tokko, no los 76 de esta
 cuenta. Un cliente mal configurado no falla: devuelve datos ajenos con total
@@ -167,9 +173,13 @@ lo muestra para `/development/`, y en `/property/` lo acepta y lo ignora.
 | `email__isnull=false` | 400 | Rechaza |
 | `order_by=name` / `order_by=id` | 400 | Rechaza |
 
-**Nota sobre `agent=`**: da 1354 del lado del servidor; el mismo criterio
-aplicado del lado del cliente por nombre daba 1377. **No investigado** de dónde
-sale la diferencia — usarlo con cuidado hasta entenderla.
+**Nota sobre `agent=`** *(resuelto 2026-08-25)*: en una medición anterior el
+filtro del servidor daba 1354 y el mismo criterio del lado del cliente daba
+1377. **La diferencia era del lado nuestro, no de la API**: los 23 de más eran
+registros repetidos por la paginación rota (sin `order_by` ni deduplicación).
+Re-medido con la paginación arreglada: los dos dan **1354** y los conjuntos de
+ids son **idénticos** — 0 en cada dirección. `agent=<user_id>` es confiable
+para filtrar del lado del servidor.
 
 ### `order_by` por endpoint
 
