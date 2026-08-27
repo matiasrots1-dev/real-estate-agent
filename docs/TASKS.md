@@ -1653,7 +1653,32 @@ Entre ellos, al menos uno entro por un portal:
 - [ ] Cuando el eco de coexistencia este enganchado, esto ademas se puede
       medir en el tiempo en vez de estimarlo una vez.
 
-## Bloque 30 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 30 — Baja: palabra clave y lista de no contactar (BLOQUEA LA POLITICA)
+La politica de privacidad **no se puede publicar prometiendo esto hasta que
+exista**. Se saco la clausula del texto por eso, no porque no haga falta.
+
+Lo que hoy NO existe:
+
+- [ ] **Responder a la palabra BAJA.** El catalogo de intents no la contempla.
+      Si alguien la escribe hoy, cae en `fallback_low_confidence`: se escala al
+      broker y el sistema no registra nada. Funciona por la via humana, pero no
+      es lo que una clausula de baja promete.
+- [ ] **Una lista persistente de "no contactar".** El job de recontacto tiene
+      topes y un maximo de 2 intentos, pero **no tiene forma de marcar a alguien
+      como excluido para siempre**. Si un cliente pide la baja hoy, la unica
+      garantia es que el broker se acuerde.
+- [ ] Cuando exista, la lista tiene que consultarse en `recontactoPolicy`
+      (mismo lugar que los numeros internos) y sobrevivir a los reinicios.
+
+**Estado actual de la politica**: dice que se puede pedir la baja **por mail**,
+que es cierto y el broker lo puede cumplir a mano. La clausula de responder
+BAJA por WhatsApp vuelve al texto cuando el sistema la maneje.
+
+**Ojo con el orden**: esto se vuelve urgente el dia que se apague el modo
+silencioso, porque recien ahi el agente empieza a mandar mensajes que alguien
+podria querer frenar.
+
+## Bloque 31 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente

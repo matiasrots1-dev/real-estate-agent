@@ -122,9 +122,8 @@ personales.**
 
 ## Cómo dejar de recibir mensajes
 
-Respondé **BAJA** a cualquier mensaje nuestro, o escribinos a
-[EMAIL DE CONTACTO]. Dejamos de contactarte y lo registramos para que no vuelva
-a ocurrir.
+Escribinos a [EMAIL DE CONTACTO] pidiendo que dejemos de contactarte y lo
+hacemos.
 
 ## Decisiones automatizadas
 
