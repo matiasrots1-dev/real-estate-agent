@@ -18,6 +18,25 @@ import type { PurgeResult } from "./purge.js";
  * Dos cosas que **no** se guardan: a quién le escribió (el corpus es de estilo,
  * no un registro de conversaciones) y el mensaje del cliente. Sin el
  * destinatario, un ejemplo no se puede volver a atar a una persona.
+ *
+ * ## Retención: sin plazo, y es una decisión
+ *
+ * Este store **no se purga por antigüedad** y **no está cableado al barrido de
+ * `jobs/retention.ts`**, a diferencia de todos los demás. Decisión del dueño
+ * del repo: como el texto va anonimizado y sin destinatario, no identifica a
+ * nadie, y borrarlo sólo haría que el agente desaprenda.
+ *
+ * `purgeOlderThan` se conserva igual, aunque nadie lo llame automáticamente:
+ * es la vía para vaciar el corpus si esa decisión se revisa, o para atender un
+ * pedido puntual de borrado.
+ *
+ * **La contracara, que hay que tener presente**: la anonimización es por
+ * patrones y por lista de nombres conocidos, o sea *mejor esfuerzo*, no
+ * garantía. Lo que no se haya redactado al guardar queda para siempre — un
+ * apodo, un nombre que no estaba en Tokko, un detalle identificable
+ * ("el depto que da al patio de la escuela"). Con plazo, un error se vencía
+ * solo; sin plazo, no. Por eso conviene correr una re-anonimización periódica
+ * sobre el corpus a medida que se conocen más nombres.
  */
 export interface EjemploDeEstilo {
   /** Intent al que el broker estaba respondiendo, para elegir ejemplos del caso. */

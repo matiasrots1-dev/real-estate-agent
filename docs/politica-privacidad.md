@@ -83,10 +83,20 @@ Cada uno trata los datos según sus propias políticas.
 - **Mensajes y registros de auditoría: 12 meses.**
 - **Datos de gestión comercial** (visitas, seguimiento): **24 meses desde tu
   última interacción**.
-- **Ejemplos anonimizados de redacción: 12 meses.** Como ya no contienen datos
-  que permitan identificarte, su conservación no te expone.
 
 Cumplido el plazo, los datos se eliminan.
+
+**Los ejemplos anonimizados de redacción se conservan sin plazo.** El motivo es
+que no son datos personales: antes de guardarlos se les quitan nombres,
+teléfonos, direcciones, correos y enlaces, y **no se registra a quién estaban
+dirigidos**. Lo que queda es únicamente la forma de escribir de nuestro agente
+—el modo de saludar, de confirmar una visita, de explicar una condición—, sin
+ningún elemento que permita vincular ese texto con vos ni con ninguna otra
+persona. Al no identificar a nadie, no hay un plazo que cumplir; y conservarlos
+es lo que permite que las respuestas mantengan la calidad con el tiempo.
+
+Si en algún momento detectamos que un ejemplo conserva algún dato identificable
+que debió haberse quitado, lo eliminamos.
 
 ## Tus derechos
 
