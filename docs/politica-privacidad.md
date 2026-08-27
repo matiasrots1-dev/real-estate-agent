@@ -109,9 +109,16 @@ Podés pedirnos en cualquier momento:
 
 Escribinos a [EMAIL DE CONTACTO]. Respondemos dentro de los [X] días.
 
-Si considerás que no tratamos tus datos correctamente, podés reclamar ante la
-**Agencia de Acceso a la Información Pública** (Ley 25.326 de Protección de los
-Datos Personales, Argentina).
+**El titular de los datos personales tiene la facultad de ejercer el derecho de
+acceso a los mismos en forma gratuita a intervalos no inferiores a seis meses,
+salvo que se acredite un interés legítimo al efecto, conforme lo establecido en
+el artículo 14, inciso 3 de la Ley N° 25.326.**
+
+**La AGENCIA DE ACCESO A LA INFORMACIÓN PÚBLICA, en su carácter de Órgano de
+Control de la Ley N° 25.326, tiene la atribución de atender las denuncias y
+reclamos que interpongan quienes resulten afectados en sus derechos por
+incumplimiento de las normas vigentes en materia de protección de datos
+personales.**
 
 ## Cómo dejar de recibir mensajes
 

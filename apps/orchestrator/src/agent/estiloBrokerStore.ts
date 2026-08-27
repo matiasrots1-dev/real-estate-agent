@@ -52,6 +52,13 @@ export interface EstiloBrokerStore {
   /** Los más recientes de ese intent, para armar el prompt. */
   ejemplosDe(intent: string, cuantos: number): Promise<EjemploDeEstilo[]>;
   all(): Promise<EjemploDeEstilo[]>;
+  /**
+   * Reemplaza el corpus entero. La usa la re-anonimizacion periodica: como el
+   * texto se guarda ya anonimizado, un identificador que no se conocia al
+   * escribir queda ahi para siempre; volver a pasar el anonimizador con la
+   * lista de nombres actualizada es lo que lo limpia.
+   */
+  reescribir(ejemplos: EjemploDeEstilo[]): Promise<void>;
   purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult>;
 }
 
@@ -84,6 +91,10 @@ export class InMemoryEstiloBrokerStore implements EstiloBrokerStore {
 
   async all(): Promise<EjemploDeEstilo[]> {
     return [...this.datos];
+  }
+
+  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<void> {
+    this.datos = [...ejemplos];
   }
 
   async purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
@@ -119,6 +130,12 @@ export class FileEstiloBrokerStore implements EstiloBrokerStore {
     } catch {
       return [];
     }
+  }
+
+  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<void> {
+    const contenido = ejemplos.map((r) => JSON.stringify(r)).join("\n");
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, contenido + (ejemplos.length ? "\n" : ""), "utf-8");
   }
 
   async purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult> {

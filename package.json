@@ -17,7 +17,8 @@
     "check:sensitive-data": "node scripts/check-sensitive-data.mjs",
     "tokko:telefonos": "node scripts/reporte-telefonos.mjs",
     "recontacto:simulacro": "tsx scripts/simulacro-recontacto.mts",
-    "pendientes": "tsx scripts/pendientes.mts"
+    "pendientes": "tsx scripts/pendientes.mts",
+    "estilo:reanonimizar": "tsx scripts/reanonimizar-estilo.mts"
   },
   "engines": {
     "node": ">=20"
