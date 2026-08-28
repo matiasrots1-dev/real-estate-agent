@@ -51,6 +51,13 @@ export interface TelefonoNormalizado {
   paraMostrar?: string;
   /** Qué tipo detectó la librería (`MOBILE`, `FIXED_LINE`, …). */
   tipo?: string;
+  /**
+   * Número nacional (sin código de país), presente para **cualquier** número
+   * válido, sea móvil o fijo. Sirve para *identificar* un número, no para
+   * enviarle: es lo que permite reconocer que el fijo y el celular de una
+   * misma persona son la misma persona.
+   */
+  nacional?: string;
   motivo?: MotivoTelefonoNoUsable;
   /** Lo que había cargado, tal cual, para poder ir a corregirlo al CRM. */
   original: string;
@@ -79,12 +86,13 @@ export function normalizarTelefono(
   if (!parsed) return { usable: false, motivo: "no_parseable", original };
   if (!parsed.isValid()) return { usable: false, motivo: "invalido", original };
 
+  const nacional = String(parsed.nationalNumber);
   const tipo = parsed.getType();
   if (tipo !== "MOBILE") {
     // FIXED_LINE, VOIP, FIXED_LINE_OR_MOBILE o desconocido: no se manda.
     // Cae del lado seguro igual que el estado indeterminado de una propiedad —
     // no mandar de más es recuperable, mandar a la nada no se detecta.
-    return { usable: false, motivo: "no_es_movil", tipo: tipo ?? "desconocido", original };
+    return { usable: false, motivo: "no_es_movil", tipo: tipo ?? "desconocido", nacional, original };
   }
 
   return {
@@ -92,6 +100,7 @@ export function normalizarTelefono(
     paraEnviar: parsed.format("E.164").replace(/^\+/, ""),
     paraMostrar: parsed.formatNational(),
     tipo,
+    nacional,
     original,
   };
 }

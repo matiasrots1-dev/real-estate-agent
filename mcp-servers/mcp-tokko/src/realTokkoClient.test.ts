@@ -27,10 +27,24 @@ function prop(over: Record<string, unknown> = {}) {
   };
 }
 
-/** Simula la API: pagina de a 50, como hace Tokko de verdad. */
+/**
+ * Simula la API: pagina de a 50 y **rechaza lo que Tokko rechaza**.
+ *
+ * Que el doble aceptara cualquier query param dejó pasar una regresión real:
+ * se agregó `order_by=created_at` a TODAS las llamadas y en `/property/` eso
+ * devuelve HTTP 400. Los 16 tests siguieron en verde y `searchProperties`
+ * quedó roto contra la API de verdad. Un doble más permisivo que el original
+ * no prueba compatibilidad, prueba que el doble es permisivo.
+ */
 function apiFalsa(propiedades: unknown[], contactos: unknown[] = []) {
   const impl = (async (url: string) => {
     const u = new URL(url);
+    // Medido: `/contact/` acepta order_by=created_at, `/property/` da 400.
+    const orden = u.searchParams.get("order_by");
+    const esContacto = u.pathname.includes("/contact");
+    if (orden !== null && !(esContacto && orden === "created_at")) {
+      return { ok: false, status: 400, text: async () => '{"error":"invalid order_by"}' } as Response;
+    }
     const offset = Number(u.searchParams.get("offset") ?? 0);
     const fuente = u.pathname.includes("/contact") ? contactos : propiedades;
     const lote = fuente.slice(offset, offset + 50);
@@ -231,5 +245,75 @@ describe("logActivity", () => {
     const c = cliente([]);
 
     await expect(c.logActivity({ tipo: "visita_agendada" })).rejects.toThrow(/no esta implementado|no está implementado/);
+  });
+});
+
+describe("verificacion de autenticacion", () => {
+  /**
+   * La API devuelve 200 con el catalogo publico cuando la key no se aplica.
+   * `conKey` simula lo que ve nuestra cuenta; `sinKey` lo que devuelve la
+   * llamada anonima.
+   */
+  function apiConAuth(conKey: number, sinKey: number) {
+    return (async (url: string) => {
+      const tieneKey = new URL(url).searchParams.has("key");
+      const total = tieneKey ? conKey : sinKey;
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ meta: { total_count: total }, objects: [] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  it("acepta cuando con key y sin key devuelven totales distintos", async () => {
+    const c = new RealTokkoClient({ apiKey: "k", fetchImpl: apiConAuth(76, 7613), onDescarte: () => {} });
+
+    const r = await c.verificarAutenticacion();
+
+    expect(r.ok).toBe(true);
+    expect(r.conKey).toBe(76);
+  });
+
+  // EL caso: la API respondio 200 las dos veces, pero con el mismo catalogo.
+  // Un chequeo que solo mirara el status HTTP daria todo bien.
+  it("RECHAZA cuando con key y sin key devuelven lo mismo", async () => {
+    const c = new RealTokkoClient({ apiKey: "k", fetchImpl: apiConAuth(7613, 7613), onDescarte: () => {} });
+
+    const r = await c.verificarAutenticacion();
+
+    expect(r.ok).toBe(false);
+    expect(r.motivo).toContain("NO se está aplicando");
+  });
+
+  it("rechaza si no hay key configurada", async () => {
+    const c = new RealTokkoClient({ apiKey: "", fetchImpl: apiConAuth(76, 7613), onDescarte: () => {} });
+
+    expect((await c.verificarAutenticacion()).ok).toBe(false);
+  });
+
+  // No es por umbral a proposito: una inmobiliaria grande con miles de
+  // propiedades legitimas tiene que pasar la verificacion.
+  it("una cuenta grande y legitima pasa igual", async () => {
+    const c = new RealTokkoClient({ apiKey: "k", fetchImpl: apiConAuth(6000, 7613), onDescarte: () => {} });
+
+    expect((await c.verificarAutenticacion()).ok).toBe(true);
+  });
+
+  it("si la llamada anonima falla, no se bloquea el arranque", async () => {
+    const impl = (async (url: string) => {
+      if (!new URL(url).searchParams.has("key")) throw new Error("sin red");
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ meta: { total_count: 76 }, objects: [] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    const c = new RealTokkoClient({ apiKey: "k", fetchImpl: impl, onDescarte: () => {} });
+
+    const r = await c.verificarAutenticacion();
+
+    expect(r.ok).toBe(true);
+    expect(r.sinKey).toBe(-1);
   });
 });

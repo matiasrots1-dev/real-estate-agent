@@ -19,6 +19,9 @@ import { FileConversationStateStore } from "./agent/conversationStateStore.js";
 import { FileRecontactStateStore } from "./agent/recontactStateStore.js";
 import { FileGlobalPauseStore } from "./agent/globalPauseStore.js";
 import { FileLastInteractionStore } from "./agent/lastInteractionStore.js";
+import { FileUltimoContactoStore } from "./agent/ultimoContactoStore.js";
+import { ContactosConocidos } from "./agent/contactosConocidos.js";
+import { FileEstiloBrokerStore } from "./agent/estiloBrokerStore.js";
 import { FileRetentionReportStore } from "./agent/retentionReportStore.js";
 import { TokkoMcpClient } from "./mcp/tokkoMcpClient.js";
 import { GcalMcpClient } from "./mcp/gcalMcpClient.js";
@@ -68,6 +71,27 @@ async function main() {
   const gcal = new GcalMcpClient({ entryPath: config.mcpGcal.entryPath, cwd: config.mcpGcal.cwd });
   const weather = new WeatherMcpClient({ entryPath: config.mcpWeather.entryPath, cwd: config.mcpWeather.cwd });
   await Promise.all([tokko.connect(), gcal.connect(), weather.connect()]);
+
+  // Se pregunta una sola vez, al arrancar. Si falla no se cae el arranque: se
+  // reporta como desconocido, que es mas honesto que asumir cualquiera de las dos.
+  let tokkoFuente: { fuente: string; branchId: number | null };
+  try {
+    tokkoFuente = await tokko.fuenteDatos();
+  } catch (error) {
+    console.warn("No se pudo determinar la fuente de datos de Tokko:", error);
+    tokkoFuente = { fuente: "desconocido", branchId: null };
+  }
+  if (tokkoFuente.fuente === "mock") {
+    console.warn(
+      "\n" +
+        "  ############################################################\n" +
+        "  #  TOKKO EN MOCK — las propiedades son INVENTADAS          #\n" +
+        "  ############################################################\n" +
+        "  Cargá TOKKO_API_KEY en .env. Verificalo en GET /health.\n"
+    );
+  } else {
+    console.log(`Tokko: ${tokkoFuente.fuente}` + (tokkoFuente.branchId ? ` (sucursal ${tokkoFuente.branchId})` : " — SIN filtro de sucursal"));
+  }
 
   const senderReal =
     config.whatsapp.phoneNumberId && config.whatsapp.accessToken
@@ -129,6 +153,15 @@ async function main() {
   const recontactStateStore = new FileRecontactStateStore(config.recontactStateStorePath);
   const lastInteractionStore = new FileLastInteractionStore(config.lastInteractionStorePath);
   const auditLog = new FileAuditLogStore(config.auditLogPath);
+
+  // Quienes ya escribieron alguna vez. Es el filtro de privacidad del eco de
+  // coexistencia: solo se registra un contacto saliente del broker si el
+  // destinatario ya es un contacto del negocio.
+  const contactosConocidos = new ContactosConocidos();
+  await contactosConocidos.cargarDesde(auditLog);
+  const ultimoContactoStore = new FileUltimoContactoStore(config.ultimoContactoStorePath);
+  const estiloBrokerStore = new FileEstiloBrokerStore(config.estiloBrokerStorePath);
+  console.log(`Contactos conocidos cargados del audit log: ${contactosConocidos.size}`);
   const composer = new ClaudeResponseComposer(anthropic);
 
   const listener = createRequestListener({
@@ -156,6 +189,10 @@ async function main() {
     brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
     modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,
+    tokkoFuente,
+    ultimoContactoStore,
+    contactosConocidos,
+    estiloBrokerStore,
     whatsappAppSecret: config.whatsapp.appSecret,
     webhookProviderSecret: config.whatsapp.providerSecret,
     skipWebhookSignatureCheck: config.whatsapp.skipWebhookSignatureCheck,

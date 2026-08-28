@@ -32,7 +32,15 @@ pero tampoco asumas que va a revisar cada línea de código.
    no hardcodear los intents en el prompt ni en TypeScript.
 3. **`docs/escalation_policy.md`** — la política de escalamiento en detalle
    (cuándo el agente puede actuar solo vs. cuándo espera al broker).
-4. **`docs/architecture.md`** — diagrama de arquitectura (Mermaid) y
+4. **`docs/tokko-api.md`** — **fuente de verdad del comportamiento de la
+   API de Tokko**, medido empiricamente. **Consultalo ANTES de asumir
+   cualquier cosa sobre esa API**: paginacion, filtros, tipos de campo,
+   autenticacion. Varios de sus parametros devuelven 200 e ignoran el filtro
+   en silencio, y el comportamiento no se generaliza entre endpoints. Si algo
+   que necesitas no esta ahi, **medilo primero y anotalo**; si observas algo
+   que lo contradice, **re-medi y actualiza el archivo**, no trabajes
+   alrededor. Ya se perdieron tres tardes por asumir en vez de medir.
+5. **`docs/architecture.md`** — diagrama de arquitectura (Mermaid) y
    explicación del flujo de mensajes.
 
 No dupliques información entre estos documentos y el código — el código

@@ -22,7 +22,10 @@ function crearClientePorEntorno(): TokkoClient {
       "[mcp-tokko] TOKKO_BRANCH_ID sin configurar: se exponen las propiedades de TODAS las sucursales de la cuenta."
     );
   }
-  console.log("[mcp-tokko] usando Tokko REAL" + (branchId !== undefined ? " (sucursal " + branchId + ")" : ""));
+  // console.error y NO console.log: en un server MCP por stdio, stdout ES el
+  // canal del protocolo JSON-RPC. Escribir ahi lo corrompe, y ademas el texto
+  // nunca llega a la terminal de quien levanto el orchestrator.
+  console.error("[mcp-tokko] usando Tokko REAL" + (branchId !== undefined ? " (sucursal " + branchId + ")" : ""));
   return new RealTokkoClient({ apiKey, baseUrl: process.env.TOKKO_API_BASE_URL, branchId });
 }
 
@@ -32,8 +35,26 @@ export function createServer(client?: TokkoClient): McpServer {
   // reales es peor que no tener datos -- el agente cita precios inventados con
   // total confianza (docs/TASKS.md Bloque 26).
   const tokkoClient = client ?? crearClientePorEntorno();
+  // Que fuente se esta usando, expuesto COMO DATO y no como log. Un banner en
+  // un proceso hijo por stdio es invisible: stdout es el canal del protocolo y
+  // stderr no llega a la terminal de quien levanto el orchestrator. La unica
+  // forma confiable de confirmarlo es preguntarselo.
+  const fuente = client ? "inyectado" : process.env.TOKKO_API_KEY ? "real" : "mock";
+  const branchId = process.env.TOKKO_BRANCH_ID ? Number(process.env.TOKKO_BRANCH_ID) : null;
 
   const server = new McpServer({ name: "mcp-tokko", version: "0.1.0" });
+
+  server.registerTool(
+    "tokko_fuente_datos",
+    {
+      title: "Fuente de datos en uso",
+      description: "Devuelve si las propiedades salen de Tokko real o del mock, y de que sucursal.",
+      inputSchema: {},
+    },
+    async () => ({
+      content: [{ type: "text" as const, text: JSON.stringify({ fuente, branchId }) }],
+    })
+  );
 
   server.registerTool(
     "search_properties",

@@ -40,8 +40,19 @@ export interface RealTokkoClientOptions {
 
 const BASE_POR_DEFECTO = "https://www.tokkobroker.com/api/v1";
 const TIMEOUT_POR_DEFECTO = 25_000;
-/** Tokko topea la página acá aunque se pida más. */
+/** Tokko topea la página acá aunque se pida más (verificado en `/contact/`). */
 const PAGINA = 50;
+
+/**
+ * Qué `order_by` acepta cada endpoint. **No es uniforme**: `/contact/` acepta
+ * `created_at`, pero el mismo valor en `/property/` devuelve HTTP 400, igual
+ * que en `/branch/` y `/user/`. Medido, no leído — ver `docs/tokko-api.md`.
+ *
+ * Un endpoint sin entrada acá se pide sin `order_by`.
+ */
+const ORDEN_POR_ENDPOINT: Record<string, string | undefined> = {
+  "/contact/": "created_at",
+};
 
 function avisarDescarte(que: string, motivo: string): void {
   // Se loguea a propósito: un registro que desaparece del catálogo en silencio
@@ -84,7 +95,17 @@ export class RealTokkoClient implements TokkoClient {
     const todos: any[] = [];
     let offset = 0;
     for (;;) {
-      const json = await this.pedir(ruta, { ...params, limit: PAGINA, offset });
+      // El `order_by` estabiliza el paginado sobre un dataset VIVO: sin él, un
+      // registro nuevo corre todos los offsets y cada corrida lee un
+      // subconjunto distinto. Pero sólo se manda donde el endpoint lo acepta —
+      // en `/property/` el mismo parámetro devuelve 400.
+      const orden = ORDEN_POR_ENDPOINT[ruta];
+      const json = await this.pedir(ruta, {
+        ...params,
+        ...(orden ? { order_by: orden } : {}),
+        limit: PAGINA,
+        offset,
+      });
       const lote: any[] = json?.objects ?? [];
       todos.push(...lote);
       offset += lote.length;
@@ -112,6 +133,58 @@ export class RealTokkoClient implements TokkoClient {
       salida.push(mapeada.property);
     }
     return salida;
+  }
+
+  /**
+   * Confirma que estamos autenticados **de verdad**, no sólo que la API
+   * responde 200.
+   *
+   * Medido (docs/tokko-api.md): sin key, o con la key en el header
+   * `Authorization` o en `?api_key=`, la API devuelve **200 con el catálogo
+   * público** — 7613 propiedades que no son de esta cuenta. Sólo una key
+   * *inválida* produce un 401. O sea que un cliente mal configurado no falla:
+   * le cita a los clientes propiedades de otras inmobiliarias.
+   *
+   * La verificación es **diferencial** y no por umbral: se pide el total con
+   * key y sin key. Si dan lo mismo, la key no se está aplicando. Un umbral
+   * ("más de N propiedades es sospechoso") sería una adivinanza que rompería
+   * para una inmobiliaria grande; esto compara contra la respuesta anónima
+   * real, que es la evidencia directa.
+   */
+  async verificarAutenticacion(): Promise<{ ok: boolean; conKey: number; sinKey: number; motivo?: string }> {
+    if (!this.options.apiKey?.trim()) {
+      return { ok: false, conKey: 0, sinKey: 0, motivo: "no hay TOKKO_API_KEY configurada" };
+    }
+
+    const conKey = (await this.pedir("/property/", { limit: 1 }))?.meta?.total_count ?? -1;
+
+    const url = new URL(`${this.base}/property/`);
+    url.searchParams.set("limit", "1");
+    url.searchParams.set("format", "json");
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    let sinKey = -1;
+    try {
+      const res = await this.fetchImpl(url.toString(), { signal: ctrl.signal });
+      if (res.ok) sinKey = JSON.parse(await res.text())?.meta?.total_count ?? -1;
+    } catch {
+      // Que la llamada anónima falle no prueba nada malo de la nuestra: se
+      // deja pasar y sólo se compara si se pudo obtener.
+      sinKey = -1;
+    } finally {
+      clearTimeout(t);
+    }
+
+    if (sinKey >= 0 && conKey === sinKey) {
+      return {
+        ok: false,
+        conKey,
+        sinKey,
+        motivo: `con key y sin key devuelven lo mismo (${conKey}): la key NO se está aplicando`,
+      };
+    }
+
+    return { ok: true, conKey, sinKey };
   }
 
   async searchProperties(filters: PropertySearchFilters): Promise<Property[]> {

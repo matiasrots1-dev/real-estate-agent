@@ -53,6 +53,10 @@ export interface OrchestratorConfig {
   globalPauseStorePath: string;
   lastInteractionStorePath: string;
   retentionReportPath: string;
+  /** Donde se registra que el broker contacto a alguien a mano (eco de coexistencia). */
+  ultimoContactoStorePath: string;
+  /** Corpus de estilo del broker (texto ya anonimizado). */
+  estiloBrokerStorePath: string;
   /**
    * Retención (docs/TASKS.md Bloque 15). **Estos valores tienen que coincidir
    * con la política de privacidad publicada de la app** — no son un ajuste
@@ -147,6 +151,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
     lastInteractionStorePath:
       env.LAST_INTERACTION_STORE_PATH ??
       path.join(REPO_ROOT, "apps/orchestrator/data/last_interaction.json"),
+    estiloBrokerStorePath:
+      env.ESTILO_BROKER_STORE_PATH ??
+      path.join(REPO_ROOT, "apps/orchestrator/data/estilo_broker.jsonl"),
+    ultimoContactoStorePath:
+      env.ULTIMO_CONTACTO_STORE_PATH ??
+      path.join(REPO_ROOT, "apps/orchestrator/data/ultimo_contacto.json"),
     retentionReportPath:
       env.RETENTION_REPORT_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/retention_reports.jsonl"),
     retention: {

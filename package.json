@@ -15,7 +15,12 @@
     "auth:gcal": "node infra/scripts/get_google_refresh_token.mjs",
     "prepare": "node scripts/setup-git-hooks.mjs",
     "check:sensitive-data": "node scripts/check-sensitive-data.mjs",
-    "tokko:telefonos": "node scripts/reporte-telefonos.mjs"
+    "tokko:telefonos": "node scripts/reporte-telefonos.mjs",
+    "recontacto:simulacro": "tsx scripts/simulacro-recontacto.mts",
+    "pendientes": "tsx scripts/pendientes.mts",
+    "estilo:reanonimizar": "tsx scripts/reanonimizar-estilo.mts",
+    "etiquetar": "tsx scripts/etiquetar-conversaciones.mts",
+    "medir:clasificador": "tsx scripts/medir-clasificador.mts"
   },
   "engines": {
     "node": ">=20"

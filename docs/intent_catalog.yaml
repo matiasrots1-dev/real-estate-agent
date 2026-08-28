@@ -242,6 +242,64 @@ intents:
       style: template
       template: "Por supuesto, te contacto con el asesor en breve."
 
+  # Agregado tras etiquetar a mano 43 conversaciones reales (docs/TASKS.md
+  # Bloque 32). Dos de los cinco leads que el clasificador perdía enteros eran
+  # rechazos: "no estoy interesada", "no, gracias por la atención". No existía
+  # ningún intent para que el cliente diga que NO, así que caían en fallback y
+  # se escalaban como si fueran ambiguos.
+  #
+  # OJO: depende del contexto. "No, gracias" aislado no se distingue de un "no"
+  # a cualquier otra cosa — sólo se reconoce sabiendo que hubo un contacto
+  # previo del broker.
+  - id: rechazo_desinteres
+    description: "El cliente dice que no le interesa, que ya no busca, o pide no ser contactado. Suele ser respuesta a un contacto proactivo del broker."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "gracias por escribir, pero no estoy interesada"
+        - "no, gracias por la atención"
+        - "ya no estoy buscando, gracias igual"
+        - "no me sirve, gracias"
+        - "por favor no me escriban más"
+    tools: []
+    requires_client_confirmation: false
+    # Escala a propósito: un "no" puede ser un no definitivo o un "no por
+    # ahora", y esa diferencia la tiene que leer una persona. Además, si pide
+    # no ser contactado, hay que registrarlo a mano hasta que exista la lista
+    # de no contactar (docs/TASKS.md Bloque 30).
+    requires_broker: true
+    escalation_reason: "El cliente expresó desinterés. Requiere criterio humano para distinguir un no definitivo de un 'no por ahora', y para registrar la baja si la pidió."
+    confidence_threshold: 0.6
+    response:
+      style: template
+      template: "Gracias por avisarme. Cualquier cosa que necesites más adelante, quedo a disposición."
+
+  # El otro hueco del mismo análisis: colegas de otras inmobiliarias escriben
+  # derivando un cliente. Hoy caen en fallback o, peor, matchean reclamo_queja
+  # (pasó con "Fiedotin Propiedades"). No son clientes y no se los puede tratar
+  # como tales.
+  - id: derivacion_colega
+    description: "Otro agente o inmobiliaria escribe por un cliente suyo, para coordinar una visita o pedir información de una propiedad."
+    channel: cliente
+    priority: high
+    triggers:
+      examples:
+        - "hola, soy Nati de Remax y tengo una clienta con reubicación"
+        - "te escribo de otra inmobiliaria, tengo un comprador para el depto"
+        - "soy agente inmobiliario, mi cliente quiere ver la propiedad"
+        - "trabajo en una inmobiliaria de la zona, consulto por un cliente"
+    tools: []
+    requires_client_confirmation: false
+    # Siempre al broker: la relación con un colega tiene condiciones
+    # comerciales (reparto de comisión, exclusividad) que el agente no maneja.
+    requires_broker: true
+    escalation_reason: "Es un colega derivando un cliente, no un cliente. Las condiciones comerciales entre inmobiliarias las define el broker."
+    confidence_threshold: 0.6
+    response:
+      style: template
+      template: "¡Hola! Te paso con el asesor para coordinar, en breve te escribe."
+
   - id: fallback_low_confidence
     description: "Intent no matcheado con confianza suficiente contra ningún otro intent."
     channel: any

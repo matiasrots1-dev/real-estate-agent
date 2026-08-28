@@ -13,6 +13,12 @@ import {
 import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleIncomingMessage.js";
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
 import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup.js";
+import { extraerContactosSalientes } from "./channels/whatsapp/ecoContacto.js";
+import type { UltimoContactoStore } from "./agent/ultimoContactoStore.js";
+import type { ContactosConocidos } from "./agent/contactosConocidos.js";
+import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
+import type { AuditLogStore } from "./agent/auditLog.js";
+import { anonimizar } from "shared-types";
 
 export interface AppDeps extends HandleMessageDeps {
   whatsappWebhookVerifyToken?: string;
@@ -42,6 +48,59 @@ export interface AppDeps extends HandleMessageDeps {
    * pasa, cada listener crea el suyo. Se expone en `GET /health`.
    */
   webhookMetrics?: WebhookMetrics;
+  /**
+   * De dónde salen las propiedades: `real` o `mock`. Se resuelve una vez al
+   * arrancar y se expone en `GET /health`, para poder confirmarlo sin depender
+   * de un banner en la terminal — los logs de un server MCP por stdio no
+   * llegan a la consola de quien levantó el orchestrator.
+   */
+  tokkoFuente?: { fuente: string; branchId: number | null };
+  /**
+   * Dónde se registra que el broker contactó a alguien **a mano desde su
+   * celular**, vía el eco de coexistencia. Sin esto el sistema no se entera y
+   * puede recontactar a alguien con quien el broker habló ayer.
+   */
+  ultimoContactoStore?: UltimoContactoStore;
+  /**
+   * Filtro de privacidad del eco: sólo se registra el contacto si el
+   * destinatario ya escribió al agente alguna vez. Sin esto se armaría una
+   * base de "a quién le escribió el broker" que incluye su vida personal.
+   */
+  contactosConocidos?: ContactosConocidos;
+  /**
+   * Corpus de cómo escribe el broker, para que los borradores suenen a él. El
+   * texto se guarda **anonimizado**; el original nunca toca el disco.
+   */
+  estiloBrokerStore?: EstiloBrokerStore;
+  /** Direcciones de la cartera, para redactarlas del corpus de estilo. */
+  direccionesConocidas?: string[];
+}
+
+/**
+ * A qué intent estaba respondiendo el broker: el del último mensaje del
+ * cliente **anterior** a esa respuesta.
+ *
+ * Sin esto un ejemplo no se puede elegir por contexto — mostrarle a Claude una
+ * respuesta de negociación cuando tiene que agendar una visita enseña el tono
+ * equivocado. Si no hay ningún mensaje previo, no se guarda: probablemente sea
+ * un mensaje que el broker inició, no una respuesta.
+ */
+async function intentQueRespondia(
+  auditLog: AuditLogStore | undefined,
+  telefono: string,
+  cuando: Date
+): Promise<string | null> {
+  if (!auditLog) return null;
+  const limite = cuando.toISOString();
+  let mejor: { timestamp: string; intent: string } | null = null;
+  for (const entrada of await auditLog.readAll()) {
+    if (entrada.conversationId !== telefono) continue;
+    if (entrada.timestamp > limite) continue;
+    if (!mejor || entrada.timestamp > mejor.timestamp) {
+      mejor = { timestamp: entrada.timestamp, intent: entrada.matchedIntentId };
+    }
+  }
+  return mejor?.intent ?? null;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -93,7 +152,7 @@ async function route(
     // El resumen va acá para poder preguntarle al sistema "¿cuántos webhooks
     // recibí y qué pasó con cada uno?" sin depender del scrollback de una
     // terminal que ya se cerró — que es exactamente lo que faltó el 2026-08-12.
-    sendJson(res, 200, { ok: true, webhook: metrics.resumen() });
+    sendJson(res, 200, { ok: true, tokko: deps.tokkoFuente ?? { fuente: "desconocido", branchId: null }, webhook: metrics.resumen() });
     return;
   }
 
@@ -228,6 +287,46 @@ async function handleIncomingWebhook(
   if (esEco) {
     metrics.registrar("eco_descartado");
     console.log(`[webhook] eco de coexistencia descartado bytes=${rawBody.length}`);
+
+    // El eco se sigue descartando como mensaje entrante — el canal broker no
+    // se toca. Lo único que se aprovecha es "el broker le escribió a esta
+    // persona en este momento", que es lo que evita recontactar a alguien con
+    // quien acaba de hablar.
+    //
+    // Va al background y no acá: ya respondimos 200 y esto no puede demorar
+    // ni romper la respuesta.
+    if (deps.ultimoContactoStore && deps.contactosConocidos) {
+      const { ultimoContactoStore: store, contactosConocidos: conocidos } = deps;
+      const estilo = deps.estiloBrokerStore;
+      const auditLog = deps.auditLog;
+
+      for (const contacto of extraerContactosSalientes(json)) {
+        // Filtro de privacidad: sólo se registra si ya es un contacto del
+        // negocio. La vida personal del broker no entra al sistema.
+        if (!conocidos.conoce(contacto.telefono)) continue;
+
+        queue.enqueue(contacto.telefono, async () => {
+          await store.registrar(contacto.telefono, contacto.cuando, "manual");
+
+          // Corpus de estilo: cómo escribe el broker, para que los borradores
+          // suenen a él. Se guarda ANONIMIZADO — el texto crudo nunca toca el
+          // disco (ver estiloBrokerStore.ts).
+          if (!estilo || !contacto.texto || !sirveComoEjemplo(contacto.texto)) return;
+
+          // El intent al que estaba respondiendo sale del último mensaje del
+          // cliente anterior a esta respuesta. Sin eso el ejemplo no se puede
+          // elegir por contexto y serviría de poco.
+          const intent = await intentQueRespondia(auditLog, contacto.telefono, contacto.cuando);
+          if (!intent) return;
+
+          await estilo.guardar({
+            intent,
+            texto: anonimizar(contacto.texto, { nombres: conocidos.nombres(), direcciones: deps.direccionesConocidas }),
+            cuando: contacto.cuando.toISOString(),
+          });
+        });
+      }
+    }
     return;
   }
 
@@ -245,6 +344,10 @@ async function handleIncomingWebhook(
   //
   // Va después del 200: a un duplicado también hay que confirmarle recepción.
   // Contestarle un no-200 haría que Meta reintente todavía más.
+  // Quien nos escribe pasa a ser un contacto conocido: a partir de ahí, si el
+  // broker le responde desde el celular, ese contacto sí se registra.
+  deps.contactosConocidos?.agregar(message.from);
+
   if (!dedup.registrarSiEsNuevo(message.messageId)) {
     metrics.registrar("duplicado");
     return;
