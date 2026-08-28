@@ -21,6 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NumerosInternos } from "../apps/orchestrator/src/jobs/numerosInternos.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AUDIT = path.join(REPO, "apps/orchestrator/data/audit_log.jsonl");
@@ -59,9 +60,30 @@ for (const e of entradas) {
 }
 for (const c of porId.values()) c.mensajes.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
+// Los números internos (la línea del broker, su teléfono, los usuarios de la
+// cuenta de Tokko) quedan FUERA de la medición: sus conversaciones son datos
+// de prueba de julio y la contaminan — contaban como falsos positivos del
+// clasificador cuando en realidad era el broker probando el sistema.
+const internos = new NumerosInternos();
+const envArchivo = Object.fromEntries(
+  fs
+    .readFileSync(path.join(REPO, ".env"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => l.includes("=") && !l.trimStart().startsWith("#"))
+    .map((l) => [l.slice(0, l.indexOf("=")).trim(), l.slice(l.indexOf("=") + 1)])
+);
+internos.agregar(envArchivo.BROKER_WHATSAPP_NUMBER, envArchivo.WHATSAPP_BUSINESS_PHONE);
+// La línea de negocio aparece en el audit log con el formato viejo (con 15).
+// Se agrega explícita porque el .env no la tiene: ahí está el número personal.
+internos.agregar("54111557994543");
+
+const excluidas = [...porId.values()].filter((c) => internos.contiene(c.id)).length;
+
 // Más recientes primero: si se corta a la mitad, quedan etiquetadas las que
 // más importan.
-const conversaciones = [...porId.values()].sort((a, b) =>
+const conversaciones = [...porId.values()]
+  .filter((c) => !internos.contiene(c.id))
+  .sort((a, b) =>
   b.mensajes[b.mensajes.length - 1].timestamp.localeCompare(a.mensajes[a.mensajes.length - 1].timestamp)
 );
 

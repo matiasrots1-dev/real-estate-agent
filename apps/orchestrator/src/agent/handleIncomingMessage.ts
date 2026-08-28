@@ -6,7 +6,8 @@ import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import { effectiveConfidenceThreshold, filterCatalogByChannel, findIntent } from "./intentCatalog.js";
-import type { IntentClassifier } from "./classifier.js";
+import type { ContextoConversacion, IntentClassifier } from "./classifier.js";
+import type { UltimoContactoStore } from "./ultimoContactoStore.js";
 import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier } from "./brokerNotifier.js";
@@ -55,6 +56,46 @@ export class NotImplementedIntentError extends Error {
   }
 }
 
+/**
+ * Arma el hilo de la conversación para el clasificador.
+ *
+ * Un fallo acá no puede tumbar el mensaje: si el audit log o el registro de
+ * contactos fallan, se clasifica sin contexto — que es exactamente lo que se
+ * hacía antes. Peor clasificación es aceptable; perder el mensaje no.
+ */
+async function armarContexto(
+  deps: HandleMessageDeps,
+  message: IncomingWhatsAppMessage
+): Promise<ContextoConversacion | undefined> {
+  try {
+    const previos: string[] = [];
+    for (const entrada of await deps.auditLog.readAll()) {
+      // Igualdad EXACTA del conversationId, nunca comparación canónica: un
+      // match flojo mezclaría el hilo de dos personas distintas y el
+      // clasificador leería la conversación de otro (docs/TASKS.md Bloque 17,
+      // el leadId inconsistente).
+      if (entrada.conversationId !== message.from) continue;
+      if (entrada.incomingMessage) previos.push(entrada.incomingMessage);
+    }
+
+    let horasDesdeContactoDelBroker: number | undefined;
+    const contacto = await deps.ultimoContactoStore?.get(message.from);
+    if (contacto) {
+      const ms = Date.now() - new Date(contacto.contactadoAt).getTime();
+      // Sólo se informa si es reciente: que el broker haya escrito hace tres
+      // meses no ayuda a interpretar el mensaje de hoy, y meterlo en el prompt
+      // sólo agrega ruido.
+      if (ms >= 0 && ms <= 7 * 24 * 3600 * 1000) horasDesdeContactoDelBroker = ms / 3_600_000;
+    }
+
+    if (previos.length === 0 && horasDesdeContactoDelBroker === undefined) return undefined;
+    return { mensajesPrevios: previos, horasDesdeContactoDelBroker };
+  } catch (error) {
+    console.warn("No se pudo armar el contexto de la conversación; se clasifica sin él:", error);
+    return undefined;
+  }
+}
+
 /** Motivo que se registra en el audit log y se le manda al broker en modo silencioso. */
 const MOTIVO_SILENCIOSO =
   "Modo silencioso activo: el cliente NO recibió respuesta. Este borrador es para que respondas vos a mano.";
@@ -96,6 +137,12 @@ export interface HandleMessageDeps {
    * único que no ocurre es el envío al cliente.
    */
   modoSilencioso?: boolean;
+  /**
+   * Para saber si el broker le escribió a esta persona y hace cuánto. Es el
+   * contexto que más aporta: convierte "recordame el link" de inclasificable
+   * en un pedido de ficha en respuesta a un contacto.
+   */
+  ultimoContactoStore?: UltimoContactoStore;
 }
 
 export interface HandleMessageResult {
@@ -163,7 +210,8 @@ export async function handleIncomingMessage(
 
   const catalogForChannel = filterCatalogByChannel(deps.catalog, channel);
 
-  const classification = await deps.classifier.classify(message.text, catalogForChannel);
+  const contexto = await armarContexto(deps, message);
+  const classification = await deps.classifier.classify(message.text, catalogForChannel, contexto);
   const intent = findIntent(deps.catalog, classification.intentId);
   if (!intent) {
     throw new NotImplementedIntentError(classification.intentId);
