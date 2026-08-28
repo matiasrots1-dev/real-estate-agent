@@ -20,7 +20,8 @@
     "pendientes": "tsx scripts/pendientes.mts",
     "estilo:reanonimizar": "tsx scripts/reanonimizar-estilo.mts",
     "etiquetar": "tsx scripts/etiquetar-conversaciones.mts",
-    "medir:clasificador": "tsx scripts/medir-clasificador.mts"
+    "medir:clasificador": "tsx scripts/medir-clasificador.mts",
+    "medir:produccion": "tsx scripts/medir-produccion.mts"
   },
   "engines": {
     "node": ">=20"
