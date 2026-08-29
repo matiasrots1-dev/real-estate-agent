@@ -1678,7 +1678,121 @@ BAJA por WhatsApp vuelve al texto cuando el sistema la maneje.
 silencioso, porque recien ahi el agente empieza a mandar mensajes que alguien
 podria querer frenar.
 
-## Bloque 31 — Persistencia real (Postgres), si el volumen ya lo justifica
+## Bloque 32 — Contexto de conversacion en el clasificador
+Cierra la parte grande del Bloque 28. Salio de etiquetar A MANO 43
+conversaciones reales (`npm run etiquetar`), porque medir el clasificador
+contra sus propias etiquetas es circular.
+
+### El diagnostico, con la verdad de base manual
+Los 5 leads que el clasificador perdia enteros **eran todos continuaciones**:
+"si dale", "Recordame el link porfa", "Mayormente eso". Ninguno es
+clasificable aislado y **ningun intent nuevo los arregla**. Dos de esos cinco
+eran ademas el UNICO mensaje de la conversacion: respondian a algo que el
+broker habia mandado, no iniciaban nada.
+
+Confirmado en el codigo: `classify(message: string, catalog)` recibia **solo
+el texto del mensaje actual**. Ni historial, ni mensaje previo, ni si hubo un
+contacto saliente.
+
+- [x] `ContextoConversacion`: mensajes entrantes previos + **hace cuantas
+      horas el broker le escribio a esa persona**. El segundo dato es el que
+      mas aporta y el unico que sirve para los casos de mensaje unico.
+- [x] **No incluye que dijo el broker.** Los dos registros de salientes estan
+      partidos a proposito por la decision de privacidad del corpus de estilo
+      (uno tiene telefono sin texto, el otro texto sin telefono) y no se pueden
+      unir. Para que el agente pudiera responder CON el link correcto habria
+      que reabrir esa decision.
+- [x] Techo de 4 mensajes y 220 caracteres: el clasificador esta en el camino
+      critico de cada webhook (1686-2241 ms medidos).
+- [x] Busqueda del hilo por igualdad **exacta** del `conversationId`, nunca
+      canonica: un match flojo mezclaria dos conversaciones y el clasificador
+      leeria la de otro (Bloque 17).
+- [x] Si el audit log falla, se clasifica sin contexto en vez de perder el
+      mensaje.
+
+### Dos intents nuevos (el resto del Bloque 28)
+- [x] `rechazo_desinteres` — no existia ningun intent para que el cliente diga
+      que NO. Dos de los cinco leads perdidos eran rechazos. **Depende del
+      contexto**: "no, gracias" aislado no se distingue de un no a cualquier
+      cosa.
+- [x] `derivacion_colega` — colegas de otras inmobiliarias derivando un
+      cliente. Antes caian en fallback o, peor, en `reclamo_queja` (paso con
+      "Fiedotin Propiedades").
+- Los dos con `requires_broker: true`, con el motivo escrito en el YAML.
+
+### Criterio de aceptacion (definido por el dueno del repo ANTES de empezar)
+"Si la precision cae, el contexto no se mergea, aunque el recall suba."
+
+    A) hoy                 precision 29%  recall 13%
+    B) catalogo nuevo      precision 36%  recall 25%
+    C) bloque completo     precision 50%  recall 38%
+
+Reejecutable: `npm run medir:clasificador`.
+
+**Error corregido en la propia medicion antes de darla por buena**: contaba A
+como "cualquier mensaje de la conversacion matcheo" y B/C como "el ultimo
+mensaje matcheo". A tenia muchas mas oportunidades de acertar, y el recall
+parecia desplomarse de 69% a 38% por la metrica, no por el cambio.
+
+**Pregunta que lo habria agarrado antes**: *"las variantes que comparo,
+¿responden exactamente la misma pregunta?"*.
+
+### Medicion en produccion (la comparable, 230 mensajes)
+El criterio de aceptacion se midio sobre el ULTIMO mensaje de cada
+conversacion. Esta corrida clasifica **cada mensaje** con el contexto que
+habria tenido en ese momento (`ms.slice(0, k)`, nunca mensajes del futuro),
+que es lo que el sistema hace de verdad. `npm run medir:produccion`.
+
+    referencia (hoy)   precision 42%  recall 69%
+    bloque completo    precision 52%  recall 81%   TP=13 FP=12 FN=3 TN=16
+
+- [ ] **La senal de contacto del broker quedo sin validar.** Cubre 5 de 230
+      mensajes: el registro de contactos arranca el 26/8 (cuando se engancho
+      el eco) y el audit log va del 26/7 al 28/8. De 44 conversaciones, 11
+      tienen registro y solo 2 lo tienen ANTERIOR a algun mensaje; usar las
+      otras 9 seria filtrar informacion del futuro. Se valida sola con
+      trafico en vivo. En el unico caso donde aplico (***9262) movio la
+      clasificacion en la direccion correcta.
+- [ ] **El clasificador no es determinista.** Dos corridas con entradas
+      identicas dieron intents distintos (***3640: fallback vs
+      rechazo_desinteres). Sobre 44 casos eso es ruido de corrida encima del
+      ruido de muestra. Los numeros son una direccion, no una medicion fina.
+
+### RIESGO ABIERTO: la plantilla de espera se repite literal
+Encontrado mirando el recorrido caso por caso, no en ninguna metrica: las
+agregadas cuentan una conversacion como bien atendida si **algun** mensaje
+escalo, y eso tapa lo que recibe la persona en los otros.
+
+`fallback_low_confidence` responde `template` con texto fijo y sin variables.
+Con el modo silencioso apagado, los 16 leads etiquetados recibirian **57
+envios de la misma frase literal**. El peor caso (***3661) son 16 repeticiones
+de "Dejame confirmarlo con el asesor y te respondo enseguida" en una
+conversacion de 18 mensajes; ***9738 otras 16.
+
+**Es bloqueante para apagar el modo silencioso**, mas que la precision: un
+cliente que recibe la misma frase 16 veces ve un bot roto. Ninguna metrica de
+clasificacion lo iba a mostrar, porque el intent es CORRECTO — el problema es
+que hacemos con el.
+
+Opciones sin decidir (es decision del dueno del repo): no repetir la
+plantilla si ya se mando en la misma conversacion; variar el texto; o quedarse
+callado despues de la primera y solo escalar.
+
+**Pregunta que lo habria agarrado antes**: *"si esta conversacion tiene 18
+mensajes, ¿que recibe la persona en los 16 que no escalaron?"*.
+
+### Lo que queda del catalogo
+- [ ] **El umbral de confianza, quieto por decision del dueno del repo.** Subir
+      a 0.6 mejoraria la precision unos 8 puntos y costaria 6 de recall, y no
+      toca ninguno de los casos perdidos, que estaban en fallback por falta de
+      contexto y no por umbral.
+- [ ] La muestra es chica: 16 leads y 28 no-leads. Un caso mueve el numero 6
+      puntos. La direccion es clara, la magnitud no.
+- [ ] El contexto tambien introduce falsos positivos nuevos: "nos vemos"
+      (etiquetado no-lead) paso a `agendar_visita` 0.72. Neto positivo, pero
+      no es gratis.
+
+## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
       1) siguen alcanzando una vez que hay jobs corriendo periódicamente
