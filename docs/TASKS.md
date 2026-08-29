@@ -1678,6 +1678,90 @@ BAJA por WhatsApp vuelve al texto cuando el sistema la maneje.
 silencioso, porque recien ahi el agente empieza a mandar mensajes que alguien
 podria querer frenar.
 
+## Bloque 31 — La plantilla fija se manda UNA vez por conversacion
+Sale del hallazgo del Bloque 32: con el modo silencioso apagado, los 16 leads
+etiquetados recibirian 57 envios de la misma frase; una sola persona, 16
+seguidas. Decision del dueno del repo: **responder la plantilla una vez y
+despues callarse**. Los mensajes siguientes se siguen procesando y escalando
+al broker; lo unico que no sale es otra plantilla.
+
+### Alcance: 7 plantillas, no una
+Del catalogo, 12 intents usan `style: template`. Cinco llevan variables
+(`{direccion_corta}`, `{fecha_hora}`) y cambian de texto en cada envio: esas
+NO entran, porque llevan informacion real. Las otras siete son texto fijo y
+**las siete dicen lo mismo**: negociacion_precio, reclamo_queja,
+consulta_legal_contractual, hablar_con_persona, rechazo_desinteres,
+derivacion_colega y fallback_low_confidence.
+
+Por eso la supresion es **una plantilla fija por conversacion en total, no una
+por intent**. ***9738 toca tres de esas siete: suprimir por intent le mandaria
+igual tres frases distintas que dicen "te paso con el asesor". El criterio
+sale del catalogo en runtime (style template + sin `{variables}`), no de una
+lista hardcodeada en TypeScript.
+
+### Pre-mortem
+**1. El silencio se vuelve permanente.** La condicion para volver a hablar es
+que el broker responda, y eso se detecta por el eco de coexistencia, que es
+best-effort: Meta no lo reintenta, y solo se registra si el destinatario
+matchea un lead conocido. Si el eco se pierde, esa persona **nunca mas**
+recibe nada. Es el patron de "se rompe solo sin que nadie toque nada" de los
+obituarios previos, al reves: se queda roto solo.
+   *Mitigado*: techo temporal. Pasados N dias la plantilla puede volver a
+   salir aunque no haya llegado ningun eco. Con test.
+
+**2. El propio sistema destraba el silencio.** `UltimoContactoStore` guarda
+contactos con `origen: "sistema" | "manual"` en el mismo campo de fecha. Hoy
+solo se escribe `"manual"` (app.ts, desde el eco), pero el job de recontacto
+del Bloque 27 va a escribir `"sistema"` cuando se cablee. Si la condicion
+mira solo la fecha, el recontacto automatico se cuenta como "el broker
+respondio" y la repeticion vuelve, sin que nadie toque este codigo.
+   *Mitigado*: se filtra por `origen === "manual"`, con un test que registra
+   un contacto `"sistema"` y verifica que el silencio NO se rompe. Es un test
+   de un camino que todavia no existe, escrito ahora para que el Bloque 27 no
+   lo reintroduzca.
+
+**3. El audit log dice que se envio algo que no se envio.** Si el camino de
+supresion audita `responseSent` con el texto de la plantilla, el registro
+afirma que el cliente recibio una respuesta que nunca salio. Rompe
+`npm run pendientes` y cualquier forense futura — es la misma clase de agujero
+que los 39 POST con 6 respuestas.
+   *Mitigado*: se audita `responseSent: undefined` y un motivo propio,
+   igual que hace el modo silencioso. Con test.
+
+**4. El conjunto de plantillas fijas se desincroniza del catalogo.** Si
+manana alguien le agrega una variable a una de las siete, o saca las variables
+de otra, el conjunto cambia en silencio y la supresion aplica donde no debe.
+   *Mitigado*: el conjunto se deriva del catalogo en runtime, y un test fija
+   la clasificacion actual de las 12 plantillas, asi editar el YAML falla
+   ruidoso en vez de cambiar comportamiento sin que nadie se entere.
+
+### Decisiones
+- [x] **Si no se puede leer el historial, se suprime** (falla cerrado). El
+      dueno del repo dijo que 16 repeticiones es peor que el silencio, asi que
+      ante la duda no se manda. El costo es perder una plantilla legitima.
+- [x] Aplica **por conversacion**, nunca global.
+- [x] Techo de 7 dias (`DIAS_TECHO_SILENCIO`) para el modo de fallo 1.
+
+### Como quedo
+- [x] `agent/plantillaRepetida.ts`: `plantillasFijas()` deriva el conjunto del
+      catalogo en runtime, y `decidirPlantilla()` es una funcion pura — recibe
+      historial, ultimo contacto y `ahora`, sin leer nada. Testeable sin API.
+- [x] `leerHistorial()` reemplaza a la lectura que hacia `armarContexto`: una
+      sola pasada por el audit log alimenta el contexto del clasificador **y**
+      la supresion. `armarContexto` quedo pura.
+- [x] Cableado en `finalizeEscalation`, que es por donde pasan las 7 (todas
+      `requires_broker: true`, fijado en un test).
+- [x] 20 tests nuevos; suite completa 581/581 en verde.
+- [x] **Mutation testing de las 6 mitigaciones** — sacar el filtro por
+      `origen`, sacar el techo, contar las suprimidas como enviadas, ignorar
+      la respuesta del broker, fallar abierto, y auditar el texto como si se
+      hubiera enviado. Las 6 ponen tests en rojo.
+
+### Riesgo abierto
+- [ ] **Nada de esto se nota hasta apagar el modo silencioso**, que es cuando
+      el agente empieza a responderle al cliente. Hasta entonces el camino
+      corre pero no cambia lo que recibe nadie.
+
 ## Bloque 32 — Contexto de conversacion en el clasificador
 Cierra la parte grande del Bloque 28. Salio de etiquetar A MANO 43
 conversaciones reales (`npm run etiquetar`), porque medir el clasificador
