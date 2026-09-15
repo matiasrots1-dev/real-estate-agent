@@ -1934,13 +1934,25 @@ mensajes no llegan.
   administrador, `configurar-acceso.sh` creó el usuario `claude-lightsail`
   (solo Lightsail), guardó su clave sin mostrarla y cerró la sesión.
 
+- **El primer deploy real falló por algo que existía solo en la laptop.**
+  `shared-types` se consume por su `main` (`dist/index.js`), y `dist/` está en
+  `.gitignore`: `git archive` no lo trae. En la laptop funcionaba porque `dist/`
+  había quedado de una compilación anterior. La verificación del deploy lo
+  agarró (`/health` no respondía y mostró `ERR_MODULE_NOT_FOUND`), y ahora el
+  deploy compila `shared-types` después de `npm ci`.
 **Pregunta que lo habría agarrado antes**: *"¿por dónde pasa el tráfico de esta
 máquina antes de llegar a internet?"*. El antivirus estaba en el medio de toda
 conexión HTTPS de la laptop, y el diseño asumía una conexión directa.
 
+Y para el deploy: *"¿qué tiene mi máquina que no está en el repo?"*. Un
+artefacto compilado que nadie recordaba haber generado alcanzó para que todo
+andara local y nada arrancara en el servidor.
+
 ### Estado
 - [x] Scripts de creación, preparación, migración y deploy (`infra/aws/`).
-- [ ] Crear el servidor y hacer el primer deploy.
+- [x] Crear el servidor y hacer el primer deploy (2026-09-15, `ae811db497d9`).
+      Medido en el servidor: 501 MB de memoria real del servicio (límite 1500),
+      905 MB de 1907 en toda la máquina.
 - [ ] Pasarle a DoubleTick la URL nueva y verificar que llegan mensajes.
 - [ ] Guarda en el código contra dos schedulers (modo de fallo 2).
 - [ ] Drenar la cola al apagar (modo de fallo 5).

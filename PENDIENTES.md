@@ -10,21 +10,29 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Estado ahora
 
-- **El bot está apagado desde el 30/8.** Corría en la laptop. Mientras siga
-  así no queda registro de quién escribe: los mensajes están en WhatsApp, pero
-  no en el audit log ni en `npm run pendientes`.
-- Modo silencioso: **prendido** (default de fábrica). No le responde a clientes.
-- En curso: **Bloque 35, subir el bot a AWS Lightsail** (rama
-  `bloque-35-deploy-aws`). Los scripts están en `infra/aws/`; falta crear el
-  servidor, hacer el primer deploy y pasarle a DoubleTick la URL nueva.
+- **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`),
+  pero **todavía no recibe mensajes**: DoubleTick sigue apuntando a la URL
+  vieja. Hasta que la cambien, no queda registro de quién escribe.
+- Modo silencioso: **prendido y forzado por systemd**. No le responde a
+  clientes; apagarlo exige un PR.
+- En curso: **Bloque 35**. Falta que DoubleTick cambie la URL a
+  `https://3-133-173-247.sslip.io/webhook` y confirmar que llegan mensajes.
+  Después, abrir el PR de `bloque-35-deploy-aws`: hasta mergearlo, `main` no
+  tiene `infra/aws/` y `deploy.sh` sin argumentos no funciona.
+- **No levantar el bot en la laptop**: serían dos bots con las mismas
+  credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
   `npm run pendientes` en la laptop mostraría una lista vieja: hay que usar
   `infra/aws/npm-en-servidor.sh pendientes`.
 
 ## Esperan una decisión tuya
 
-- [ ] **Dominio del webhook**: subdominio propio del negocio, o sslip.io, que es
-      gratis pero si ese servicio se cae no llegan los mensajes.
+- [ ] **Dominio del webhook**: arrancó con sslip.io, que es gratis pero si ese
+      servicio se cae no llegan los mensajes. Pasar a un subdominio propio
+      implica volver a avisarle a DoubleTick.
+- [ ] **Confirmar el plan pago y el MFA de AWS.** La CLI mostró la cuenta en
+      Free plan y sin MFA; se dio por hecho al terminar la alarma de gasto,
+      pero no se volvió a verificar.
 - [ ] **El repo de GitHub es público.** `.env` y `data/` nunca se commitearon,
       pero conviene revisar el historial por los incidentes de datos de los
       Bloques 10 y 12, y decidir si el repo debería ser privado.
