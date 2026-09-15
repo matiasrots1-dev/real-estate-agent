@@ -26,10 +26,13 @@ Todos los comandos se corren **desde Git Bash, en la raíz del repo**.
 ## Qué hace falta en la laptop
 
 - Git Bash.
-- AWS CLI con el perfil `bot-inmobiliaria`: un usuario de IAM con permiso
-  **solo** sobre Lightsail. La clave se carga con
-  `aws configure --profile bot-inmobiliaria`, nunca en el repo ni en un chat.
+- AWS CLI con el perfil `bot-inmobiliaria`, que usa el usuario de IAM
+  `claude-lightsail`, con permiso **solo** sobre Lightsail. Lo crea
+  `infra/aws/configurar-acceso.sh` (ver "Primera vez"), que guarda la clave sin
+  mostrarla. La clave nunca va al repo ni a un chat.
 - La clave SSH `~/.ssh/bot-inmobiliaria-aws`.
+- Si un antivirus inspecciona el HTTPS, el paquete de certificados que arma
+  `infra/aws/confiar-antivirus.sh`.
 
 La clave de AWS solo se usa para crear o modificar el servidor. Para
 desplegar o ver logs alcanza con la IP: si la clave está desactivada en IAM,
@@ -37,17 +40,29 @@ anteponé `IP_SERVIDOR=<ip>` a cualquier comando.
 
 ## Primera vez, en orden
 
-1. `infra/aws/crear-servidor.sh`
-2. `infra/aws/preparar-servidor.sh` (usa `<ip>.sslip.io`) o
+1. **Solo si un antivirus inspecciona el HTTPS** (en esta laptop, Norton 360):
+   `infra/aws/confiar-antivirus.sh`. Sin eso, la AWS CLI falla en cualquier
+   llamada con `CERTIFICATE_VERIFY_FAILED`. Hay que repetirlo si se reinstala
+   la AWS CLI o el antivirus.
+2. `aws login --profile admin-temporal`: abre una sesión temporal de
+   administrador desde el navegador. Después, `infra/aws/configurar-acceso.sh`
+   verifica plan pago, MFA y alarma de gasto, crea el usuario
+   `claude-lightsail` (solo Lightsail), guarda su clave en el perfil
+   `bot-inmobiliaria` sin mostrarla y cierra la sesión de administrador.
+3. `infra/aws/crear-servidor.sh`
+4. `infra/aws/preparar-servidor.sh` (usa `<ip>.sslip.io`) o
    `infra/aws/preparar-servidor.sh bot.midominio.com`. Con dominio propio, el
    registro DNS tiene que apuntar a la IP **antes** de correrlo.
-3. **Apagar el bot de la laptop**, y después `infra/aws/migrar.sh`.
-4. `infra/aws/deploy.sh`
-5. Probar desde afuera: `curl -i https://<dominio>/webhook`. Tiene que
-   contestar el bot, no un error de conexión ni de certificado.
-6. **Pasarle a DoubleTick la URL nueva.** Recién desde ese momento entra
+5. **Apagar el bot de la laptop**, y después `infra/aws/migrar.sh`.
+6. `infra/aws/deploy.sh`
+7. Probar el HTTPS **desde el propio servidor**:
+   `infra/aws/servidor.sh "curl -sS -o /dev/null -w '%{http_code}\n' https://<dominio>/webhook"`.
+   Tiene que devolver un código HTTP del bot, no un error de certificado.
+   Desde la laptop no sirve: el tráfico pasa por el antivirus, que reemplaza
+   el certificado, y el resultado engaña para cualquier lado.
+8. **Pasarle a DoubleTick la URL nueva.** Recién desde ese momento entra
    tráfico real al servidor.
-7. Confirmar que llegan mensajes: el contador del webhook en
+9. Confirmar que llegan mensajes: el contador del webhook en
    `infra/aws/servidor.sh 'curl -s localhost:3000/health'` tiene que subir.
 
 ## Día a día
