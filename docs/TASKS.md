@@ -1838,6 +1838,56 @@ de otra, el conjunto cambia en silencio y la supresion aplica donde no debe.
       el agente empieza a responderle al cliente. Hasta entonces el camino
       corre pero no cambia lo que recibe nadie.
 
+## Bloque 34 — El audit log se escribe SIEMPRE, antes de clasificar
+**Paso de verdad el 2026-08-28.** Se acabo el credito de la API de Anthropic y
+los mensajes entrantes se evaporaron: `/webhook` respondio 200, el proveedor
+los dio por entregados, el `.catch` de la cola lo escribio solo en consola, y
+no quedo entrada en `audit_log` ni notificacion al broker. `npm run pendientes`
+tampoco los muestra, porque lee el audit log.
+
+Decision del dueno del repo: **el registro de que alguien escribio no puede
+depender de que la API de Anthropic funcione.** El audit log se escribe con lo
+que llego —telefono, texto, timestamp— ANTES de intentar clasificar. Si la
+clasificacion falla, la entrada queda marcada como fallida y se escala con el
+texto crudo.
+
+### Lo que hizo falta medir antes de disenar
+- `AuditLogEntry` **no tiene `messageId`**. Sin eso no se puede vincular la
+  entrada de "llego" con la de "se resolvio", y todo consumidor que cuenta
+  entradas pasaria a contar doble.
+- **El camino de notificacion tambien usa el LLM.**
+  `notifyBrokerBestEffort` llama a `composeDraft` (Claude) dentro del mismo
+  `try`. El arreglo ingenuo — atrapar el error del clasificador y avisarle al
+  broker — habria fallado por la misma causa que el error original.
+- Nada en disco guarda lo que llego: `LruMessageDeduplicator` y
+  `ContactosConocidos` son en memoria, y del `rawBody` solo se loguea el
+  **largo**, nunca el contenido.
+
+### Pre-mortem
+**1. El aviso de que fallo tambien falla.** Si el clasificador murio porque la
+API esta caida, `composeDraft` esta igual de muerto y la notificacion se
+pierde en su propio `catch`. El broker sigue sin enterarse y el bloque no
+sirvio para nada.
+   *Mitigar*: el camino de fallo **no llama al LLM**. Se notifica con el texto
+   crudo, sin borrador. Con un test donde el draftComposer tira.
+
+**2. Doble contabilidad silenciosa.** Con dos entradas por mensaje, todo lo
+que lee el audit log cambia de numero sin que nadie lo toque: `medir:*`,
+`pendientes`, la purga por retencion, y sobre todo `leerHistorial`, que le
+pasaria al clasificador el mismo mensaje repetido como contexto previo.
+   *Mitigar*: `messageId` en la entrada y colapso por mensaje en la lectura.
+   Test de que el contexto no duplica.
+
+**3. La escritura del audit log tumba el mensaje.** Si la entrada de "llego"
+se escribe antes que todo y esa escritura falla, se pierde el mensaje entero
+— peor que hoy, porque hoy al menos el camino feliz funciona.
+   *Mitigar*: best-effort, nunca propaga. Test con un store que tira.
+
+**4. Inundacion de notificaciones.** Si la API se cae dos horas y entran 40
+mensajes, son 40 escalamientos al WhatsApp del broker. La proteccion contra
+perder mensajes se convierte en la razon por la que deja de mirar el telefono.
+   *Decidir*: mitigar con un agrupador, o anotarlo como riesgo asumido.
+
 ## Bloque 32 — Contexto de conversacion en el clasificador
 Cierra la parte grande del Bloque 28. Salio de etiquetar A MANO 43
 conversaciones reales (`npm run etiquetar`), porque medir el clasificador
