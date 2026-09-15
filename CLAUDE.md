@@ -161,6 +161,11 @@ contexto de sesiones anteriores) **ver `docs/ONBOARDING.md`.**
 
 ## 6. Por dónde empezar — plan de trabajo sugerido
 
+**Antes que nada, abrí `PENDIENTES.md`** (raíz del repo): el tablero corto
+de qué está bloqueado, qué PRs esperan revisión y qué decisiones esperan al
+dueño del repo. Mencionale al usuario lo bloqueante al arrancar, y actualizá
+ese archivo en el mismo PR que cierra un bloque o registra una decisión.
+
 `docs/TASKS.md` es el backlog ordenado y la fuente de verdad de qué está
 hecho. Abrilo y andá al primer bloque sin `[x]` — ese es el punto de
 partida real, no una lista fija escrita acá (que quedaría desactualizada
