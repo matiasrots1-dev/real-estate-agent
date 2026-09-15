@@ -28,6 +28,12 @@ rm -f "$TAR"
 # npm la omitiría, y el bot arrancaría con /health en verde y los MCP muertos.
 sudo -u bot -H env -u NODE_ENV bash -c "cd '$REL.nuevo' && npm ci --no-audit --no-fund --loglevel=error"
 
+# shared-types se consume por su `main`, que es dist/index.js. dist/ está en
+# .gitignore, así que git archive no lo trae: sin compilarlo acá, el
+# orchestrator y los MCP servers no arrancan (ERR_MODULE_NOT_FOUND). En la
+# laptop no se nota porque dist/ quedó de una compilación anterior.
+sudo -u bot -H env -u NODE_ENV bash -c "cd '$REL.nuevo' && npm run build --workspace=shared-types --silent"
+
 # El .env y los datos viven fuera del release, así sobreviven a cada deploy.
 ln -sfn "$ETC_DIR/.env" "$REL.nuevo/.env"
 rm -rf "$REL.nuevo/apps/orchestrator/data"
