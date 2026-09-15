@@ -1792,6 +1792,134 @@ mensajes, ¿que recibe la persona en los 16 que no escalaron?"*.
       (etiquetado no-lead) paso a `agendar_visita` 0.72. Neto positivo, pero
       no es gratis.
 
+## Bloque 35 — El bot corre en un servidor (AWS Lightsail)
+
+El bot corría en la laptop y estuvo apagado del 30/8 al 15/9 sin que nadie lo
+notara: dos semanas sin audit log ni borradores para el broker.
+
+Decisión del dueño del repo (2026-09-15), después de investigar Railway, Render
+y AWS con experiencias de usuarios de 2025–2026: **AWS Lightsail, instancia de
+2 GB en Ohio (`us-east-2`)**. Operación y comandos en `infra/aws/README.md`.
+
+### Por qué Lightsail
+- **Railway:** 5 incidentes que afectaron servicios en marcha en unos 7 meses,
+  uno de ~8 h en todas sus regiones (19/5/2026). Recomienda el plan Pro
+  (USD 20 mínimo) para uso comercial, y los backups de volumen figuran como
+  exclusivos de Pro.
+- **Render:** el plan de 512 MB no alcanza para lo medido abajo, y el
+  siguiente ya es de 2 GB por USD 25.
+- **AWS:** ninguna opción administrada cumple "siempre prendido + disco + una
+  sola instancia" dentro de USD 5–15. App Runner no acepta clientes nuevos
+  desde abril de 2026. Lightsail es un VPS: precio fijo, snapshots diarios y el
+  mantenimiento a nuestro cargo, casi todo automatizado.
+
+### Lo que se midió antes de diseñar
+- **RAM en reposo:** con `tsx`, 12 procesos y ~606 MB; compilado, 4 procesos y
+  ~280 MB (medido en Windows, sin tráfico). En 2 GB entra holgado con `tsx`, así
+  que compilar queda como mejora y no como requisito.
+- **`tsx` es devDependency, pero se usa en producción** para lanzar los MCP
+  servers.
+- **Dos cálculos dependen de la hora local del proceso:** `recontactoPolicy.ts`
+  (`getHours`) y `topeDiarioStore.ts` (`getDate`).
+- **El apagado existe pero no drena la cola.** `shutdown` cierra el HTTP, frena
+  el scheduler, cierra los MCP y hace `process.exit(0)` sin esperar los mensajes
+  en curso.
+- **Los MCP servers no heredan el entorno completo:** reciben
+  `getInheritableEnv()` más las variables de config.
+- **Lightsail solo importa claves RSA.** La clave ed25519 se instala con el
+  script de primer arranque.
+- **`core.autocrlf=true` y no había `.gitattributes`.**
+
+### Pre-mortem
+Obituarios previos que aplican directo:
+- *"¿qué pasa si esto se conecta y funciona antes de que yo esté listo?"*
+  (incidente del 2026-08-12)
+- *"¿qué se rompe solo, sin que nadie toque nada?"*
+- los tests en verde que no prueban el comportamiento real (el `max_tokens: 32`
+  del Bloque 10)
+
+**1. `/health` en verde con el bot roto.**
+Si la instalación omite las devDependencies (`NODE_ENV=production`), `tsx` no
+está y los MCP servers no arrancan. Toda consulta a Tokko o a Calendar falla,
+pero el HTTP responde y `/health` dice `ok`.
+- *Mitigado:* `npm ci` corre sin `NODE_ENV`, y el deploy verifica con `pgrep` que
+  los tres MCP servers estén vivos. Si no lo están, falla y muestra los logs.
+
+**2. Dos bots vivos con las mismas credenciales.**
+Si después de migrar alguien levanta el orchestrator en la laptop con el `.env`
+de producción, su scheduler corre en paralelo al del servidor: recordatorios
+dobles hoy, recontactos dobles cuando se cablee el Bloque 27, y dos audit logs
+que divergen.
+- *Mitigado en parte:* `migrar.sh` se niega a correr si el bot de la laptop
+  responde.
+- *Riesgo abierto:* ninguna guarda en el código impide que el scheduler corra
+  fuera del servidor.
+
+**3. La hora del servidor corrida 3 horas.**
+El servidor arranca en UTC. La ventana de 9 a 20 del recontacto pasaría a ser
+de 6 a 17 hora argentina, y el tope diario se reiniciaría a las 21.
+- *Mitigado:* zona horaria del sistema en `America/Argentina/Buenos_Aires`, que
+  alcanza a todos los procesos, incluidos los MCP servers que no heredan el
+  entorno. Además, `TZ` en la unidad de systemd. El deploy imprime la hora del
+  servidor.
+
+**4. El modo silencioso se apaga al migrar.**
+Hoy depende de que `AGENTE_MODO_SILENCIOSO` no figure en el `.env`. Una edición
+del `.env` en el servidor lo apagaría sin revisión.
+- *Mitigado:* la unidad de systemd lo fuerza en `true`, y dotenv no pisa
+  variables que ya existen. Apagarlo exige cambiar un archivo versionado, con
+  PR. El deploy compara el valor **efectivo** del proceso (`/proc/<pid>/environ`)
+  con el de la unidad, y falla si no coinciden.
+
+**5. Se pierden mensajes en cada reinicio.**
+El apagado no drena la cola y DoubleTick no reintenta. Reinician el bot cada
+deploy y los reinicios automáticos por parches de seguridad.
+- *Riesgo asumido:* los reinicios automáticos quedan a las 06:00 y los deploys
+  se hacen en horario tranquilo. Drenar la cola al apagar queda como bloque
+  chico aparte.
+
+**6. Todo en un solo disco, en una sola cuenta.**
+Si la instancia se rompe o la cuenta se cierra, se pierden el audit log y el
+corpus de estilo. Con el Free plan, AWS cierra la cuenta a los 6 meses y borra
+todo 90 días después.
+- *Mitigado en parte:* snapshots automáticos diarios de Lightsail (06:00 hora
+  argentina, 7 días) y cuenta en plan pago.
+- *Riesgo abierto:* no hay copia fuera de AWS.
+
+**7. Un secreto termina en un log.**
+La verificación del webhook de Meta manda el `hub.verify_token` en la query
+string, y un log de accesos del proxy lo guardaría en texto plano.
+- *Mitigado:* Caddy corre sin log de accesos, y solo se publica `/webhook`.
+  `/health`, que muestra la fuente de Tokko y los contadores, queda accesible
+  únicamente desde el propio servidor.
+
+**8. Los scripts locales leen datos viejos.**
+`npm run pendientes`, `etiquetar` y `medir:*` leen `apps/orchestrator/data/` de
+la laptop. Después de migrar, esa copia queda congelada y `pendientes`
+mostraría una lista vieja de clientes sin responder.
+- *Mitigado:* `infra/aws/npm-en-servidor.sh pendientes` corre el script en el
+  servidor, contra los datos reales, sin traer datos personales a la laptop.
+
+**9. Los finales de línea de Windows rompen los scripts en Linux.**
+Con `core.autocrlf=true`, un script de bash que llega con `\r` falla en el
+servidor con errores crípticos.
+- *Mitigado:* `.gitattributes` fuerza LF en `*.sh` y `*.service`, y los scripts
+  se niegan a mandar al servidor un archivo con CRLF.
+
+**10. El nombre del servidor depende de un tercero.**
+Con sslip.io, si ese DNS gratuito se cae, DoubleTick no resuelve la URL y los
+mensajes no llegan.
+- *Recomendado:* subdominio propio del negocio. Si se usa sslip.io, queda como
+  riesgo asumido.
+
+### Estado
+- [x] Scripts de creación, preparación, migración y deploy (`infra/aws/`).
+- [ ] Crear el servidor y hacer el primer deploy.
+- [ ] Pasarle a DoubleTick la URL nueva y verificar que llegan mensajes.
+- [ ] Guarda en el código contra dos schedulers (modo de fallo 2).
+- [ ] Drenar la cola al apagar (modo de fallo 5).
+- [ ] Copia de los datos fuera de AWS (modo de fallo 6).
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase

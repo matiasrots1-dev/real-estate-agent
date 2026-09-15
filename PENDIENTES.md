@@ -14,12 +14,20 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   así no queda registro de quién escribe: los mensajes están en WhatsApp, pero
   no en el audit log ni en `npm run pendientes`.
 - Modo silencioso: **prendido** (default de fábrica). No le responde a clientes.
-- En curso: **subir el bot a un servidor**, para que no dependa de la laptop.
+- En curso: **Bloque 35, subir el bot a AWS Lightsail** (rama
+  `bloque-35-deploy-aws`). Los scripts están en `infra/aws/`; falta crear el
+  servidor, hacer el primer deploy y pasarle a DoubleTick la URL nueva.
+- **Después de migrar, los datos de verdad quedan en el servidor.**
+  `npm run pendientes` en la laptop mostraría una lista vieja: hay que usar
+  `infra/aws/npm-en-servidor.sh pendientes`.
 
 ## Esperan una decisión tuya
 
-- [ ] **Plataforma de hosting**: Render o Railway (las dos que nombra el SOW,
-      secc. 4.7).
+- [ ] **Dominio del webhook**: subdominio propio del negocio, o sslip.io, que es
+      gratis pero si ese servicio se cae no llegan los mensajes.
+- [ ] **El repo de GitHub es público.** `.env` y `data/` nunca se commitearon,
+      pero conviene revisar el historial por los incidentes de datos de los
+      Bloques 10 y 12, y decidir si el repo debería ser privado.
 - [ ] **Bloque 34, avisos durante una caída de la API**: ¿agrupados cada N
       minutos, o uno por mensaje?
 - [ ] **Documentación desactualizada**: `CLAUDE.md` dice que Tokko corre contra
@@ -52,8 +60,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - [ ] **Bloque 30**: palabra clave de BAJA y lista de no contactar.
 - [ ] Completar los `[CORCHETES]` de
       [docs/politica-privacidad.md](docs/politica-privacidad.md).
-- [ ] Sumar el hosting a la tabla "Con quién se comparten" cuando el bot corra
-      en un servidor.
+- [ ] Sumar AWS a la tabla "Con quién se comparten", con la base de la
+      transferencia internacional: para la Ley 25.326, EE.UU. no es un destino
+      "adecuado". Conviene que lo revise alguien que conozca la ley.
 
 ## Después
 
@@ -63,6 +72,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - [ ] **Bloque 33**: Postgres, solo si el volumen lo justifica.
 - [ ] Pedirle a DoubleTick la exportación del historial de chats, para el
       corpus de estilo.
+- [ ] **Riesgos abiertos del Bloque 35**: una guarda en el código contra dos
+      schedulers (laptop y servidor), drenar la cola al apagar, y una copia de
+      los datos fuera de AWS.
 
 ## Riesgos asumidos (no son trabajo pendiente)
 
