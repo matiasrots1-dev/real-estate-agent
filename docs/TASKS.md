@@ -1912,6 +1912,32 @@ mensajes no llegan.
 - *Recomendado:* subdominio propio del negocio. Si se usa sslip.io, queda como
   riesgo asumido.
 
+### Hallazgos durante la implementación del Bloque 35
+- **Norton 360 intercepta el HTTPS de la laptop.** Su Web/Mail Shield firma los
+  certificados con "Norton Web/Mail Shield Root". Windows y Node confían en esa
+  raíz (el propio Norton define `NODE_EXTRA_CA_CERTS`); la AWS CLI no, y fallaba
+  en toda llamada a AWS con `CERTIFICATE_VERIFY_FAILED`, incluido el último paso
+  de `aws login`. Resuelto con `infra/aws/confiar-antivirus.sh`, que configura un
+  paquete de certificados solo en los perfiles del bot.
+- **Una verificación de HTTPS hecha desde la laptop engaña.** El `curl` de Git
+  Bash da un error de certificado falso, y el de Windows podría aceptar un
+  certificado roto porque ve el de Norton. El certificado del servidor se
+  verifica desde el propio servidor.
+- **`MSYS_NO_PATHCONV=1` aplicado a todo un script rompe los ejecutables
+  nativos.** Hace falta para `aws.exe`, pero `openssl` (de `/mingw64`) deja de
+  recibir rutas traducidas y no encuentra los archivos. Se aplica solo a las
+  llamadas a `aws`.
+- **La cuenta de AWS estaba en Free plan, sin MFA en el usuario raíz y sin
+  alarma de gasto.** Lo detectó `infra/aws/configurar-acceso.sh` leyendo el
+  estado real con la CLI, en lugar de depender de una confirmación de palabra.
+- **`aws login` evita manejar la clave a mano.** Con una sesión temporal de
+  administrador, `configurar-acceso.sh` creó el usuario `claude-lightsail`
+  (solo Lightsail), guardó su clave sin mostrarla y cerró la sesión.
+
+**Pregunta que lo habría agarrado antes**: *"¿por dónde pasa el tráfico de esta
+máquina antes de llegar a internet?"*. El antivirus estaba en el medio de toda
+conexión HTTPS de la laptop, y el diseño asumía una conexión directa.
+
 ### Estado
 - [x] Scripts de creación, preparación, migración y deploy (`infra/aws/`).
 - [ ] Crear el servidor y hacer el primer deploy.
