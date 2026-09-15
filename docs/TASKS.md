@@ -1930,10 +1930,13 @@ mensajes no llegan.
 - **La cuenta de AWS estaba en Free plan, sin MFA en el usuario raíz y sin
   alarma de gasto.** Lo detectó `infra/aws/configurar-acceso.sh` leyendo el
   estado real con la CLI, en lugar de depender de una confirmación de palabra.
-  El dueño del repo activó el plan pago y el MFA el mismo 15/9. Quedó
-  **confirmado por él, no verificado por CLI**: el usuario `claude-lightsail`
-  no tiene permiso sobre facturación ni IAM. Se verifica en la próxima sesión
-  de administrador.
+  Verificado por CLI el mismo 15/9, con otra sesión de administrador: plan
+  **pago y activo** (USD 120 de crédito restante) y alarma de gasto creada
+  (USD 20 por mes, aviso al 80% del gasto real). El **MFA del usuario raíz no
+  aparece** (`AccountMFAEnabled = 0`), aunque se había dado por activado. Es
+  el caso por el que se verifica en vez de confiar en la confirmación. Ese
+  `aws login` tampoco lo probaba: reutilizó una sesión de consola ya abierta y
+  no pidió código.
 - **`aws login` evita manejar la clave a mano.** Con una sesión temporal de
   administrador, `configurar-acceso.sh` creó el usuario `claude-lightsail`
   (solo Lightsail), guardó su clave sin mostrarla y cerró la sesión.

@@ -27,6 +27,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
+- [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
+      no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
+      gasto sí quedaron bien.
 - [ ] **Dominio del webhook**: arrancó con sslip.io, que es gratis pero si ese
       servicio se cae no llegan los mensajes. Pasar a un subdominio propio
       implica volver a avisarle a DoubleTick.
