@@ -30,9 +30,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - [ ] **Dominio del webhook**: arrancó con sslip.io, que es gratis pero si ese
       servicio se cae no llegan los mensajes. Pasar a un subdominio propio
       implica volver a avisarle a DoubleTick.
-- [ ] **Confirmar el plan pago y el MFA de AWS.** La CLI mostró la cuenta en
-      Free plan y sin MFA; se dio por hecho al terminar la alarma de gasto,
-      pero no se volvió a verificar.
 - [ ] **El repo de GitHub es público.** `.env` y `data/` nunca se commitearon,
       pero conviene revisar el historial por los incidentes de datos de los
       Bloques 10 y 12, y decidir si el repo debería ser privado.
