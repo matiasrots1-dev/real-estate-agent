@@ -1472,7 +1472,7 @@ que es depender de que Meta nunca cambie la forma del payload.
       en el contador, para distinguir "el proveedor tiene el secreto mal" de
       "alguien está probando" de "falló la firma de Meta".
 
-### Hipotesis principal: se rompio el vinculo de coexistencia
+### Hipotesis 1: se rompio el vinculo de coexistencia (debilitada)
 Dato del dueno del repo (15/09): **el numero se opera replicando la sesion de
 WhatsApp Business de un iPhone en un Android** (la sesion original vive en el
 iPhone), y alrededor del 8/09 **la sesion se cerro y se volvio a abrir**.
@@ -1489,6 +1489,16 @@ por defecto, para reconectar solos los productos de Cloud API. Aparecio en un
 resumen de busqueda, no en la pagina de Meta. Hay que preguntarselo al
 proveedor, que es Tech Provider.
 
+**Corregido el mismo dia, con un dato del dueno del repo**: el Android esta
+vinculado por **codigo QR desde Dispositivos vinculados**, o sea es un
+dispositivo acompanante y no un registro aparte. Eso es compatible con
+coexistencia — Meta manda `smb_message_echoes` justamente por los mensajes
+escritos desde acompanantes, y el bot ya los usa. Asi que **replicar la
+sesion, por si solo, no explica el corte**. Lo que falta saber es cual sesion
+se cerro: la del iPhone (registro principal, se reabre con codigo de
+verificacion, y eso si puede romper el vinculo) o la del Android (se reabre
+escaneando el QR, y eso no lo rompe).
+
 La hipotesis explica de una sola vez las tres cosas medidas: el corte de
 eventos, el usuario de sistema sin activos y el envio imposible. Falta
 confirmar la fecha exacta del re-registro contra el 8/09 17:30 ART.
@@ -1499,6 +1509,18 @@ confirmar la fecha exacta del re-registro contra el 8/09 17:30 ART.
 - [ ] **Regla operativa**: con coexistencia, el numero se registra en UN solo
       telefono. Para usarlo en otro, dispositivos vinculados; volver a
       registrarlo rompe el vinculo y deja al bot sin recibir ni enviar.
+
+### Hipotesis 2: el proveedor perdio la asignacion de su lado
+Las listas vacias que medimos son del usuario de sistema **de ellos**
+(`tick-app System User`). Son igual de compatibles con que el proveedor haya
+rotado ese usuario de sistema, cambiado de app, o le haya quitado la WABA
+asignada, sin que en el telefono del broker haya cambiado nada. Desde aca no
+se puede distinguir de la Hipotesis 1: las dos producen exactamente los mismos
+errores. Solo el proveedor puede mirar su propio Business Manager.
+
+- [ ] Preguntarle al proveedor si ese usuario de sistema sigue teniendo la
+      WABA asignada, y si rotaron credenciales o cambiaron de app alrededor
+      del 8/09.
 
 ### Consecuencia: se puede retirar la escotilla
 Cuando el proveedor active el header, `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`
