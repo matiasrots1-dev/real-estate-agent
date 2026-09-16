@@ -1472,7 +1472,15 @@ que es depender de que Meta nunca cambie la forma del payload.
       en el contador, para distinguir "el proveedor tiene el secreto mal" de
       "alguien está probando" de "falló la firma de Meta".
 
-### Hipotesis 1: se rompio el vinculo de coexistencia (debilitada)
+### Causa CONFIRMADA: el numero esta desconectado de la plataforma
+**Confirmado el 2026-09-15 a las 19:53** con una captura del iPhone:
+*Ajustes > Cuenta > Plataforma para empresas* muestra la pantalla de alta,
+con el boton **Conectate a la plataforma para empresas**. Si estuviera
+conectado, ofreceria *Desconectar cuenta*. Eso explica de una sola vez el
+corte de eventos del 8/09, el usuario de sistema sin activos y el envio
+imposible.
+
+Como se llego (la hipotesis original, que quedo debilitada en el camino):
 Dato del dueno del repo (15/09): **el numero se opera replicando la sesion de
 WhatsApp Business de un iPhone en un Android** (la sesion original vive en el
 iPhone), y alrededor del 8/09 **la sesion se cerro y se volvio a abrir**.
@@ -1510,7 +1518,12 @@ confirmar la fecha exacta del re-registro contra el 8/09 17:30 ART.
       telefono. Para usarlo en otro, dispositivos vinculados; volver a
       registrarlo rompe el vinculo y deja al bot sin recibir ni enviar.
 
-### Hipotesis 2: el proveedor perdio la asignacion de su lado
+### Hipotesis 2: el proveedor perdio la asignacion de su lado (ya no hace falta)
+Quedo descartada como **explicacion necesaria**: la captura del telefono ya
+explica todo. Puede seguir siendo cierta en paralelo, y conviene preguntarla
+igual, porque al reconectar el proveedor tiene que volver a tener el numero
+asignado a su app.
+
 Las listas vacias que medimos son del usuario de sistema **de ellos**
 (`tick-app System User`). Son igual de compatibles con que el proveedor haya
 rotado ese usuario de sistema, cambiado de app, o le haya quitado la WABA
