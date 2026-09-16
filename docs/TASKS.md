@@ -1472,6 +1472,34 @@ que es depender de que Meta nunca cambie la forma del payload.
       en el contador, para distinguir "el proveedor tiene el secreto mal" de
       "alguien está probando" de "falló la firma de Meta".
 
+### Hipotesis principal: se rompio el vinculo de coexistencia
+Dato del dueno del repo (15/09): **el numero se opera replicando la sesion de
+WhatsApp Business de un iPhone en un Android** (la sesion original vive en el
+iPhone), y alrededor del 8/09 **la sesion se cerro y se volvio a abrir**.
+
+En coexistencia, el numero queda vinculado a la Cloud API a traves de ese
+registro. Verificado en la documentacion de Meta:
+- El vinculo se puede cortar desde la propia app: *Settings > Account >
+  Business Platform > Disconnect Account*.
+- Al conectar un numero existente a la Cloud API **se desvinculan todos los
+  dispositivos companion**, y despues hay que volver a vincularlos.
+
+**No verificado**: que al re-registrar el numero aparezca una opcion, marcada
+por defecto, para reconectar solos los productos de Cloud API. Aparecio en un
+resumen de busqueda, no en la pagina de Meta. Hay que preguntarselo al
+proveedor, que es Tech Provider.
+
+La hipotesis explica de una sola vez las tres cosas medidas: el corte de
+eventos, el usuario de sistema sin activos y el envio imposible. Falta
+confirmar la fecha exacta del re-registro contra el 8/09 17:30 ART.
+
+- [ ] Mirar en el iPhone si el numero sigue conectado: *Configuracion > Cuenta
+      > Plataforma de WhatsApp Business*.
+- [ ] Confirmar fecha y hora del cierre y reapertura de sesion.
+- [ ] **Regla operativa**: con coexistencia, el numero se registra en UN solo
+      telefono. Para usarlo en otro, dispositivos vinculados; volver a
+      registrarlo rompe el vinculo y deja al bot sin recibir ni enviar.
+
 ### Consecuencia: se puede retirar la escotilla
 Cuando el proveedor active el header, `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`
 deja de tener razón de existir: ya no hace falta aceptar sin autenticar. Eso

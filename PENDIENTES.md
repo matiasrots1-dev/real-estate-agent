@@ -14,6 +14,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   17:30**, y el token con el que el bot enviaria (un usuario de sistema de la
   app del proveedor) perdio todo acceso al numero. El servidor nuevo esta sano
   y probado, pero no hay eventos para reenviar. Ver `docs/TASKS.md` Bloque 36.
+  Hipotesis principal: la sesion de WhatsApp Business se cerro y se volvio a
+  abrir alrededor de esa fecha (el numero se replica de un iPhone a un
+  Android), y eso rompe el vinculo de coexistencia con la Cloud API.
 - **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`),
   pero **todavía no recibe mensajes**: DoubleTick sigue apuntando a la URL
   vieja. Hasta que la cambien, no queda registro de quién escribe.
