@@ -1965,6 +1965,54 @@ andara local y nada arrancara en el servidor.
 - [ ] Drenar la cola al apagar (modo de fallo 5).
 - [ ] Copia de los datos fuera de AWS (modo de fallo 6).
 
+## Bloque 36 — El numero dejo de recibir eventos de Meta (BLOQUEANTE)
+Medido el 2026-09-15, justo despues de terminar el deploy en AWS.
+
+### Lo que esta medido
+- **DoubleTick no recibe ningun evento de Meta para el numero 3207688612809306
+  desde el 8/09 a las 17:30 ART.** Venia con 100-200 por dia y se corto de
+  golpe. El resto de sus lineas sigue recibiendo con normalidad.
+- El cambio de URL al servidor nuevo **quedo aplicado y probado**: 15/09 20:09,
+  y su evento de prueba de 20:17:56 llego y recibio 200 en 762 ms. Cruzado con
+  los logs del servidor: aceptado con el secreto valido, 305 bytes.
+- **Nuestro `WHATSAPP_ACCESS_TOKEN` es un usuario de sistema de la app del
+  proveedor**, no de una app nuestra: `GET /me` devuelve `tick-app System User`
+  (122101787181419977). El token es **valido**.
+- **Ese token ya no tiene acceso al numero.** Leer `/{phone_number_id}` y hasta
+  un POST de envio sin destinatario fallan con `code 100, error_subcode 33`.
+  O sea: hoy el bot **tampoco podria enviar** un mensaje.
+- `/me/businesses` y `/{usuario-de-sistema}/assigned_whatsapp_business_accounts`
+  devuelven **listas vacias**: no es falta de permiso de lectura, no hay activos
+  asignados.
+- **El `waba_id` de nuestro `.env` (846618321715441) no coincide con el que
+  nombra el proveedor (103523025667743).** Ninguno de los dos se puede leer.
+
+### Lo que NO esta demostrado
+- **Cuando** se perdio el acceso. Desde nuestro lado no hay forma de fecharlo:
+  el audit log se corta el 30/08 porque el bot estaba apagado, y no hubo envios
+  posteriores. La unica fecha es la medicion del proveedor.
+- Que alguien haya quitado la app del WABA. El proveedor lo afirmo y despues se
+  corrigio solo: su error de permisos tampoco probaba eso.
+- Si el numero se movio de WABA o de Business Manager.
+
+### Consecuencia
+El canal entrante estaba cortado **desde antes** del deploy, y el saliente
+tambien. El servidor esta sano y probado, pero no hay eventos para reenviar.
+Esto bloquea todo lo demas: sin canal no hay trafico real que medir ni modo
+silencioso que apagar.
+
+- [ ] Que cambio alrededor del 8/09, en Meta o en el telefono.
+- [ ] A que WABA pertenece hoy el numero y quien la administra.
+- [ ] Volver a dar de alta el acceso de la app del proveedor al numero.
+- [ ] Evaluar tener una app propia de Meta: hoy el token con el que el bot
+      envia es de la app del proveedor, asi que su configuracion nos deja sin
+      enviar tambien.
+
+**Pregunta que lo habria agarrado antes**: *"¿que me avisa si el canal se corta
+cuando nadie esta mirando?"*. El canal murio el 8/09, el bot estaba apagado
+desde el 30/08, y se descubrio el 15/09 por un comentario del proveedor. Nada
+en el sistema avisa que dejaron de llegar mensajes.
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
