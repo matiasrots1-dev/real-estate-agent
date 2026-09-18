@@ -10,6 +10,11 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Estado ahora
 
+- **Los numeros, para no confundirlos otra vez**: la linea del bot, a la que
+  le escriben los clientes, es la que termina en **...4543**. Los borradores
+  y las ordenes al bot van por el celular personal, el **...6699**
+  (`BROKER_WHATSAPP_NUMBER`). Ese valor **nunca** puede ser ...4543: seria el
+  bot mandandose mensajes a si mismo, con riesgo de lazo.
 - **Canal restablecido el 18/09.** Entran eventos y el envio funciona otra
   vez: el numero volvio a conectarse a la plataforma desde el panel de
   DoubleTick, `status: CONNECTED`, y el `phone_number_id` no cambio. Prueba de
@@ -36,9 +41,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
-- [ ] **A que numero van los borradores**: hoy salen al **...6699**, que es tu
-      numero personal. El de trabajo es el **...4543**. Si los queres ahi, se
-      cambia `BROKER_WHATSAPP_NUMBER` en el `.env` del servidor y se reinicia.
 - [ ] **Rotar el token de Meta que entro por WhatsApp** el 18/09 (lo mando la
       persona de DoubleTick, desde ...9954) y **borrar o redactar esa entrada**
       del audit log: quedo en texto plano. No es el token que usa el bot.
@@ -89,6 +91,13 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Después
 
+- [ ] **Tercer numero dedicado como canal broker** (mejora, no bloquea nada).
+      Hoy los borradores y las ordenes al bot van por el celular personal
+      ...6699, asi que trabajo y vida privada comparten linea. Un numero
+      aparte, aunque sea un chip barato, dejaria el canal de ordenes en una
+      linea usada solo para eso. Alternativa sin numero nuevo: cambiar el
+      canal de aviso en lugar del numero, por ejemplo un panel en el servidor
+      o un mail.
 - [ ] **Bloque 29**: el 44% de los que escriben no está en Tokko.
 - [ ] **Bloque 17**: `leadId` inconsistente. Se decidió dejarlo para después
       de salir.

@@ -1535,6 +1535,19 @@ errores. Solo el proveedor puede mirar su propio Business Manager.
       WABA asignada, y si rotaron credenciales o cambiaron de app alrededor
       del 8/09.
 
+### Dato que cierra una duda de agosto
+La linea del bot (`phone_number_id` 3207688612809306) es el numero que termina
+en **...4543**: lo devolvio Meta el 18/09 en `display_phone_number`. Por eso
+aparecia como contacto propio en el simulacro de recontacto de agosto, y por
+eso `BROKER_WHATSAPP_NUMBER` **nunca** puede ser ese numero: el bot se estaria
+mandando los borradores a si mismo, con riesgo de lazo si volvieran a entrar
+como evento.
+
+Decision del dueno del repo (18/09): los borradores siguen yendo al celular
+personal, el que termina en ...6699, que ademas queda excluido del recontacto
+por figurar como numero del broker. Un tercer numero dedicado al canal broker
+queda anotado como mejora futura en `PENDIENTES.md`.
+
 ### Consecuencia: se puede retirar la escotilla
 Cuando el proveedor active el header, `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`
 deja de tener razón de existir: ya no hace falta aceptar sin autenticar. Eso
