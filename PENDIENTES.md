@@ -6,7 +6,7 @@ en [docs/TASKS.md](docs/TASKS.md); esto solo ordena y apunta.
 **Se actualiza en el mismo PR que cierra un bloque o registra una decisión.**
 Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde quedó.
 
-Última actualización: 2026-09-15
+Última actualización: 2026-09-18
 
 ## Estado ahora
 
@@ -14,18 +14,24 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   17:30**, y el token con el que el bot enviaria (un usuario de sistema de la
   app del proveedor) perdio todo acceso al numero. El servidor nuevo esta sano
   y probado, pero no hay eventos para reenviar. Ver `docs/TASKS.md` Bloque 36.
-  Hipotesis principal: la sesion de WhatsApp Business se cerro y se volvio a
-  abrir alrededor de esa fecha (el numero se replica de un iPhone a un
-  Android), y eso rompe el vinculo de coexistencia con la Cloud API.
-- **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`),
-  pero **todavía no recibe mensajes**: DoubleTick sigue apuntando a la URL
-  vieja. Hasta que la cambien, no queda registro de quién escribe.
+  **Causa confirmada** (15/9, captura del iPhone): el numero esta
+  **desconectado de la plataforma**. En *Ajustes > Cuenta > Plataforma para
+  empresas* ofrece *Conectate*, no *Desconectar cuenta*. Hay que rehacer el
+  alta con el QR de onboarding de DoubleTick, y el QR se escanea desde el
+  iPhone: no se puede hacer por CLI ni desde el servidor.
+- **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`).
+  DoubleTick **ya cambio la URL** (15/9 20:09) y su evento de prueba llego:
+  200 en 762 ms, cruzado con los logs. No llega nada mas porque el numero
+  esta desconectado de la plataforma, no por el servidor.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- En curso: **Bloque 35**. Falta que DoubleTick cambie la URL a
-  `https://3-133-173-247.sslip.io/webhook` y confirmar que llegan mensajes.
-  Después, abrir el PR de `bloque-35-deploy-aws`: hasta mergearlo, `main` no
-  tiene `infra/aws/` y `deploy.sh` sin argumentos no funciona.
+- En curso: **Bloque 36**, reconectar el numero. El Bloque 35 (servidor) esta
+  terminado y probado contra `https://3-133-173-247.sslip.io/webhook`; su PR
+  se abre cuando lleguen mensajes reales. Hasta mergearlo, `main` no tiene
+  `infra/aws/` y `deploy.sh` sin argumentos no funciona.
+- Al reconectar hay que verificar si cambian `phone_number_id`, `waba_id` y
+  el token: de eso dependen el envio, la deteccion del canal del broker y la
+  exclusion de numeros internos en el recontacto.
 - **No levantar el bot en la laptop**: serían dos bots con las mismas
   credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
