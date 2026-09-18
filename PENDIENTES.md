@@ -19,6 +19,14 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   empresas* ofrece *Conectate*, no *Desconectar cuenta*. Hay que rehacer el
   alta con el QR de onboarding de DoubleTick, y el QR se escanea desde el
   iPhone: no se puede hacer por CLI ni desde el servidor.
+  **18/09**: el dueno del repo reconecto desde el panel de DoubleTick, y el
+  servidor **sigue sin recibir eventos**: contador en 0 desde el reinicio
+  automatico del 17/09 06:00, y 0 entradas de audit log el 17 y el 18. El
+  token sigue sin activos y sin acceso al numero. Nuestro lado esta sano: la
+  URL publica devuelve 403 a un GET y 401 a un POST sin secreto. Falta
+  confirmar en el iPhone si ahora ofrece *Desconectar cuenta*, y pedirle a
+  DoubleTick los identificadores nuevos (`phone_number_id`, `waba_id`, token)
+  y que el reenvio apunte a nuestra URL para la suscripcion nueva.
 - **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`).
   DoubleTick **ya cambio la URL** (15/9 20:09) y su evento de prueba llego:
   200 en 762 ms, cruzado con los logs. No llega nada mas porque el numero
