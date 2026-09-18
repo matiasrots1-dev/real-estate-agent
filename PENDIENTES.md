@@ -10,23 +10,11 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Estado ahora
 
-- **BLOQUEANTE (15/9): el numero no recibe eventos de Meta desde el 8/09 a las
-  17:30**, y el token con el que el bot enviaria (un usuario de sistema de la
-  app del proveedor) perdio todo acceso al numero. El servidor nuevo esta sano
-  y probado, pero no hay eventos para reenviar. Ver `docs/TASKS.md` Bloque 36.
-  **Causa confirmada** (15/9, captura del iPhone): el numero esta
-  **desconectado de la plataforma**. En *Ajustes > Cuenta > Plataforma para
-  empresas* ofrece *Conectate*, no *Desconectar cuenta*. Hay que rehacer el
-  alta con el QR de onboarding de DoubleTick, y el QR se escanea desde el
-  iPhone: no se puede hacer por CLI ni desde el servidor.
-  **18/09**: el dueno del repo reconecto desde el panel de DoubleTick, y el
-  servidor **sigue sin recibir eventos**: contador en 0 desde el reinicio
-  automatico del 17/09 06:00, y 0 entradas de audit log el 17 y el 18. El
-  token sigue sin activos y sin acceso al numero. Nuestro lado esta sano: la
-  URL publica devuelve 403 a un GET y 401 a un POST sin secreto. Falta
-  confirmar en el iPhone si ahora ofrece *Desconectar cuenta*, y pedirle a
-  DoubleTick los identificadores nuevos (`phone_number_id`, `waba_id`, token)
-  y que el reenvio apunte a nuestra URL para la suscripcion nueva.
+- **Canal restablecido el 18/09.** Entran eventos y el envio funciona otra
+  vez: el numero volvio a conectarse a la plataforma desde el panel de
+  DoubleTick, `status: CONNECTED`, y el `phone_number_id` no cambio. Prueba de
+  punta a punta OK: `consulta_disponibilidad` con 0.98 y **sin respuesta al
+  cliente**. Ver `docs/TASKS.md` Bloque 36.
 - **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`).
   DoubleTick **ya cambio la URL** (15/9 20:09) y su evento de prueba llego:
   200 en 762 ms, cruzado con los logs. No llega nada mas porque el numero
@@ -48,6 +36,12 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
+- [ ] **A que numero van los borradores**: hoy salen al **...6699**, que es tu
+      numero personal. El de trabajo es el **...4543**. Si los queres ahi, se
+      cambia `BROKER_WHATSAPP_NUMBER` en el `.env` del servidor y se reinicia.
+- [ ] **Rotar el token de Meta que entro por WhatsApp** el 18/09 (lo mando la
+      persona de DoubleTick, desde ...9954) y **borrar o redactar esa entrada**
+      del audit log: quedo en texto plano. No es el token que usa el bot.
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.
