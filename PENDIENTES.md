@@ -62,6 +62,8 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## PRs esperando revisión
 
+- [ ] `bloque-35-deploy-aws`: el bot corriendo en AWS Lightsail, mas la
+      investigacion del Bloque 36 (el canal cortado) y su resolucion.
 - [ ] `bloque-31-plantilla-una-vez`: la plantilla fija sale una sola vez por
       conversación.
 

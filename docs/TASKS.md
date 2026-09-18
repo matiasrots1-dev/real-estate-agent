@@ -2036,7 +2036,12 @@ andara local y nada arrancara en el servidor.
 - [x] Crear el servidor y hacer el primer deploy (2026-09-15, `ae811db497d9`).
       Medido en el servidor: 501 MB de memoria real del servicio (límite 1500),
       905 MB de 1907 en toda la máquina.
-- [ ] Pasarle a DoubleTick la URL nueva y verificar que llegan mensajes.
+- [x] Pasarle a DoubleTick la URL nueva y verificar que llegan mensajes. La
+      cambiaron el 15/09 a las 20:09 y su evento de prueba llego: 200 en
+      762 ms, cruzado con los logs. El canal siguio cortado por otra causa
+      (Bloque 36) hasta el 18/09; ese dia entro trafico real y la prueba de
+      punta a punta dio `consulta_disponibilidad` con 0.98 **sin responderle
+      al cliente**.
 - [ ] Guarda en el código contra dos schedulers (modo de fallo 2).
 - [ ] Drenar la cola al apagar (modo de fallo 5).
 - [ ] Copia de los datos fuera de AWS (modo de fallo 6).
@@ -2077,9 +2082,15 @@ tambien. El servidor esta sano y probado, pero no hay eventos para reenviar.
 Esto bloquea todo lo demas: sin canal no hay trafico real que medir ni modo
 silencioso que apagar.
 
-- [ ] Que cambio alrededor del 8/09, en Meta o en el telefono.
+- [x] Que cambio alrededor del 8/09: el numero quedo **desconectado de la
+      plataforma**. La sesion de WhatsApp Business se cerro y se volvio a
+      abrir por esos dias. No se pudo fechar el corte con precision desde
+      aca; la unica fecha es la medicion del proveedor.
 - [ ] A que WABA pertenece hoy el numero y quien la administra.
-- [ ] Volver a dar de alta el acceso de la app del proveedor al numero.
+- [x] Volver a dar de alta el acceso de la app del proveedor al numero. Hecho
+      el 18/09 desde el panel de DoubleTick, escaneando el QR desde el
+      iPhone: `status: CONNECTED`, y el `phone_number_id` **no cambio**, asi
+      que el `.env` siguio siendo valido.
 - [ ] Evaluar tener una app propia de Meta: hoy el token con el que el bot
       envia es de la app del proveedor, asi que su configuracion nos deja sin
       enviar tambien.
