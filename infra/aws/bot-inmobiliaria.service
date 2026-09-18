@@ -1,0 +1,41 @@
+# Unidad de systemd del bot. Se instala en cada deploy desde el release, así
+# que cualquier cambio acá pasa por un PR (docs/TASKS.md Bloque 35).
+[Unit]
+Description=Bot inmobiliaria (orchestrator + MCP servers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+Group=bot
+WorkingDirectory=/opt/bot-inmobiliaria/current
+# Con tsx, igual que en desarrollo: el orchestrator lanza los MCP servers con
+# tsx, así que compilar solo el orchestrator no alcanzaría. En 2 GB entra holgado
+# (~600 MB medidos en reposo).
+ExecStart=/usr/local/bin/node /opt/bot-inmobiliaria/current/node_modules/tsx/dist/cli.mjs apps/orchestrator/src/server.ts
+Restart=always
+RestartSec=5
+
+# GUARDAS. Estas variables le ganan al .env, porque dotenv no pisa variables
+# que ya existen en el entorno.
+#
+# El modo silencioso queda FORZADO: apagarlo exige cambiar este archivo con un
+# PR, nunca editar el .env del servidor. Es la lección del 2026-08-12, cuando
+# el agente les contestó solo a clientes reales apenas se conectó el webhook.
+Environment=AGENTE_MODO_SILENCIOSO=true
+Environment=WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK=false
+Environment=TZ=America/Argentina/Buenos_Aires
+Environment=PORT=3000
+
+# El shutdown del orchestrator cierra el HTTP, el scheduler y los MCP.
+TimeoutStopSec=30
+MemoryMax=1500M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

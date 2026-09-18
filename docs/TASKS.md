@@ -1472,6 +1472,82 @@ que es depender de que Meta nunca cambie la forma del payload.
       en el contador, para distinguir "el proveedor tiene el secreto mal" de
       "alguien está probando" de "falló la firma de Meta".
 
+### Causa CONFIRMADA: el numero esta desconectado de la plataforma
+**Confirmado el 2026-09-15 a las 19:53** con una captura del iPhone:
+*Ajustes > Cuenta > Plataforma para empresas* muestra la pantalla de alta,
+con el boton **Conectate a la plataforma para empresas**. Si estuviera
+conectado, ofreceria *Desconectar cuenta*. Eso explica de una sola vez el
+corte de eventos del 8/09, el usuario de sistema sin activos y el envio
+imposible.
+
+Como se llego (la hipotesis original, que quedo debilitada en el camino):
+Dato del dueno del repo (15/09): **el numero se opera replicando la sesion de
+WhatsApp Business de un iPhone en un Android** (la sesion original vive en el
+iPhone), y alrededor del 8/09 **la sesion se cerro y se volvio a abrir**.
+
+En coexistencia, el numero queda vinculado a la Cloud API a traves de ese
+registro. Verificado en la documentacion de Meta:
+- El vinculo se puede cortar desde la propia app: *Settings > Account >
+  Business Platform > Disconnect Account*.
+- Al conectar un numero existente a la Cloud API **se desvinculan todos los
+  dispositivos companion**, y despues hay que volver a vincularlos.
+
+**No verificado**: que al re-registrar el numero aparezca una opcion, marcada
+por defecto, para reconectar solos los productos de Cloud API. Aparecio en un
+resumen de busqueda, no en la pagina de Meta. Hay que preguntarselo al
+proveedor, que es Tech Provider.
+
+**Corregido el mismo dia, con un dato del dueno del repo**: el Android esta
+vinculado por **codigo QR desde Dispositivos vinculados**, o sea es un
+dispositivo acompanante y no un registro aparte. Eso es compatible con
+coexistencia — Meta manda `smb_message_echoes` justamente por los mensajes
+escritos desde acompanantes, y el bot ya los usa. Asi que **replicar la
+sesion, por si solo, no explica el corte**. Lo que falta saber es cual sesion
+se cerro: la del iPhone (registro principal, se reabre con codigo de
+verificacion, y eso si puede romper el vinculo) o la del Android (se reabre
+escaneando el QR, y eso no lo rompe).
+
+La hipotesis explica de una sola vez las tres cosas medidas: el corte de
+eventos, el usuario de sistema sin activos y el envio imposible. Falta
+confirmar la fecha exacta del re-registro contra el 8/09 17:30 ART.
+
+- [ ] Mirar en el iPhone si el numero sigue conectado: *Configuracion > Cuenta
+      > Plataforma de WhatsApp Business*.
+- [ ] Confirmar fecha y hora del cierre y reapertura de sesion.
+- [ ] **Regla operativa**: con coexistencia, el numero se registra en UN solo
+      telefono. Para usarlo en otro, dispositivos vinculados; volver a
+      registrarlo rompe el vinculo y deja al bot sin recibir ni enviar.
+
+### Hipotesis 2: el proveedor perdio la asignacion de su lado (ya no hace falta)
+Quedo descartada como **explicacion necesaria**: la captura del telefono ya
+explica todo. Puede seguir siendo cierta en paralelo, y conviene preguntarla
+igual, porque al reconectar el proveedor tiene que volver a tener el numero
+asignado a su app.
+
+Las listas vacias que medimos son del usuario de sistema **de ellos**
+(`tick-app System User`). Son igual de compatibles con que el proveedor haya
+rotado ese usuario de sistema, cambiado de app, o le haya quitado la WABA
+asignada, sin que en el telefono del broker haya cambiado nada. Desde aca no
+se puede distinguir de la Hipotesis 1: las dos producen exactamente los mismos
+errores. Solo el proveedor puede mirar su propio Business Manager.
+
+- [ ] Preguntarle al proveedor si ese usuario de sistema sigue teniendo la
+      WABA asignada, y si rotaron credenciales o cambiaron de app alrededor
+      del 8/09.
+
+### Dato que cierra una duda de agosto
+La linea del bot (`phone_number_id` 3207688612809306) es el numero que termina
+en **...4543**: lo devolvio Meta el 18/09 en `display_phone_number`. Por eso
+aparecia como contacto propio en el simulacro de recontacto de agosto, y por
+eso `BROKER_WHATSAPP_NUMBER` **nunca** puede ser ese numero: el bot se estaria
+mandando los borradores a si mismo, con riesgo de lazo si volvieran a entrar
+como evento.
+
+Decision del dueno del repo (18/09): los borradores siguen yendo al celular
+personal, el que termina en ...6699, que ademas queda excluido del recontacto
+por figurar como numero del broker. Un tercer numero dedicado al canal broker
+queda anotado como mejora futura en `PENDIENTES.md`.
+
 ### Consecuencia: se puede retirar la escotilla
 Cuando el proveedor active el header, `WHATSAPP_WEBHOOK_SKIP_SIGNATURE_CHECK`
 deja de tener razón de existir: ya no hace falta aceptar sin autenticar. Eso
@@ -1791,6 +1867,238 @@ mensajes, ¿que recibe la persona en los 16 que no escalaron?"*.
 - [ ] El contexto tambien introduce falsos positivos nuevos: "nos vemos"
       (etiquetado no-lead) paso a `agendar_visita` 0.72. Neto positivo, pero
       no es gratis.
+
+## Bloque 35 — El bot corre en un servidor (AWS Lightsail)
+
+El bot corría en la laptop y estuvo apagado del 30/8 al 15/9 sin que nadie lo
+notara: dos semanas sin audit log ni borradores para el broker.
+
+Decisión del dueño del repo (2026-09-15), después de investigar Railway, Render
+y AWS con experiencias de usuarios de 2025–2026: **AWS Lightsail, instancia de
+2 GB en Ohio (`us-east-2`)**. Operación y comandos en `infra/aws/README.md`.
+
+### Por qué Lightsail
+- **Railway:** 5 incidentes que afectaron servicios en marcha en unos 7 meses,
+  uno de ~8 h en todas sus regiones (19/5/2026). Recomienda el plan Pro
+  (USD 20 mínimo) para uso comercial, y los backups de volumen figuran como
+  exclusivos de Pro.
+- **Render:** el plan de 512 MB no alcanza para lo medido abajo, y el
+  siguiente ya es de 2 GB por USD 25.
+- **AWS:** ninguna opción administrada cumple "siempre prendido + disco + una
+  sola instancia" dentro de USD 5–15. App Runner no acepta clientes nuevos
+  desde abril de 2026. Lightsail es un VPS: precio fijo, snapshots diarios y el
+  mantenimiento a nuestro cargo, casi todo automatizado.
+
+### Lo que se midió antes de diseñar
+- **RAM en reposo:** con `tsx`, 12 procesos y ~606 MB; compilado, 4 procesos y
+  ~280 MB (medido en Windows, sin tráfico). En 2 GB entra holgado con `tsx`, así
+  que compilar queda como mejora y no como requisito.
+- **`tsx` es devDependency, pero se usa en producción** para lanzar los MCP
+  servers.
+- **Dos cálculos dependen de la hora local del proceso:** `recontactoPolicy.ts`
+  (`getHours`) y `topeDiarioStore.ts` (`getDate`).
+- **El apagado existe pero no drena la cola.** `shutdown` cierra el HTTP, frena
+  el scheduler, cierra los MCP y hace `process.exit(0)` sin esperar los mensajes
+  en curso.
+- **Los MCP servers no heredan el entorno completo:** reciben
+  `getInheritableEnv()` más las variables de config.
+- **Lightsail solo importa claves RSA.** La clave ed25519 se instala con el
+  script de primer arranque.
+- **`core.autocrlf=true` y no había `.gitattributes`.**
+
+### Pre-mortem
+Obituarios previos que aplican directo:
+- *"¿qué pasa si esto se conecta y funciona antes de que yo esté listo?"*
+  (incidente del 2026-08-12)
+- *"¿qué se rompe solo, sin que nadie toque nada?"*
+- los tests en verde que no prueban el comportamiento real (el `max_tokens: 32`
+  del Bloque 10)
+
+**1. `/health` en verde con el bot roto.**
+Si la instalación omite las devDependencies (`NODE_ENV=production`), `tsx` no
+está y los MCP servers no arrancan. Toda consulta a Tokko o a Calendar falla,
+pero el HTTP responde y `/health` dice `ok`.
+- *Mitigado:* `npm ci` corre sin `NODE_ENV`, y el deploy verifica con `pgrep` que
+  los tres MCP servers estén vivos. Si no lo están, falla y muestra los logs.
+
+**2. Dos bots vivos con las mismas credenciales.**
+Si después de migrar alguien levanta el orchestrator en la laptop con el `.env`
+de producción, su scheduler corre en paralelo al del servidor: recordatorios
+dobles hoy, recontactos dobles cuando se cablee el Bloque 27, y dos audit logs
+que divergen.
+- *Mitigado en parte:* `migrar.sh` se niega a correr si el bot de la laptop
+  responde.
+- *Riesgo abierto:* ninguna guarda en el código impide que el scheduler corra
+  fuera del servidor.
+
+**3. La hora del servidor corrida 3 horas.**
+El servidor arranca en UTC. La ventana de 9 a 20 del recontacto pasaría a ser
+de 6 a 17 hora argentina, y el tope diario se reiniciaría a las 21.
+- *Mitigado:* zona horaria del sistema en `America/Argentina/Buenos_Aires`, que
+  alcanza a todos los procesos, incluidos los MCP servers que no heredan el
+  entorno. Además, `TZ` en la unidad de systemd. El deploy imprime la hora del
+  servidor.
+
+**4. El modo silencioso se apaga al migrar.**
+Hoy depende de que `AGENTE_MODO_SILENCIOSO` no figure en el `.env`. Una edición
+del `.env` en el servidor lo apagaría sin revisión.
+- *Mitigado:* la unidad de systemd lo fuerza en `true`, y dotenv no pisa
+  variables que ya existen. Apagarlo exige cambiar un archivo versionado, con
+  PR. El deploy compara el valor **efectivo** del proceso (`/proc/<pid>/environ`)
+  con el de la unidad, y falla si no coinciden.
+
+**5. Se pierden mensajes en cada reinicio.**
+El apagado no drena la cola y DoubleTick no reintenta. Reinician el bot cada
+deploy y los reinicios automáticos por parches de seguridad.
+- *Riesgo asumido:* los reinicios automáticos quedan a las 06:00 y los deploys
+  se hacen en horario tranquilo. Drenar la cola al apagar queda como bloque
+  chico aparte.
+
+**6. Todo en un solo disco, en una sola cuenta.**
+Si la instancia se rompe o la cuenta se cierra, se pierden el audit log y el
+corpus de estilo. Con el Free plan, AWS cierra la cuenta a los 6 meses y borra
+todo 90 días después.
+- *Mitigado en parte:* snapshots automáticos diarios de Lightsail (06:00 hora
+  argentina, 7 días) y cuenta en plan pago.
+- *Riesgo abierto:* no hay copia fuera de AWS.
+
+**7. Un secreto termina en un log.**
+La verificación del webhook de Meta manda el `hub.verify_token` en la query
+string, y un log de accesos del proxy lo guardaría en texto plano.
+- *Mitigado:* Caddy corre sin log de accesos, y solo se publica `/webhook`.
+  `/health`, que muestra la fuente de Tokko y los contadores, queda accesible
+  únicamente desde el propio servidor.
+
+**8. Los scripts locales leen datos viejos.**
+`npm run pendientes`, `etiquetar` y `medir:*` leen `apps/orchestrator/data/` de
+la laptop. Después de migrar, esa copia queda congelada y `pendientes`
+mostraría una lista vieja de clientes sin responder.
+- *Mitigado:* `infra/aws/npm-en-servidor.sh pendientes` corre el script en el
+  servidor, contra los datos reales, sin traer datos personales a la laptop.
+
+**9. Los finales de línea de Windows rompen los scripts en Linux.**
+Con `core.autocrlf=true`, un script de bash que llega con `\r` falla en el
+servidor con errores crípticos.
+- *Mitigado:* `.gitattributes` fuerza LF en `*.sh` y `*.service`, y los scripts
+  se niegan a mandar al servidor un archivo con CRLF.
+
+**10. El nombre del servidor depende de un tercero.**
+Con sslip.io, si ese DNS gratuito se cae, DoubleTick no resuelve la URL y los
+mensajes no llegan.
+- *Recomendado:* subdominio propio del negocio. Si se usa sslip.io, queda como
+  riesgo asumido.
+
+### Hallazgos durante la implementación del Bloque 35
+- **Norton 360 intercepta el HTTPS de la laptop.** Su Web/Mail Shield firma los
+  certificados con "Norton Web/Mail Shield Root". Windows y Node confían en esa
+  raíz (el propio Norton define `NODE_EXTRA_CA_CERTS`); la AWS CLI no, y fallaba
+  en toda llamada a AWS con `CERTIFICATE_VERIFY_FAILED`, incluido el último paso
+  de `aws login`. Resuelto con `infra/aws/confiar-antivirus.sh`, que configura un
+  paquete de certificados solo en los perfiles del bot.
+- **Una verificación de HTTPS hecha desde la laptop engaña.** El `curl` de Git
+  Bash da un error de certificado falso, y el de Windows podría aceptar un
+  certificado roto porque ve el de Norton. El certificado del servidor se
+  verifica desde el propio servidor.
+- **`MSYS_NO_PATHCONV=1` aplicado a todo un script rompe los ejecutables
+  nativos.** Hace falta para `aws.exe`, pero `openssl` (de `/mingw64`) deja de
+  recibir rutas traducidas y no encuentra los archivos. Se aplica solo a las
+  llamadas a `aws`.
+- **La cuenta de AWS estaba en Free plan, sin MFA en el usuario raíz y sin
+  alarma de gasto.** Lo detectó `infra/aws/configurar-acceso.sh` leyendo el
+  estado real con la CLI, en lugar de depender de una confirmación de palabra.
+  Verificado por CLI el mismo 15/9, con otra sesión de administrador: plan
+  **pago y activo** (USD 120 de crédito restante) y alarma de gasto creada
+  (USD 20 por mes, aviso al 80% del gasto real). El **MFA del usuario raíz no
+  aparece** (`AccountMFAEnabled = 0`), aunque se había dado por activado. Es
+  el caso por el que se verifica en vez de confiar en la confirmación. Ese
+  `aws login` tampoco lo probaba: reutilizó una sesión de consola ya abierta y
+  no pidió código.
+- **`aws login` evita manejar la clave a mano.** Con una sesión temporal de
+  administrador, `configurar-acceso.sh` creó el usuario `claude-lightsail`
+  (solo Lightsail), guardó su clave sin mostrarla y cerró la sesión.
+
+- **El primer deploy real falló por algo que existía solo en la laptop.**
+  `shared-types` se consume por su `main` (`dist/index.js`), y `dist/` está en
+  `.gitignore`: `git archive` no lo trae. En la laptop funcionaba porque `dist/`
+  había quedado de una compilación anterior. La verificación del deploy lo
+  agarró (`/health` no respondía y mostró `ERR_MODULE_NOT_FOUND`), y ahora el
+  deploy compila `shared-types` después de `npm ci`.
+**Pregunta que lo habría agarrado antes**: *"¿por dónde pasa el tráfico de esta
+máquina antes de llegar a internet?"*. El antivirus estaba en el medio de toda
+conexión HTTPS de la laptop, y el diseño asumía una conexión directa.
+
+Y para el deploy: *"¿qué tiene mi máquina que no está en el repo?"*. Un
+artefacto compilado que nadie recordaba haber generado alcanzó para que todo
+andara local y nada arrancara en el servidor.
+
+### Estado
+- [x] Scripts de creación, preparación, migración y deploy (`infra/aws/`).
+- [x] Crear el servidor y hacer el primer deploy (2026-09-15, `ae811db497d9`).
+      Medido en el servidor: 501 MB de memoria real del servicio (límite 1500),
+      905 MB de 1907 en toda la máquina.
+- [x] Pasarle a DoubleTick la URL nueva y verificar que llegan mensajes. La
+      cambiaron el 15/09 a las 20:09 y su evento de prueba llego: 200 en
+      762 ms, cruzado con los logs. El canal siguio cortado por otra causa
+      (Bloque 36) hasta el 18/09; ese dia entro trafico real y la prueba de
+      punta a punta dio `consulta_disponibilidad` con 0.98 **sin responderle
+      al cliente**.
+- [ ] Guarda en el código contra dos schedulers (modo de fallo 2).
+- [ ] Drenar la cola al apagar (modo de fallo 5).
+- [ ] Copia de los datos fuera de AWS (modo de fallo 6).
+
+## Bloque 36 — El numero dejo de recibir eventos de Meta (BLOQUEANTE)
+Medido el 2026-09-15, justo despues de terminar el deploy en AWS.
+
+### Lo que esta medido
+- **DoubleTick no recibe ningun evento de Meta para el numero 3207688612809306
+  desde el 8/09 a las 17:30 ART.** Venia con 100-200 por dia y se corto de
+  golpe. El resto de sus lineas sigue recibiendo con normalidad.
+- El cambio de URL al servidor nuevo **quedo aplicado y probado**: 15/09 20:09,
+  y su evento de prueba de 20:17:56 llego y recibio 200 en 762 ms. Cruzado con
+  los logs del servidor: aceptado con el secreto valido, 305 bytes.
+- **Nuestro `WHATSAPP_ACCESS_TOKEN` es un usuario de sistema de la app del
+  proveedor**, no de una app nuestra: `GET /me` devuelve `tick-app System User`
+  (122101787181419977). El token es **valido**.
+- **Ese token ya no tiene acceso al numero.** Leer `/{phone_number_id}` y hasta
+  un POST de envio sin destinatario fallan con `code 100, error_subcode 33`.
+  O sea: hoy el bot **tampoco podria enviar** un mensaje.
+- `/me/businesses` y `/{usuario-de-sistema}/assigned_whatsapp_business_accounts`
+  devuelven **listas vacias**: no es falta de permiso de lectura, no hay activos
+  asignados.
+- **El `waba_id` de nuestro `.env` (846618321715441) no coincide con el que
+  nombra el proveedor (103523025667743).** Ninguno de los dos se puede leer.
+
+### Lo que NO esta demostrado
+- **Cuando** se perdio el acceso. Desde nuestro lado no hay forma de fecharlo:
+  el audit log se corta el 30/08 porque el bot estaba apagado, y no hubo envios
+  posteriores. La unica fecha es la medicion del proveedor.
+- Que alguien haya quitado la app del WABA. El proveedor lo afirmo y despues se
+  corrigio solo: su error de permisos tampoco probaba eso.
+- Si el numero se movio de WABA o de Business Manager.
+
+### Consecuencia
+El canal entrante estaba cortado **desde antes** del deploy, y el saliente
+tambien. El servidor esta sano y probado, pero no hay eventos para reenviar.
+Esto bloquea todo lo demas: sin canal no hay trafico real que medir ni modo
+silencioso que apagar.
+
+- [x] Que cambio alrededor del 8/09: el numero quedo **desconectado de la
+      plataforma**. La sesion de WhatsApp Business se cerro y se volvio a
+      abrir por esos dias. No se pudo fechar el corte con precision desde
+      aca; la unica fecha es la medicion del proveedor.
+- [ ] A que WABA pertenece hoy el numero y quien la administra.
+- [x] Volver a dar de alta el acceso de la app del proveedor al numero. Hecho
+      el 18/09 desde el panel de DoubleTick, escaneando el QR desde el
+      iPhone: `status: CONNECTED`, y el `phone_number_id` **no cambio**, asi
+      que el `.env` siguio siendo valido.
+- [ ] Evaluar tener una app propia de Meta: hoy el token con el que el bot
+      envia es de la app del proveedor, asi que su configuracion nos deja sin
+      enviar tambien.
+
+**Pregunta que lo habria agarrado antes**: *"¿que me avisa si el canal se corta
+cuando nadie esta mirando?"*. El canal murio el 8/09, el bot estaba apagado
+desde el 30/08, y se descubrio el 15/09 por un comentario del proveedor. Nada
+en el sistema avisa que dejaron de llegar mensajes.
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
