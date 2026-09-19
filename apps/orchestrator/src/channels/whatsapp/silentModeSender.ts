@@ -66,8 +66,9 @@ export class SilentModeSender implements WhatsAppSender {
     }
     // Se devuelve un resultado vacío en vez de lanzar: los jobs y el webhook
     // tratan una excepción como fallo y podrían reintentar. Acá no falló nada,
-    // simplemente no había que mandarlo.
-    return { raw: { messaging_product: "whatsapp" } };
+    // simplemente no había que mandarlo. Pero va marcado: quien le reporta al
+    // broker qué se mandó no puede contarlo como enviado (Bloque 38g).
+    return { raw: { messaging_product: "whatsapp" }, bloqueado: "modo_silencioso" };
   }
 }
 

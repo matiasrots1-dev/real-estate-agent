@@ -36,6 +36,16 @@ describe("SilentModeSender", () => {
     expect(interno.destinos).toEqual([BROKER, BROKER, BROKER]);
   });
 
+  // docs/TASKS.md Bloque 38g: lo bloqueado va marcado, para que nadie lo
+  // cuente como enviado.
+  it("marca lo que bloquea, y no marca lo que deja pasar", async () => {
+    const sender = new SilentModeSender(senderEspia(), BROKER, () => {});
+
+    expect((await sender.sendText(CLIENTE, "hola")).bloqueado).toBe("modo_silencioso");
+    expect((await sender.sendTemplate(CLIENTE, "p", "es", [])).bloqueado).toBe("modo_silencioso");
+    expect((await sender.sendText(BROKER, "resumen")).bloqueado).toBeUndefined();
+  });
+
   it("bloquea los tres tipos de envío cuando el destino es un cliente", async () => {
     const interno = senderEspia();
     const sender = new SilentModeSender(interno, BROKER, () => {});

@@ -18,6 +18,12 @@ export interface WhatsAppSendResult {
   messageId?: string;
   waId?: string;
   raw: GraphApiSendMessageResponse;
+  /**
+   * El envío no salió: lo bloqueó el modo silencioso (`SilentModeSender`), que
+   * devuelve un resultado en vez de tirar. Quien le cuenta a alguien qué se
+   * mandó tiene que mirarlo (docs/TASKS.md Bloque 38g).
+   */
+  bloqueado?: "modo_silencioso";
 }
 
 export interface WhatsAppSender {

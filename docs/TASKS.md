@@ -2631,6 +2631,68 @@ nunca le llegan. `SilentModeSender` si deja pasar envios al broker, asi que
 la respuesta podria salir. En produccion todavia no paso: 0 ordenes del
 broker en el audit log.
 
+**Lo que se midio antes de disenar**
+- `SilentModeSender` **simula exito** en lo que bloquea: devuelve un resultado
+  vacio en vez de tirar, para que los jobs no reintenten. Con eso, una orden
+  `broker_accion_directa` de mandarle algo a un cliente, en modo silencioso,
+  termina con "✓ Mensaje enviado a ..." sin que haya salido nada. Hoy no se
+  ve porque la respuesta no le llega al broker; arreglar solo lo de la
+  respuesta le mostraria un resumen falso. Las acciones de calendario si se
+  ejecutan: el calendario es del broker y el modo silencioso no lo toca.
+- En las 377 entradas del audit log del servidor **no hay ningun mensaje del
+  numero del broker**: nunca le escribio una orden al bot. El formato en que
+  llega su numero no se puede verificar con datos reales.
+
+**Pre-mortem**
+
+**1. El numero del broker llega en otro formato y la orden sigue sin
+respuesta.** La deteccion del canal compara el numero exacto. Si Meta lo
+manda distinto de `BROKER_WHATSAPP_NUMBER`, el broker se trata como cliente:
+su orden se clasifica con los intents de cliente y no recibe nada.
+   *No se puede mitigar con datos*: el broker nunca le escribio al bot.
+   *Mitigacion parcial*: la decision "es el broker" sale de una sola funcion,
+   la misma para el ruteo y para el modo silencioso, asi no pueden estar en
+   desacuerdo. *Prueba en vivo despues del deploy*: el broker le manda
+   "resumen de agenda" al bot.
+
+**2. El resumen le dice al broker que se mando algo que el modo silencioso
+bloqueo.** Ver arriba.
+   *Mitigacion*: `SilentModeSender` marca lo que bloquea
+   (`bloqueado: "modo_silencioso"`), y el ejecutor de `broker_accion_directa`
+   lo cuenta como no enviado, con el motivo. Test.
+
+**3. Un cliente recibe respuesta en modo silencioso.** Si la excepcion para
+el broker se aplicara de mas (por ejemplo, sin numero de broker
+configurado), el cliente volveria a recibir respuestas solas, que es el
+incidente del 12/08 (Bloque 21).
+   *Mitigacion*: tests de que un cliente sigue sin respuesta en modo
+   silencioso, con y sin numero de broker configurado. Y `SilentModeSender`
+   sigue bloqueando abajo: son dos capas.
+
+**Como quedo**
+- [x] `esDelBroker` es la unica definicion de "el mensaje viene del broker",
+      para el ruteo y para el modo silencioso. `silenciarPara` calla solo a
+      los clientes.
+- [x] En modo silencioso, las ordenes del broker reciben su respuesta, que
+      queda en el audit log como enviada (`responseSent`).
+- [x] `SilentModeSender` marca lo que bloquea (`bloqueado: "modo_silencioso"`).
+      El ejecutor de `broker_accion_directa` lo cuenta como no enviado, y el
+      resumen de una accion fallida ya no dice "enviado": dice "Mensaje a ...
+      sin enviar (motivo)".
+- [x] 8 tests nuevos; los del ejecutor usan el `SilentModeSender` real.
+      Mutation testing, una por vez:
+      - G1. el camino que no escala silencia al broker (lo de antes): 1 test en rojo
+      - G2. `silenciarPara` ignora al broker: 1 test en rojo
+      - G3. `silenciarPara` no silencia a nadie: 10 tests en rojo
+      - G4. sin numero de broker, todos son el broker: 11 tests en rojo
+      - G5. el sender no marca lo bloqueado: 3 tests en rojo
+      - G6. el ejecutor ignora la marca: 2 tests en rojo
+      - G7. el fallo dice "enviado": 1 test en rojo
+      - G8. la plantilla no se controla: 1 test en rojo
+- [ ] **Prueba en vivo, despues del deploy**: el broker le escribe "resumen de
+      agenda" a la linea del bot desde el ...6699. Confirma el modo de fallo
+      1 (el formato de su numero), que no se pudo verificar con datos.
+
 
 ### Muerde al apagar el modo silencioso
 - [ ] **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja

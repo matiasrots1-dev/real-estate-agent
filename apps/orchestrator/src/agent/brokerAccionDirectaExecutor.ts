@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Lead } from "shared-types";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
-import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
+import type { WhatsAppSendResult, WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
 
@@ -108,20 +108,33 @@ async function executeOne(
     case "whatsapp_send_message": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
       const lead = await resolverLead(action.leadId, deps);
-      await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead));
+      exigirQueSalio(await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead)));
       return lead.telefonoWhatsapp;
     }
     case "whatsapp_send_template": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
       const lead = await resolverLead(action.leadId, deps);
-      await deps.sender.sendTemplate(
-        lead.telefonoWhatsapp,
-        action.templateName,
-        action.languageCode,
-        action.bodyParams.map((p) => personalizar(p, lead))
+      exigirQueSalio(
+        await deps.sender.sendTemplate(
+          lead.telefonoWhatsapp,
+          action.templateName,
+          action.languageCode,
+          action.bodyParams.map((p) => personalizar(p, lead))
+        )
       );
       return lead.telefonoWhatsapp;
     }
+  }
+}
+
+/**
+ * El modo silencioso bloquea los envíos a clientes devolviendo un resultado
+ * en vez de tirar. Sin esta guarda, el resumen le diría al broker "✓ Mensaje
+ * enviado" sobre algo que no salió (docs/TASKS.md Bloque 38g).
+ */
+function exigirQueSalio(resultado: WhatsAppSendResult): void {
+  if (resultado.bloqueado === "modo_silencioso") {
+    throw new Error("no se mandó: el modo silencioso bloquea los mensajes a clientes");
   }
 }
 
@@ -140,10 +153,9 @@ export function toolsCalledForPlan(actions: PlannedAction[]): string[] {
 /** Resumen para el broker de lo que efectivamente se ejecutó (o falló) — nunca inventa qué pasó. */
 export function summarizeExecution(results: ExecutedAction[]): string {
   if (results.length === 0) return "No había ninguna acción para ejecutar.";
-  const lines = results.map((r) => {
-    const label = describeAction(r.action, r.telefono);
-    return r.ok ? `✓ ${label}` : `✗ ${label} (${r.error})`;
-  });
+  const lines = results.map((r) =>
+    r.ok ? `✓ ${describeAction(r.action, r.telefono)}` : `✗ ${describeFailedAction(r.action, r.telefono)} (${r.error})`
+  );
   return lines.join("\n");
 }
 
@@ -163,5 +175,20 @@ function describeAction(action: PlannedAction, telefono?: string): string {
       return `Mensaje enviado a ${destinatario}`;
     case "whatsapp_send_template":
       return `Plantilla "${action.templateName}" enviada a ${destinatario}`;
+  }
+}
+
+/** Lo mismo, sin afirmar que pasó: "✗ Mensaje enviado a ..." se lee como que salió. */
+function describeFailedAction(action: PlannedAction, telefono?: string): string {
+  const destinatario = telefono ?? `lead ${action.leadId}`;
+  switch (action.type) {
+    case "gcal_create_event":
+      return `Visita para ${action.leadId} sin agendar`;
+    case "gcal_patch_event":
+      return `Visita de ${action.leadId} sin modificar`;
+    case "whatsapp_send_message":
+      return `Mensaje a ${destinatario} sin enviar`;
+    case "whatsapp_send_template":
+      return `Plantilla "${action.templateName}" a ${destinatario} sin enviar`;
   }
 }
