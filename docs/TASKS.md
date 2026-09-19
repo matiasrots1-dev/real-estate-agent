@@ -1868,25 +1868,83 @@ texto crudo.
 API esta caida, `composeDraft` esta igual de muerto y la notificacion se
 pierde en su propio `catch`. El broker sigue sin enterarse y el bloque no
 sirvio para nada.
-   *Mitigar*: el camino de fallo **no llama al LLM**. Se notifica con el texto
-   crudo, sin borrador. Con un test donde el draftComposer tira.
+   *Mitigado*: el camino de fallo **no llama al LLM**. `AvisoDeFallos` arma el
+   texto crudo y lo manda directo por WhatsApp. Test con el clasificador y el
+   borrador caidos a la vez.
 
 **2. Doble contabilidad silenciosa.** Con dos entradas por mensaje, todo lo
 que lee el audit log cambia de numero sin que nadie lo toque: `medir:*`,
 `pendientes`, la purga por retencion, y sobre todo `leerHistorial`, que le
 pasaria al clasificador el mismo mensaje repetido como contexto previo.
-   *Mitigar*: `messageId` en la entrada y colapso por mensaje en la lectura.
-   Test de que el contexto no duplica.
+   *Mitigado*: `messageId` en cada entrada y `colapsarPorMensaje` en todos los
+   lectores: el contexto del clasificador, el corpus de estilo, `pendientes`,
+   `medir:*` y `etiquetar`. Test de que el contexto no duplica.
 
 **3. La escritura del audit log tumba el mensaje.** Si la entrada de "llego"
 se escribe antes que todo y esa escritura falla, se pierde el mensaje entero
 — peor que hoy, porque hoy al menos el camino feliz funciona.
-   *Mitigar*: best-effort, nunca propaga. Test con un store que tira.
+   *Mitigado*: `registrarRecibido` y `registrarFallido` nunca tiran. Test con
+   un audit log que falla en la primera escritura: el mensaje se procesa igual.
 
 **4. Inundacion de notificaciones.** Si la API se cae dos horas y entran 40
 mensajes, son 40 escalamientos al WhatsApp del broker. La proteccion contra
 perder mensajes se convierte en la razon por la que deja de mirar el telefono.
-   *Decidir*: mitigar con un agrupador, o anotarlo como riesgo asumido.
+   *Mitigado*, con la opcion B que eligio el dueno del repo (2026-09-19): los
+   primeros 5 fallos de una caida salen sueltos; desde el sexto, un resumen
+   cada 15 minutos; y un aviso cuando se recupera.
+
+### Un caso que no estaba en el pre-mortem
+Al escribir el `recibido` **antes** de encolar, el mensaje actual ya esta en
+el audit log cuando `leerHistorial` arma el contexto. El clasificador habria
+visto el mensaje que esta clasificando como si fuera un mensaje anterior de
+la misma persona. Se excluye por `messageId`, con su propio test. Salio al
+disenar, no en produccion.
+
+### Como quedo
+- [x] `registrarRecibido` en `app.ts`, despues del dedup y antes de encolar:
+      queda registrado aunque el proceso muera antes de procesarlo.
+- [x] La captura del fallo envuelve **todo** `handleIncomingMessage`, no solo
+      el clasificador: una caida de Tokko o de Calendar tambien es un mensaje
+      que se perderia. El error se relanza para que la cola lo siga
+      logueando.
+- [x] `AuditLogEntry` suma `messageId` y `etapa` (`recibido` | `fallido`),
+      opcionales: las entradas viejas y las de los jobs no cambian.
+- [x] El colapso se hace **al leer** y no en `readAll()`: si lo hiciera
+      `readAll()`, la purga de retencion reescribiria el archivo ya colapsado
+      y borraria registros sin contarlos como borrados.
+- [x] `pendientes` pone primero los mensajes `fallido` y los `recibido` que
+      nunca se resolvieron: nadie les contesto.
+- [x] En modo silencioso el aviso llega igual: `SilentModeSender` solo deja
+      pasar envios al broker, y el aviso va al broker.
+- [x] El mutation testing destapo un **error de logica** en el corpus de
+      estilo: si el ultimo mensaje del cliente fallaba y el broker contestaba
+      a mano, el ejemplo se guardaba con el intent de un mensaje anterior,
+      posiblemente de otro tema. Ahora no se guarda: si no se sabe que
+      pregunto, no se sabe que estaba respondiendo. Con dos tests.
+- [x] 25 tests nuevos; suite completa 606/606.
+- [x] **Mutation testing** de las mitigaciones, una por vez:
+      - 1. no se escribe el recibido: 4 tests en rojo
+      - 2. no se escribe el fallido: 1 tests en rojo
+      - 3. el fallo no se le avisa al broker: 3 tests en rojo
+      - 4. escribir el recibido puede tirar (FM3): 1 tests en rojo
+      - 5. leerHistorial no colapsa (FM2): 1 tests en rojo
+      - 6. el contexto incluye el mensaje actual: 1 tests en rojo
+      - 7. appendAudit sin messageId: 5 tests en rojo
+      - 8. sin agrupar: todos sueltos (FM4): 4 tests en rojo
+      - 9. sin aviso de recuperacion: 2 tests en rojo
+      - 10. corpus de estilo con el intent centinela: 2 tests en rojo
+      - 11. corpus de estilo salteando el mensaje sin resolver (la logica vieja): 2 tests en rojo
+
+### Riesgos abiertos
+- [ ] El aviso de fallos vive en memoria: si el proceso se reinicia en medio
+      de una caida, el resumen pendiente se pierde. El registro de verdad
+      sigue en el audit log, donde cada mensaje queda como `fallido`.
+- [ ] **Los mensajes que no son texto** (audios, fotos) se cuentan en
+      `/health` pero no quedan en el audit log ni avisan. El 18/09 entro un
+      audio y no dejo rastro. Decision pendiente: si se registran, y si avisan
+      uno por uno.
+- [ ] Un mensaje que llega con el servidor caido se pierde antes de llegar
+      aca: el proveedor no reintenta. Este bloque no lo cubre.
 
 ## Bloque 32 — Contexto de conversacion en el clasificador
 Cierra la parte grande del Bloque 28. Salio de etiquetar A MANO 43
