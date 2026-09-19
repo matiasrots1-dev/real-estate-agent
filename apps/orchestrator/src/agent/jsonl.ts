@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 
 /**
  * Lectura y escritura tolerantes de archivos JSONL (docs/TASKS.md Bloques 37
@@ -61,12 +61,53 @@ export function describirIlegibles(etiqueta: string, archivo: string, ilegibles:
   return `[${etiqueta}] ${ilegibles.length} línea(s) ilegible(s) en ${archivo} (línea ${numeros}${resto}). Se ignoran al leer: revisarlas a mano.`;
 }
 
+/** Lee el archivo entero en líneas. Si todavía no existe, no hay líneas. */
+export async function leerArchivoJsonl<T>(
+  filePath: string,
+  validar: (valor: unknown) => valor is T
+): Promise<LineaJsonl<T>[]> {
+  let contenido: string;
+  try {
+    contenido = await readFile(filePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return leerLineasJsonl(contenido, validar);
+}
+
+export function ilegiblesDe<T>(lineas: readonly LineaJsonl<T>[]): LineaIlegible[] {
+  return lineas.flatMap((l) => (l.ilegible ? [l.ilegible] : []));
+}
+
+/**
+ * El aviso de líneas ilegibles de un archivo. Tolerar en silencio escondería
+ * el problema; avisar en cada lectura lo convertiría en ruido que nadie mira.
+ * Se avisa cuando cambian los números de línea: si una reescritura los corre,
+ * el aviso sale de nuevo con los números que valen ahora.
+ */
+export class AvisoDeIlegibles {
+  private ultimo = "";
+
+  constructor(
+    private readonly etiqueta: string,
+    private readonly archivo: string
+  ) {}
+
+  avisar(ilegibles: readonly LineaIlegible[]): void {
+    const clave = ilegibles.map((l) => l.numero).join(",");
+    if (clave === this.ultimo) return;
+    this.ultimo = clave;
+    if (ilegibles.length > 0) console.warn(describirIlegibles(this.etiqueta, this.archivo, ilegibles));
+  }
+}
+
 /**
  * El salto de línea que hay que anteponer a la próxima escritura si el
  * archivo termina en media línea, o `""`. Se mira en cada escritura y no una
  * vez por proceso: el corte también puede pasar con el proceso vivo (disco
- * lleno) o por una edición a mano. Si no se puede mirar, devuelve `""`: no
- * poder reparar no puede impedir escribir.
+ * lleno) o por una edición a mano. **Nunca tira**: no poder reparar no puede
+ * impedir escribir.
  */
 export async function saltoQueFalta(filePath: string, etiqueta: string): Promise<string> {
   let archivo;
@@ -90,6 +131,10 @@ export async function saltoQueFalta(filePath: string, etiqueta: string): Promise
     console.error(`[${etiqueta}] no se pudo revisar el final de ${filePath}:`, error);
     return "";
   } finally {
-    await archivo.close();
+    // Un error al cerrar reemplazaría el valor de retorno y haría tirar a la
+    // función: por eso va en su propio try.
+    await archivo.close().catch((error: unknown) => {
+      console.error(`[${etiqueta}] no se pudo cerrar ${filePath}:`, error);
+    });
   }
 }

@@ -54,8 +54,10 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
       semana contra semana. Desde julio de 2027, cuando empiece a borrar, el
       reporte de un borrado desaparece en una hora. Propuesta: correrla una
       vez por dia, en horario tranquilo, y conservar el reporte por tiempo
-      (por ejemplo 90 dias). No urge: hasta julio de 2027 no se borra nada.
-      ¿Lo hago?
+      (por ejemplo 90 dias). Va junto con otro problema del mismo camino: el
+      scheduler no espera a que termine la vuelta anterior, asi que una vuelta
+      lenta superpone todos los jobs. No urge: hasta julio de 2027 no se borra
+      nada. ¿Lo hago?
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.

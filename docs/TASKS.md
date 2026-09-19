@@ -2616,23 +2616,55 @@ fallo 1 del Bloque 37.
   se arregle, deberia usar el mismo modulo.
 
 ### Como quedo
-- [x] `agent/jsonl.ts`: lectura tolerante (`leerLineasJsonl`, con un
-      validador por store), aviso sin contenido, y `saltoQueFalta`, que se
-      mira en cada escritura.
-- [x] `FileRetentionReportStore`: un reporte legible necesita `id` y
-      `corridaAt`; el recorte es por posicion; aviso una vez por cada cambio
-      en las lineas rotas.
-- [x] 12 tests nuevos contra un archivo real (suite 641/641), uno del job completo: con una
-      linea rota, el job termina y loguea su resumen. Mutation testing, una
-      por vez:
+- [x] `agent/jsonl.ts`: lectura tolerante con un validador por store
+      (`leerLineasJsonl`, `leerArchivoJsonl`), el aviso sin contenido
+      (`AvisoDeIlegibles`) y `saltoQueFalta`, que se mira en cada escritura
+      y nunca tira.
+- [x] `FileRetentionReportStore`:
+      - un reporte legible necesita `id`, una `corridaAt` fechable,
+        `totalBorrados`, `borradosPorStore` y `muestra`;
+      - las escrituras van en cola, de a una;
+      - el recorte corre recien al pasar el doble de `maxCorridas`, es por
+        posicion y, si falla, no hace fallar la corrida;
+      - el aviso sale con los numeros del archivo ya recortado.
+- [x] `jobs/retention.ts`: si guardar el reporte falla por cualquier causa,
+      se loguea el error y el resumen sale igual.
+- [x] 17 tests nuevos contra un archivo real, dos del job completo. Mutation
+      testing, una por vez:
       - C1. sin reparar la linea cortada: 2 tests en rojo
       - C2. reparar una vez por proceso: 1 test en rojo
       - C3. lectura no tolerante (lo de antes): 8 tests en rojo
-      - C4. el recorte descarta las ilegibles: 1 test en rojo
+      - C4. el recorte descarta las ilegibles: 2 tests en rojo
       - C5. el recorte conserva todas las ilegibles (no rota): 1 test en rojo
-      - C6. sin aviso: 1 test en rojo
-      - C7. aviso en cada lectura: 1 test en rojo
-      - C8. acepta JSON que no es un reporte: 1 test en rojo
+      - C6. sin aviso: 2 tests en rojo
+      - C7. aviso en cada lectura: 2 tests en rojo
+      - C8a. acepta una fecha vacia: **sobrevivio**, porque la linea del test
+        tambien fallaba por otros campos. Se corrigio el test: 1 en rojo
+      - C8b. acepta un reporte sin muestra: 1 test en rojo
+      - C9. recorte en cada corrida: 2 tests en rojo
+      - C10. aviso con los numeros de antes del recorte: **sobrevivio**,
+        porque el append siguiente disparaba el aviso correcto y lo tapaba.
+        Se corrigio el test: 1 en rojo
+      - C11. un recorte que falla hace fallar el append: 1 test en rojo
+      - C12. sin cola: 1 test en rojo
+      - C13. un fallo corta la cola: 1 test en rojo
+      - C14. el resumen depende de guardar el reporte: 1 test en rojo
+
+### Revision del PR (#33)
+La primera version arreglaba la linea rota y nada mas. La revision encontro
+que el objetivo del bloque, que el resumen del journal sobreviva, seguia
+dependiendo de que guardar el reporte no fallara **por ninguna otra causa**
+(disco lleno). Tambien encontro:
+- el recorte rompia la corrida si fallaba, aunque el reporte ya estuviera
+  escrito;
+- dos corridas superpuestas chocaban en el temporal: el scheduler no espera
+  a que termine la vuelta anterior. En Windows, ademas, `rename` falla si
+  otra operacion tiene el archivo abierto; se vio al probarlo. La solucion
+  de fondo fue la cola, no el nombre del temporal;
+- el recorte reescribia el archivo entero cada 5 minutos para agregar una
+  linea, y con eso los numeros de linea del aviso se corrian en cada corrida;
+- un error al cerrar el archivo en `saltoQueFalta` reemplazaba el valor de
+  retorno y hacia tirar la funcion.
 
 **Pregunta que lo habria agarrado antes** (la misma del Bloque 37, que no se
 aplico a los otros stores al cerrarlo): *"¿donde mas se escribe con
@@ -2644,8 +2676,15 @@ como riesgo, y dejo el corpus de estilo todavia abierto.
 - [ ] El corpus de estilo (`estiloBrokerStore.ts`) sigue sin arreglar: con una
       linea rota, `all()` devuelve vacio y `estilo:reanonimizar` lo borraria
       entero. Deberia usar `jsonl.ts`.
-- [ ] El audit log tiene su propia copia de la misma logica (Bloque 37). Se
-      puede migrar a `jsonl.ts` en un cambio aparte.
+- [ ] El audit log tiene su propia copia de la misma logica (Bloque 37), con
+      el bug del `close()` que aca se arreglo: si cerrar el archivo falla, su
+      `saltoQueFalta` tira y la escritura no se hace. Se arregla al migrarlo
+      a `jsonl.ts`, en un cambio aparte.
+- [ ] **El scheduler no espera a que termine la vuelta anterior**
+      (`setInterval` + `void tick()`). Una vuelta de mas de 5 minutos
+      superpone todos los jobs, no solo la retencion: dos purgas del audit log
+      a la vez, dos corridas de recontacto. La cola de este bloque cubre solo
+      el reporte. Va con el Bloque 40.
 
 ## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora (PROPUESTO)
 Encontrado al disenar el Bloque 39; **no se toca en ese bloque** porque es el
