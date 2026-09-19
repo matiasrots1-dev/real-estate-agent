@@ -25,15 +25,14 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   deploys se hacen con `infra/aws/deploy.sh`, sin argumentos.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- **Bloques 31, 34 y 37 mergeados el 19/09.** Falta el deploy desde `main`
-  para que corran en el servidor. El 37 es el que mas urge: hoy una sola
-  linea rota del audit log deja al bot caido en loop hasta que alguien edite
-  el archivo a mano.
+- **Bloques 31, 34 y 37 mergeados y desplegados el 19/09** (03:21, `aa2ad15`).
+  Verificado despues del deploy: `/health` OK, los tres MCP corriendo, modo
+  silencioso forzado, 57 contactos conocidos cargados, ninguna linea rota.
 - **A verificar: ¿te llegan los borradores al ...6699?** Todo lo que el bot le
   manda al broker es texto libre, y Meta solo lo entrega si el ...6699 le
   escribio a la linea del bot (...4543) en las ultimas 24 hs. Si no, responde
   200 y no entrega nada, sin error. Vale para los borradores y para el aviso
-  de fallos del Bloque 34. Ver `docs/TASKS.md` Bloque 34, riesgos abiertos.
+  de fallos del Bloque 34. Ver `docs/TASKS.md` Bloque 38.
 - **No levantar el bot en la laptop**: serían dos bots con las mismas
   credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
@@ -42,6 +41,14 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
+- [ ] **Proteger `main` en GitHub.** Verificado el 19/09: no tiene ninguna
+      regla, así que un push directo entra sin PR. Ahora que Claude mergea
+      solo, conviene una regla mínima: Settings → Branches → Add rule →
+      `main` → "Require a pull request before merging", con **0
+      aprobaciones** (si pide aprobaciones, Claude no puede mergear sus
+      propios PRs), y tildar "Do not allow bypassing the above settings":
+      Claude trabaja con tu cuenta, que es administradora, y sin ese tilde la
+      regla no le aplica. Es un cambio de un minuto, desde tu cuenta.
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.
@@ -67,6 +74,13 @@ haga que el bot le escriba a clientes, y borrar datos.
 
 ## Bloquea apagar el modo silencioso
 
+- [ ] **Bloque 38**: escalamientos y avisos al broker. Lo que dejaron abierto
+      las revisiones del 31 y del 34. Tres cosas **afectan hoy**, con el modo
+      silencioso prendido: la ventana de 24 hs (arriba), que nadie se entera
+      si falla el aviso al broker, y que una llamada colgada a Anthropic no
+      cuenta como fallo. El resto muerde al apagarlo; lo mas grave es que una
+      escalada por baja confianza le manda al cliente la plantilla con los
+      `{huecos}` sin llenar (pasa desde el Bloque 5).
 - [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:
       `recontactoPolicy.ts` y `topeDiarioStore.ts` usan la hora local del
       proceso. En un servidor en UTC, la ventana de 9 a 20 queda corrida 3 horas
@@ -102,6 +116,12 @@ haga que el bot le escriba a clientes, y borrar datos.
 - [ ] **Riesgos abiertos del Bloque 35**: una guarda en el código contra dos
       schedulers (laptop y servidor), drenar la cola al apagar, y una copia de
       los datos fuera de AWS.
+- [ ] **Riesgos abiertos del Bloque 37**: el reporte de retención tiene el
+      mismo problema de línea rota que tenía el audit log, y con el borrado
+      prendido es el más serio: la corrida tiraría **después** de purgar, y
+      quedarían datos borrados sin reporte. El corpus de estilo, igual (y
+      `estilo:reanonimizar` lo borraría entero). Los stores JSON enteros se
+      escriben sin temporal y rename.
 
 ## Riesgos asumidos (no son trabajo pendiente)
 

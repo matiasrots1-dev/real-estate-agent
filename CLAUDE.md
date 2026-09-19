@@ -182,12 +182,19 @@ usuario en vez de agregarlo por tu cuenta.
 ## 7. Convenciones de trabajo
 
 - **Flujo de git: rama por bloque + Pull Request, nunca commit directo a
-  `main`.** `main` está protegida contra push directo (GitHub → Settings →
-  Branches). Al arrancar un bloque de `docs/TASKS.md`, creá una rama
-  (`bloque-N-slug-corto`); al cerrarlo con tests en verde, actualizá
-  `docs/TASKS.md` y abrí un PR contra `main` con un resumen — el dueño del
-  repo lo revisa y aprueba desde GitHub, no asumas el merge. Detalle
-  completo del flujo en `CONTRIBUTING.md`.
+  `main`.** Ojo: `main` **no** tiene protección configurada en GitHub
+  (verificado el 2026-09-19), así que un push directo no falla: la regla es
+  tuya, no de GitHub. Al arrancar un bloque de `docs/TASKS.md`, creá una
+  rama (`bloque-N-slug-corto`); al cerrarlo con tests en verde, actualizá
+  `docs/TASKS.md` y abrí un PR contra `main` con `gh pr create`.
+  **Desde el 2026-09-19 el PR lo revisás y lo mergeás vos** (decisión del
+  dueño del repo): code review sobre el PR, arreglos del propio bloque en la
+  misma rama, el resto anotado como riesgo en `docs/TASKS.md`, la revisión
+  como comentario en el PR, y `gh pr merge N --merge`. **Excepciones que
+  siguen necesitando el OK explícito del dueño antes de mergear**: apagar el
+  modo silencioso, cualquier cambio que haga que el bot le escriba a
+  clientes, y borrar datos. Nunca `--admin`. Detalle completo del flujo en
+  `CONTRIBUTING.md`.
 - **Pre-mortem antes de escribir código; obituario después de cada
   fracaso.**
   *Cuándo aplica*: a bloques que tocan **código o comportamiento**. Un

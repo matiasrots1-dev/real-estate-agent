@@ -2485,7 +2485,8 @@ cuando la escritura misma se corta.
       scripts leerian otro archivo sin avisar.
 - [ ] La purga lee, filtra y reescribe sin lock: una entrada que se agrega
       entre la lectura y el rename se pierde. Ya pasaba antes de este bloque;
-      la purga corre una vez por dia, y la ventana es de milisegundos.
+      la purga corre en cada vuelta del scheduler (cada 5 minutos en el
+      servidor, visto en el log del 19/09) y la ventana es de milisegundos.
 - [ ] **Los stores JSON enteros** (turnos, estado de conversacion, ultima
       interaccion: `jsonFileStore.ts`) se escriben con `writeFile` directo,
       sin temporal y rename. Un corte a mitad de la escritura deja el archivo
@@ -2498,6 +2499,67 @@ cuando la escritura misma se corta.
       `all()` devuelva **vacio**: los borradores pierden el estilo sin
       aviso. Y `npm run estilo:reanonimizar` reescribe el archivo con lo que
       leyo, asi que con una linea rota **borra el corpus entero**.
+
+## Bloque 38 — Escalamientos y avisos al broker (BLOQUEA APAGAR EL MODO SILENCIOSO)
+Junta lo que dejaron abierto las revisiones de los PRs #29 (Bloque 31) y #30
+(Bloque 34), el 2026-09-19. Ninguno de los dos PRs los introdujo todos: varios
+vienen de antes y la revision los destapo. Se agrupan porque tocan el mismo
+camino (que le llega al cliente y que le llega al broker cuando el agente
+escala) y porque varios interactuan entre si.
+
+Hay dos grupos, y el orden importa: el primero **afecta produccion hoy**, con
+el modo silencioso prendido. El segundo solo muerde cuando se apague.
+
+### Afecta hoy, con el modo silencioso prendido
+- [ ] **La ventana de 24 hs de Meta tambien aplica al broker.** Todo lo que el
+      bot le manda al broker es texto libre (`sendText`): los borradores del
+      modo silencioso, los escalamientos, el aviso de fallos del Bloque 34.
+      Si el ...6699 no le escribio a la linea del bot (...4543) en las
+      ultimas 24 hs, Meta responde 200 y **no entrega**, sin error (Bloque
+      10 ya lo vio con el numero de prueba). Primero hay que confirmar con el
+      dueno del repo si hoy le estan llegando. Opciones: una plantilla
+      aprobada para avisos al broker, o que el broker mantenga la ventana
+      abierta escribiendole al bot.
+- [ ] **Si falla la notificacion al broker, nadie se entera.** Si falla el
+      borrador (Claude) o el envio, el escalamiento se pierde en su propio
+      `catch`. Viene del Bloque 5. El aviso de fallos del Bloque 34 no lo
+      cubre: ese salta cuando falla el procesamiento, no la notificacion.
+- [ ] **Una llamada a Anthropic que se cuelga no es un fallo.** El cliente del
+      SDK no tiene timeout propio (10 minutos por intento, con reintentos).
+      La cola descarta la tarea a los 60 s, pero no se escribe `fallido` ni
+      sale aviso hasta que la llamada termine. Arreglo: timeout explicito en
+      el cliente de Anthropic.
+
+### Muerde al apagar el modo silencioso
+- [ ] **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja
+      confianza de un intent cuya plantilla tiene variables manda la
+      plantilla sin llenar: *"Listo, {accion} tu visita de
+      {direccion_corta}"*, que ademas le dice al cliente que el cambio se
+      hizo. Afecta a 5 intents: `pedido_ficha_multimedia`,
+      `reprogramar_cancelar_visita`, `recordatorio_visita`,
+      `seguimiento_post_visita`, `broker_pausar_agente`.
+- [ ] **La misma frase se puede repetir por caminos que el Bloque 31 no
+      cubre.** Los escalamientos por baja confianza de intents generativos
+      usan el texto por defecto, y los flujos de visita usan
+      `DEFAULT_ESCALATION_TEXT`. La supresion se decide por id de intent;
+      deberia decidirse por el texto que efectivamente sale.
+- [ ] **Un envio al cliente que falla no es un fallo.** La captura del Bloque
+      34 termina antes de `sendText`: si el envio falla, no hay `fallido` ni
+      aviso, y `pendientes` la marca como respondida.
+- [ ] `responseSent` se registra antes de enviar: si el envio falla, igual se
+      gasta el unico envio de plantilla permitido (Bloque 31).
+- [ ] La deteccion de "el broker respondio" no ve los envios de
+      `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
+      `manual`.
+- [ ] La entrada suprimida reemplaza el motivo real del escalamiento en el
+      audit log.
+- [ ] `rechazo_desinteres` no dice "te paso con el asesor", y sin embargo
+      comparte el cupo con las otras seis plantillas fijas.
+- [ ] Posible diferencia de formato de telefono entre el `from` entrante y el
+      `to` del eco de coexistencia. Verificarlo con datos reales antes de
+      darlo por bueno.
+- [ ] Fallar cerrado ante un error de lectura **persistente** suprime la
+      plantilla para todos, indefinidamente (Bloque 31).
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
