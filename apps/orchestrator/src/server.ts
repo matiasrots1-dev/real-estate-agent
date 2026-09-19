@@ -175,7 +175,14 @@ async function main() {
   // coexistencia: solo se registra un contacto saliente del broker si el
   // destinatario ya es un contacto del negocio.
   const contactosConocidos = new ContactosConocidos();
-  await contactosConocidos.cargarDesde(auditLog);
+  // Un audit log que no se puede leer no puede impedir que el bot arranque
+  // (docs/TASKS.md Bloque 37): el proceso moriría y systemd lo reiniciaría en
+  // loop. Sin esta carga, el eco solo registra a quienes escriban de nuevo.
+  try {
+    await contactosConocidos.cargarDesde(auditLog);
+  } catch (error) {
+    console.error("No se pudieron cargar los contactos conocidos del audit log; arranco sin ellos:", error);
+  }
   const ultimoContactoStore = new FileUltimoContactoStore(config.ultimoContactoStorePath);
   const estiloBrokerStore = new FileEstiloBrokerStore(config.estiloBrokerStorePath);
   console.log(`Contactos conocidos cargados del audit log: ${contactosConocidos.size}`);

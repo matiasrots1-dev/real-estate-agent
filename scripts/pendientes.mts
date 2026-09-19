@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { normalizarTelefono } from "shared-types";
 import { FileUltimoContactoStore } from "../apps/orchestrator/src/agent/ultimoContactoStore.js";
 import { colapsarPorMensaje, INTENT_PROCESAMIENTO_FALLIDO, INTENT_SIN_CLASIFICAR } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
+import { FileAuditLogStore } from "../apps/orchestrator/src/agent/auditLog.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = Object.fromEntries(
@@ -66,11 +67,11 @@ interface Entrada {
 
 // Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
 // recibido y la que lo resuelve, y sin colapsar se contaria dos veces.
-const entradas: Entrada[] = colapsarPorMensaje(fs
-  .readFileSync(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl"), "utf8")
-  .split(/\r?\n/)
-  .filter(Boolean)
-  .map((l) => JSON.parse(l) as Entrada));
+// Se lee con el store y no con JSON.parse linea por linea: una linea rota no
+// puede dejar al broker sin lista (docs/TASKS.md Bloque 37).
+const entradas: Entrada[] = colapsarPorMensaje(
+  await new FileAuditLogStore(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl")).readAll()
+);
 
 // Una conversación puede tener varios mensajes con intents distintos: alguien
 // escribe "quiero ver el depto" y después "hola?". Se guarda el ÚLTIMO mensaje

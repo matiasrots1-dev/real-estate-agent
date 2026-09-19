@@ -2357,6 +2357,103 @@ cuando nadie esta mirando?"*. El canal murio el 8/09, el bot estaba apagado
 desde el 30/08, y se descubrio el 15/09 por un comentario del proveedor. Nada
 en el sistema avisa que dejaron de llegar mensajes.
 
+## Bloque 37 — Una linea rota del audit log no puede tumbar el bot
+Salio de la revision del PR #29 (2026-09-19), verificado en el codigo:
+`FileAuditLogStore.readAll()` hace `JSON.parse(line)` sin `try`, y el
+arranque (`server.ts`) llama a `contactosConocidos.cargarDesde(auditLog)`. Una
+sola linea ilegible hace que el proceso muera al arrancar, y systemd lo
+reinicia en loop: **el bot queda caido hasta que alguien edite el archivo a
+mano en el servidor**. Hoy el archivo del servidor esta sano (329 lineas, 0
+rotas), pero una linea rota es exactamente lo que deja un corte a mitad de un
+`appendFile`: el proceso muere, queda media linea sin salto, y la siguiente
+entrada se pega detras.
+
+No es solo el arranque. `leerHistorial` atrapa el error y sigue sin historial,
+y con eso el Bloque 31 **falla cerrado para siempre**: sin historial se
+suprime toda plantilla fija, en todas las conversaciones, hasta que alguien
+arregle el archivo. `pendientes` y las mediciones tambien mueren.
+
+### Pre-mortem
+**1. Leer tolerante convierte la purga en un borrado silencioso.**
+`purgeOlderThan` reescribe el archivo con lo que devolvio `readAll()`. Si
+`readAll()` saltea las lineas rotas, la primera purga que borre algo las
+elimina del disco sin contarlas, y nadie puede revisarlas despues. Borrar
+datos es decision del dueno del repo, no un efecto secundario de leer.
+   *Mitigacion*: la purga conserva las lineas ilegibles tal cual. Test contra
+   un archivo real, no contra el store en memoria.
+
+**2. Tolerar en silencio esconde el problema.** Si algo empieza a escribir
+basura, `readAll()` devuelve menos entradas y todo parece andar: el contexto
+del clasificador se achica, `pendientes` muestra menos, la plantilla del
+Bloque 31 se repite. Es el mismo silencio del Bloque 34 con otra causa.
+   *Mitigacion*: un aviso en el log con la cantidad y el numero de linea (sin
+   el contenido: son mensajes de clientes), una vez por cada cambio en la
+   cantidad, no uno por mensaje. Test del aviso.
+
+**3. La entrada que se pega a la media linea se pierde.** Despues de un corte,
+la primera entrada nueva se escribe detras de la media linea, sin salto, y
+las dos juntas son una sola linea ilegible. Tolerar la lectura no la
+recupera: la entrada buena se pierde igual, y es la primera despues de un
+reinicio, justo la que mas importa.
+   *Mitigacion*: la primera escritura de cada proceso mira si el archivo
+   termina en salto de linea y, si no, lo agrega antes. Test con un archivo
+   que termina en media linea.
+
+### Descartado a proposito
+- Intentar reparar las lineas rotas (separar `}{`, etc.): adivina, y una
+  reparacion equivocada es peor que una linea marcada como ilegible.
+- Los otros stores quedan fuera, pero **no porque esten a salvo** (lo crei al
+  escribir este pre-mortem y lo verifique antes de dejarlo: era falso).
+  Quedan como riesgo abierto, abajo.
+
+### Como quedo
+- [x] `parsearAuditLog` separa las entradas de las lineas ilegibles (JSON roto,
+      o JSON valido que no es un objeto). `FileAuditLogStore.readAll()` la usa
+      y ya no tira.
+- [x] La purga reescribe las ilegibles tal cual, al final del archivo. No
+      tienen fecha legible, asi que la retencion no decide sobre ellas.
+- [x] Aviso en el log con la cantidad y los numeros de linea, sin el
+      contenido, una vez por cada cambio en la cantidad.
+- [x] La primera escritura de cada proceso agrega el salto que falta si el
+      archivo termina en media linea. Todas las escrituras esperan esa
+      reparacion.
+- [x] `server.ts`: si cargar los contactos conocidos falla por otra causa
+      (permisos, disco), el bot arranca igual, sin ellos. Sin test: `server.ts`
+      no tiene tests de arranque.
+- [x] `pendientes`, `medir:*` y `etiquetar` leen con el store en vez de
+      `JSON.parse` linea por linea. `pendientes` da la misma salida que antes
+      sobre los datos locales (mismo hash).
+- [x] 9 tests nuevos, contra un archivo real; suite 623/623. Mutation testing, una por vez:
+      - B1. la purga no conserva las ilegibles: 1 test en rojo
+      - B2. sin aviso: 2 tests en rojo
+      - B3. aviso en cada lectura: 1 test en rojo
+      - B4. sin reparar la linea cortada: 2 tests en rojo
+      - B5. la escritura no espera la reparacion: 2 tests en rojo
+      - B6. lectura no tolerante (lo de antes): 7 tests en rojo
+      - B7. acepta JSON que no es un objeto: 1 test en rojo
+
+**Pregunta que lo habria agarrado antes**: *"¿que pasa si el proceso muere a
+mitad de esta escritura, y que lee el que arranca despues?"*. El audit log se
+diseno para que nunca se pierda nada, y nadie se pregunto que queda en disco
+cuando la escritura misma se corta.
+
+### Riesgos abiertos
+- [ ] La purga lee, filtra y reescribe sin lock: una entrada que se agrega
+      entre la lectura y el rename se pierde. Ya pasaba antes de este bloque;
+      la purga corre una vez por dia, y la ventana es de milisegundos.
+- [ ] **Los stores JSON enteros** (turnos, estado de conversacion, ultima
+      interaccion: `jsonFileStore.ts`) se escriben con `writeFile` directo,
+      sin temporal y rename. Un corte a mitad de la escritura deja el archivo
+      truncado, y ese store entero queda ilegible hasta arreglarlo a mano.
+      Es peor que una linea rota, y hoy no tiene mitigacion. Los de la
+      purga del audit log y del reporte de retencion si usan temporal y
+      rename.
+- [ ] **El corpus de estilo** (`estiloBrokerStore.ts`) es JSONL con
+      `appendFile`, igual que el audit log, y una linea rota hace que
+      `all()` devuelva **vacio**: los borradores pierden el estilo sin
+      aviso. Y `npm run estilo:reanonimizar` reescribe el archivo con lo que
+      leyo, asi que con una linea rota **borra el corpus entero**.
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
