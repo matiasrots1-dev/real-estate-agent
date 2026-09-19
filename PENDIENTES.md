@@ -28,8 +28,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - **Bloques 31, 34 y 37 mergeados y desplegados el 19/09** (03:21, `aa2ad15`).
   Verificado despues del deploy: `/health` OK, los tres MCP corriendo, modo
   silencioso forzado, 57 contactos conocidos cargados, ninguna linea rota.
-- **Bloque 39 mergeado el 19/09, sin desplegar todavia**: no urge, y el
-  reinicio corta los mensajes en vuelo, asi que va en horario tranquilo.
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
@@ -45,15 +43,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
-- [ ] **Bloque 40 (propuesto): la retencion corre cada 5 minutos y su reporte
-      dura una hora.** El reporte guarda 12 corridas, pensadas para comparar
-      semana contra semana. Desde julio de 2027, cuando empiece a borrar, el
-      reporte de un borrado desaparece en una hora. Propuesta: correrla una
-      vez por dia, en horario tranquilo, y conservar el reporte por tiempo
-      (por ejemplo 90 dias). Va junto con otro problema del mismo camino: el
-      scheduler no espera a que termine la vuelta anterior, asi que una vuelta
-      lenta superpone todos los jobs. No urge: hasta julio de 2027 no se borra
-      nada. ¿Lo hago?
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.
@@ -105,6 +94,18 @@ haga que el bot le escriba a clientes, y borrar datos.
 
 ## Después
 
+- [ ] **Desplegar el Bloque 39** (mergeado el 19/09). Queda para después por
+      decision del dueno del repo: no urge, y el reinicio corta los mensajes
+      en vuelo. Cualquier deploy desde `main` lo incluye.
+- [ ] **Bloque 40: la retencion corre cada 5 minutos y su reporte dura una
+      hora.** Queda para despues por decision del dueno del repo (19/09). El
+      reporte guarda 12 corridas, pensadas para comparar semana contra semana:
+      desde julio de 2027, cuando empiece a borrar, el reporte de un borrado
+      desaparece en una hora. Propuesta: correrla una vez por dia, en horario
+      tranquilo, y conservar el reporte por tiempo (por ejemplo 90 dias). Va
+      junto con otro problema del mismo camino: el scheduler no espera a que
+      termine la vuelta anterior, asi que una vuelta lenta superpone todos los
+      jobs. Tiene que estar hecho antes de julio de 2027.
 - [ ] **Tercer numero dedicado como canal broker** (mejora, no bloquea nada).
       Hoy los borradores y las ordenes al bot van por el celular personal
       ...6699, asi que trabajo y vida privada comparten linea. Un numero
