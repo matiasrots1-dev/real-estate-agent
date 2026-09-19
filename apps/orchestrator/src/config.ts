@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { leerTimeoutAnthropic } from "./agent/clienteAnthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/orchestrator/src -> repo root
@@ -11,6 +12,8 @@ export interface OrchestratorConfig {
   defaultConfidenceThreshold: number;
   auditLogPath: string;
   anthropicApiKey?: string;
+  /** Timeout por intento de cada llamada a Claude (docs/TASKS.md Bloque 38b). */
+  anthropicTimeoutMs: number;
   whatsapp: {
     webhookVerifyToken?: string;
     appSecret?: string;
@@ -112,6 +115,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
     // Docker disponible y/o se necesite concurrencia real entre procesos.
     auditLogPath: env.AUDIT_LOG_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/audit_log.jsonl"),
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    anthropicTimeoutMs: leerTimeoutAnthropic(env.ANTHROPIC_TIMEOUT_MS),
     whatsapp: {
       webhookVerifyToken: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
       appSecret: env.WHATSAPP_APP_SECRET,

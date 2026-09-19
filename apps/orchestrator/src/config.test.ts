@@ -23,6 +23,17 @@ describe("loadConfigFromEnv — flag de firma del webhook", () => {
   );
 });
 
+// docs/TASKS.md Bloque 38b.
+describe("loadConfigFromEnv — timeout de Anthropic", () => {
+  it("sin la variable, 30 s", () => {
+    expect(loadConfigFromEnv({}).anthropicTimeoutMs).toBe(30_000);
+  });
+
+  it("con la variable, su valor", () => {
+    expect(loadConfigFromEnv({ ANTHROPIC_TIMEOUT_MS: "45000" }).anthropicTimeoutMs).toBe(45_000);
+  });
+});
+
 describe("loadConfigFromEnv — modo silencioso", () => {
   // Es el único flag del proyecto cuyo default es `true`. La asimetría:
   // silencioso cuando lo querías activo = te llegan los borradores y respondés

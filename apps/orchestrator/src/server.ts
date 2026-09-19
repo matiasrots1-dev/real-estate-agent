@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import path from "node:path";
 import { config as loadDotenv } from "dotenv";
-import Anthropic from "@anthropic-ai/sdk";
+import { crearClienteAnthropic } from "./agent/clienteAnthropic.js";
 import { loadConfigFromEnv, REPO_ROOT } from "./config.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { ClaudeIntentClassifier } from "./agent/classifier.js";
@@ -66,7 +66,9 @@ async function main() {
   }
 
   const catalog = loadCatalog(config.intentCatalogPath);
-  const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+  // Con timeout por intento: sin él, una llamada colgada tardaba hasta media
+  // hora en fallar (docs/TASKS.md Bloque 38b).
+  const anthropic = crearClienteAnthropic({ apiKey: config.anthropicApiKey, timeoutMs: config.anthropicTimeoutMs });
 
   const tokko = new TokkoMcpClient({ entryPath: config.mcpTokko.entryPath, cwd: config.mcpTokko.cwd });
   const gcal = new GcalMcpClient({ entryPath: config.mcpGcal.entryPath, cwd: config.mcpGcal.cwd });
