@@ -25,9 +25,11 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   deploys se hacen con `infra/aws/deploy.sh`, sin argumentos.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- **Bloques 31, 34 y 37 mergeados y desplegados el 19/09** (03:21, `aa2ad15`).
-  Verificado despues del deploy: `/health` OK, los tres MCP corriendo, modo
-  silencioso forzado, 57 contactos conocidos cargados, ninguna linea rota.
+- **Desplegado el 19/09 a las 14:23** (`963a78f`): Bloques 31, 34, 37, 39,
+  38a y 38g. Verificado despues del deploy: `/health` OK, los tres MCP
+  corriendo, modo silencioso forzado, 63 contactos conocidos cargados. Prueba
+  en vivo de 38g OK: el broker pidio "resumen de agenda" desde el ...6699 y
+  le llego el resumen.
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
@@ -71,8 +73,7 @@ haga que el bot le escriba a clientes, y borrar datos.
 - [ ] **Bloque 38**: escalamientos y avisos al broker. Lo que dejaron abierto
       las revisiones del 31 y del 34. Hecho: 38a (si falla el borrador, el
       aviso te llega igual) y 38g (tus ordenes al bot reciben respuesta en
-      modo silencioso; falta desplegarlo y probarlo en vivo: mandale "resumen
-      de agenda" al bot desde el ...6699). Lo que **afecta hoy**: una llamada
+      modo silencioso; desplegado y probado en vivo). Lo que **afecta hoy**: una llamada
       colgada a Anthropic no cuenta como fallo (38b, lo proximo), y la
       ventana de 24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
       escalada por baja confianza le manda al cliente la plantilla con los
@@ -96,9 +97,6 @@ haga que el bot le escriba a clientes, y borrar datos.
 
 ## Después
 
-- [ ] **Desplegar el Bloque 39** (mergeado el 19/09). Queda para después por
-      decision del dueno del repo: no urge, y el reinicio corta los mensajes
-      en vuelo. Cualquier deploy desde `main` lo incluye.
 - [ ] **Bloque 40: la retencion corre cada 5 minutos y su reporte dura una
       hora.** Queda para despues por decision del dueno del repo (19/09). El
       reporte guarda 12 corridas, pensadas para comparar semana contra semana:

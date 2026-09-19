@@ -2721,9 +2721,15 @@ arreglaron 8 (arriba). Quedan anotados:
 - [ ] `toolsCalled` del audit log sigue listando los envios que el modo
       silencioso bloqueo. El resumen, que queda en `responseSent`, si dice
       cuales no salieron.
-- [ ] **Prueba en vivo, despues del deploy**: el broker le escribe "resumen de
-      agenda" a la linea del bot desde el ...6699. Confirma el modo de fallo
-      1 (el formato de su numero), que no se pudo verificar con datos.
+- [x] **Prueba en vivo, despues del deploy** (19/09, 14:26): el broker le
+      escribio "resumen de agenda" a la linea del bot desde el ...6699. Su
+      numero llego igual al configurado (modo de fallo 1 descartado), se
+      clasifico `broker_resumen_agenda` con 0.97, no escalo, y la respuesta
+      salio a su numero (WhatsApp la acepto y llegaron los statuses). En el
+      audit log quedaron las dos entradas, `recibido` y la resuelta.
+      Detalle a mirar: el texto ("Cuando quieras coordinar alguna, avisame y
+      lo arreglamos enseguida") suena escrito para un cliente, no para el
+      broker.
 
 
 ### Muerde al apagar el modo silencioso
