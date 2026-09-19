@@ -47,6 +47,28 @@ describe("colapsarPorMensaje", () => {
     expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["resuelto"]);
   });
 
+  // Reinicio del proceso: el dedup en memoria se pierde, Meta reentrega un
+  // mensaje ya contestado, y el reproceso falla.
+  it("un fallido de un reproceso no tapa la respuesta que el cliente ya recibió", () => {
+    const entradas = [
+      entrada("llego", { messageId: "m1", etapa: "recibido" }),
+      entrada("resuelto", { messageId: "m1" }),
+      entrada("llego-de-nuevo", { messageId: "m1", etapa: "recibido" }),
+      entrada("fallo-el-reproceso", { messageId: "m1", etapa: "fallido" }),
+    ];
+
+    expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["resuelto"]);
+  });
+
+  it("un reproceso que se resuelve reemplaza a la resolución anterior", () => {
+    const entradas = [
+      entrada("resuelto", { messageId: "m1" }),
+      entrada("resuelto-de-nuevo", { messageId: "m1" }),
+    ];
+
+    expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["resuelto-de-nuevo"]);
+  });
+
   it("las entradas sin messageId pasan sin tocar: las viejas y las de los jobs", () => {
     const entradas = [
       entrada("vieja-1"),

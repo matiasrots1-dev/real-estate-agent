@@ -25,9 +25,13 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   deploys se hacen con `infra/aws/deploy.sh`, sin argumentos.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- En curso: **Bloque 34**, con PR abierto. Se mergea **despues** del 31: sale
-  de su rama y toca el mismo archivo. Despues de mergear los dos, hacer un
-  deploy desde `main` para que corran en el servidor.
+- **Bloques 31 y 34 mergeados el 19/09.** Falta el deploy desde `main` para
+  que corran en el servidor.
+- **A verificar: ¿te llegan los borradores al ...6699?** Todo lo que el bot le
+  manda al broker es texto libre, y Meta solo lo entrega si el ...6699 le
+  escribio a la linea del bot (...4543) en las ultimas 24 hs. Si no, responde
+  200 y no entrega nada, sin error. Vale para los borradores y para el aviso
+  de fallos del Bloque 34. Ver `docs/TASKS.md` Bloque 34, riesgos abiertos.
 - **No levantar el bot en la laptop**: serían dos bots con las mismas
   credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
@@ -55,17 +59,12 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## PRs esperando revisión
 
-- [ ] **#29** `bloque-31-plantilla-una-vez`: la plantilla fija sale una sola
-      vez por conversación. Va primero.
-- [ ] `bloque-34-audit-antes-de-clasificar`: el audit log se escribe antes de
-      clasificar y los fallos le avisan al broker. Va despues del 31.
+Ninguno. Desde el 19/09 los PRs los revisa y mergea Claude, salvo tres cosas
+que siguen necesitando tu OK: apagar el modo silencioso, cualquier cambio que
+haga que el bot le escriba a clientes, y borrar datos.
 
 ## Bloquea apagar el modo silencioso
 
-- [ ] **Bloque 34**: el audit log se escribe antes de clasificar, para que una
-      caida de la API no vuelva a perder mensajes. Terminado, con PR abierto:
-      falta mergear (despues del 31) y desplegar.
-- [ ] **Bloque 31**: mergear (ver arriba).
 - [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:
       `recontactoPolicy.ts` y `topeDiarioStore.ts` usan la hora local del
       proceso. En un servidor en UTC, la ventana de 9 a 20 queda corrida 3 horas

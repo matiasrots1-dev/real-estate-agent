@@ -24,7 +24,7 @@ export interface AuditLogEntry {
   messageId?: string;
   /**
    * `recibido`: escrita al llegar el mensaje, antes de clasificar.
-   * `fallido`: el procesamiento tiró; se le avisó al broker con el texto crudo.
+   * `fallido`: el procesamiento tiró; al cliente no se le respondió nada.
    * Ausente: entrada resuelta, como todas las anteriores al Bloque 34.
    */
   etapa?: "recibido" | "fallido";

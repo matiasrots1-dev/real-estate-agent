@@ -35,6 +35,11 @@ interface ConEtapa {
  * a su `recibido`, en la posición del `recibido`, que es el orden de llegada.
  * Si un mensaje solo tiene su `recibido`, se conserva: llegó y no se resolvió.
  *
+ * Gana la etapa más avanzada, no la última escrita: resuelta > `fallido` >
+ * `recibido`. Si el proceso se reinicia, el dedup en memoria se pierde y Meta
+ * puede reentregar un mensaje que ya se había contestado. Si ese reproceso
+ * falla, el `fallido` no puede tapar la respuesta que el cliente sí recibió.
+ *
  * Las entradas sin `messageId` pasan sin tocar: son las anteriores al Bloque
  * 34 y las de los jobs, que no responden a un mensaje entrante.
  */
@@ -50,11 +55,17 @@ export function colapsarPorMensaje<T extends ConEtapa>(entradas: readonly T[]): 
     if (i === undefined) {
       posicion.set(entrada.messageId, salida.length);
       salida.push(entrada);
-    } else if (entrada.etapa !== "recibido") {
+    } else if (rango(entrada) >= rango(salida[i])) {
       salida[i] = entrada;
     }
   }
   return salida;
+}
+
+function rango(entrada: ConEtapa): number {
+  if (entrada.etapa === "recibido") return 0;
+  if (entrada.etapa === "fallido") return 1;
+  return 2;
 }
 
 /**

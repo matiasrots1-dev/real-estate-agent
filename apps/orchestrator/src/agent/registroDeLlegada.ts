@@ -34,9 +34,12 @@ export async function registrarRecibido(
 }
 
 /**
- * Se escribe cuando el procesamiento tiró. Queda como escalado porque el
- * broker recibe el texto crudo por otro camino (`AvisoDeFallos`), que no pasa
- * por Claude.
+ * Se escribe cuando el procesamiento tiró. Queda como escalado porque es del
+ * broker: nadie le contestó al cliente. El aviso sale por otro camino
+ * (`AvisoDeFallos`, que no pasa por Claude) y se escribe DESPUÉS de esta
+ * entrada, así que acá no se afirma que llegó: puede no salir (sin número del
+ * broker, WhatsApp caído) o quedar en un resumen que se pierde si el proceso
+ * se reinicia.
  */
 export async function registrarFallido(
   auditLog: AuditLogStore | undefined,
@@ -49,8 +52,7 @@ export async function registrarFallido(
     matchedIntentId: INTENT_PROCESAMIENTO_FALLIDO,
     escalatedToBroker: true,
     escalationReason:
-      `Falló el procesamiento: ${describirError(error)}. Se le avisó al broker con el ` +
-      `texto crudo; al cliente no se le respondió nada.`,
+      `Falló el procesamiento: ${describirError(error)}. Al cliente no se le respondió nada.`,
     etapa: "fallido",
   });
 }

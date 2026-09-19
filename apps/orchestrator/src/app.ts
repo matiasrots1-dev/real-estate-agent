@@ -373,16 +373,26 @@ async function handleIncomingWebhook(
 
   // Lo que llegó queda registrado ANTES de clasificar, siempre (docs/TASKS.md
   // Bloque 34). El 2026-08-28 se acabó el crédito de la API de Anthropic y los
-  // mensajes se evaporaron: 200 al proveedor y nada en el audit log. Va antes
-  // de encolar para que quede aunque el proceso muera antes de procesarlo, y
-  // nunca tira: si esta escritura falla, el mensaje se procesa igual.
-  await registrarRecibido(deps.auditLog, message);
+  // mensajes se evaporaron: 200 al proveedor y nada en el audit log. La
+  // escritura arranca antes de encolar, para que quede aunque el proceso muera
+  // antes de procesarlo, y nunca tira: si falla, el mensaje se procesa igual.
+  //
+  // Se encola SIN esperarla, y la tarea la espera antes de clasificar. Con un
+  // `await` acá, dos mensajes seguidos del mismo teléfono se encolarían en el
+  // orden en que terminó cada escritura a disco, no en el que llegaron.
+  const recibidoRegistrado = registrarRecibido(deps.auditLog, message);
+
+  // Las órdenes del broker no cuentan para el aviso de fallos: es una alarma
+  // sobre clientes sin respuesta, y al broker le diría "contestale vos" sobre
+  // su propio mensaje. Él ya se entera: le falta la confirmación de la orden.
+  const avisoDeFallos = message.from === deps.brokerWhatsappNumber ? undefined : deps.avisoDeFallos;
 
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la
   // serialización que antes daba de casualidad la lentitud del handler, y los
   // stores JSON (leer-entero → mutar → escribir-entero, sin lock) se pisan.
   queue.enqueue(message.from, async () => {
+    await recibidoRegistrado;
     let result: Awaited<ReturnType<typeof handleIncomingMessage>>;
     try {
       result = await handleIncomingMessage(message, deps);
@@ -392,10 +402,10 @@ async function handleIncomingWebhook(
       // como `fallido` y el broker recibe el texto crudo por un camino que no
       // pasa por Claude. Se relanza para que la cola lo siga logueando.
       await registrarFallido(deps.auditLog, message, error);
-      await deps.avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
+      await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
       throw error;
     }
-    await deps.avisoDeFallos?.registrarExito();
+    await avisoDeFallos?.registrarExito();
     // responseText es null cuando el agente está pausado para este
     // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
     // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.

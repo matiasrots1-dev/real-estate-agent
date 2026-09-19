@@ -91,6 +91,12 @@ async function leerHistorial(
       // antes de encolar. Sin este filtro el clasificador lo vería como si
       // fuera un mensaje anterior de la misma persona.
       if (entrada.messageId === message.messageId) continue;
+      // Un `recibido` sin resolver de esta conversación es, casi siempre, un
+      // mensaje POSTERIOR que espera en la cola detrás de este: la cola es
+      // serial por conversación, así que los anteriores ya se resolvieron.
+      // Si entrara, el clasificador leería el futuro como si fuera el mensaje
+      // más reciente. Los `fallido` sí entran: el cliente los escribió antes.
+      if (entrada.etapa === "recibido") continue;
       entradas.push(entrada);
     }
     const ultimoContacto = (await deps.ultimoContactoStore?.get(message.from)) ?? null;

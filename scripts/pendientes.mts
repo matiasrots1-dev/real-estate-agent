@@ -60,6 +60,8 @@ interface Entrada {
   matchedIntentId: string;
   escalatedToBroker?: boolean;
   responseSent?: string;
+  messageId?: string;
+  etapa?: string;
 }
 
 // Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
@@ -96,9 +98,15 @@ for (const e of entradas) {
     continue;
   }
   previo.mensajes += 1;
-  if (e.timestamp > previo.ultimo.timestamp) previo.ultimo = e;
+  // "Respondida" es del ÚLTIMO mensaje, no de toda la conversación: si el
+  // agente contestó la semana pasada y el mensaje de hoy falló, la
+  // conversación está pendiente. Con un "alguna vez se respondió" el
+  // `fallido` de hoy desaparecería de la lista (docs/TASKS.md Bloque 34).
+  if (e.timestamp > previo.ultimo.timestamp) {
+    previo.ultimo = e;
+    previo.respondida = e.responseSent !== undefined;
+  }
   if (prioridadDe(e.matchedIntentId) < prioridadDe(previo.mejorIntent)) previo.mejorIntent = e.matchedIntentId;
-  if (e.responseSent !== undefined) previo.respondida = true;
 }
 
 /** Claves múltiples por teléfono, para maximizar el match contra Tokko. */
