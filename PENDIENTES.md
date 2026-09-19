@@ -71,13 +71,15 @@ haga que el bot le escriba a clientes, y borrar datos.
 ## Bloquea apagar el modo silencioso
 
 - [ ] **Bloque 38**: escalamientos y avisos al broker. Lo que dejaron abierto
-      las revisiones del 31 y del 34. Hecho: 38a (si falla el borrador, el
-      aviso te llega igual) y 38g (tus ordenes al bot reciben respuesta en
-      modo silencioso; desplegado y probado en vivo) y 38b (una llamada
-      colgada a Anthropic falla en unos 51 s en vez de media hora; falta
-      desplegarlo). Lo que **afecta hoy**: la ventana de 24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
-      escalada por baja confianza le manda al cliente la plantilla con los
-      `{huecos}` sin llenar (pasa desde el Bloque 5).
+      las revisiones del 31 y del 34. Hecho y desplegado: 38a (si falla el
+      borrador, el aviso te llega igual), 38g (tus ordenes al bot reciben
+      respuesta en modo silencioso; probado en vivo) y 38b (una llamada
+      colgada a Anthropic falla en unos 51 s en vez de media hora). Hecho, sin
+      desplegar: 38c (ningun escalamiento le manda al cliente una plantilla
+      con `{huecos}` sin llenar). Lo que **afecta hoy**: la ventana de 24 hs
+      (arriba). Falta, y muerde al apagar el modo silencioso: 38d (envios al
+      cliente: que queda registrado y que pasa si fallan), 38e (la supresion
+      de la plantilla repetida) y 38f (detectar que respondiste vos).
 - [ ] **Tu calendario personal no cuenta para ofrecer horarios.** El bot mira
       un solo calendario, el dedicado a visitas. Para ofrecerle horarios a un
       cliente consulta "ocupado/libre" solo ahi, asi que con el modo silencioso

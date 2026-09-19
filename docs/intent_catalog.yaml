@@ -37,6 +37,12 @@ meta:
   escalation_channel: "broker_whatsapp"     # a dónde se manda la notificación de escalamiento
   audit_log: true                            # loguear siempre intent + confianza + tools llamadas
   language: "es-AR"
+  # La respuesta de espera genérica: la que recibe el cliente cuando algo escala
+  # y el intent no tiene una plantilla de espera propia (por baja confianza, o
+  # desde un flujo de visitas). Sin esto, esos casos mandaban la plantilla del
+  # caso exitoso con los {huecos} sin llenar (docs/TASKS.md Bloque 38c). La
+  # validación del catálogo exige que exista y no tenga huecos.
+  escalation_waiting_template_from: fallback_low_confidence
 
 # ---------------------------------------------------------------------------
 # INTENTS — CANAL CLIENTE

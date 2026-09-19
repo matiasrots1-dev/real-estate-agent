@@ -73,8 +73,12 @@ function makeTokko(overrides: Partial<TokkoQueries> = {}): TokkoQueries {
   };
 }
 
+/** La plantilla de espera del catálogo (docs/TASKS.md Bloque 38c). */
+const ESPERA = "Dejame confirmarlo con el asesor y te respondo enseguida.";
+
 function makeDeps(overrides: Partial<ReprogramarCancelarVisitaDeps> = {}): ReprogramarCancelarVisitaDeps {
   return {
+    plantillaDeEspera: ESPERA,
     tokko: makeTokko(),
     gcal: makeGcal(),
     conversationStateStore: new InMemoryConversationStateStore(),
@@ -120,6 +124,26 @@ describe("startReprogramarCancelarVisita", () => {
 
     expect(result.escalate).toBe(true);
     expect(deps.gcal.freebusy).not.toHaveBeenCalled();
+    expect(result.responseText).not.toMatch(/\{[a-z_]+\}/);
+  });
+
+  // docs/TASKS.md Bloque 38c: este escalamiento mandaba "Listo, {accion} tu
+  // visita de {direccion_corta}. {detalle_nuevo_horario}" tal cual.
+  it("sin horarios libres: escala con la plantilla de espera, no con la del caso exitoso", async () => {
+    const appointmentStore = new InMemoryAppointmentStore();
+    await appointmentStore.save(sampleAppointment());
+    const ocupadoTodaLaVentana = [
+      {
+        start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ];
+    const deps = makeDeps({ appointmentStore, gcal: makeGcal({ freebusy: vi.fn(async () => ocupadoTodaLaVentana) }) });
+
+    const result = await startReprogramarCancelarVisita(message("¿lo pasamos para otro día?"), intent, deps);
+
+    expect(result.escalate).toBe(true);
+    expect(result.responseText).toBe(ESPERA);
   });
 
   it("reprogramar por 1ra vez: propone horarios y deja la conversación esperando confirmación", async () => {
@@ -182,5 +206,7 @@ describe("continueReprogramarCancelarVisita", () => {
 
     expect(result.escalate).toBe(true);
     expect(deps.gcal.patchEvent).not.toHaveBeenCalled();
+    // docs/TASKS.md Bloque 38c: mandaba la plantilla del caso exitoso, con huecos.
+    expect(result.responseText).toBe(ESPERA);
   });
 });

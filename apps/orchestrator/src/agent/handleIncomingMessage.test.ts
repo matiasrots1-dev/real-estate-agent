@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntentCatalog, Property } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
@@ -420,6 +420,168 @@ describe("handleIncomingMessage — el aviso al broker no depende del borrador (
 
     const [entry] = await auditLog.readAll();
     expect(entry.avisoAlBroker).toBeUndefined();
+  });
+});
+
+// docs/TASKS.md Bloque 38c. Un escalamiento por baja confianza respondía con
+// la plantilla del propio intent: para los que no escalan solos, la del caso
+// exitoso, con los huecos sin llenar.
+describe("handleIncomingMessage — ningún escalamiento manda una plantilla con huecos (Bloque 38c)", () => {
+  // Hallazgo de la revisión del PR #40: un expect que falla antes del
+  // mockRestore dejaba console.error mockeado para el resto del archivo.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const ESPERA = catalog.intents.find((i) => i.id === catalog.meta.escalation_waiting_template_from)!.response
+    .template!;
+
+  // Todos los intents del catálogo real, con confianza baja: el próximo que se
+  // agregue con una plantilla con huecos también queda cubierto.
+  it.each(catalog.intents.map((i) => [i.id, i.channel] as const))(
+    '"%s" con confianza baja responde sin huecos',
+    async (intentId, channel) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const from = channel === "broker" ? BROKER_NUMBER : "5491100000001";
+      const result = await handleIncomingMessage(
+        incoming("algo que no se entiende bien", from),
+        baseDeps({ classifier: stubClassifier({ intentId, confidence: 0.1 }), brokerWhatsappNumber: BROKER_NUMBER })
+      );
+
+      expect(result.escalatedToBroker).toBe(true);
+      expect(result.responseText ?? "").not.toMatch(/\{[a-z_]+\}/);
+      // Sin la red de última línea: el camino conocido ya elige bien. Si la
+      // red tuviera que actuar acá, estaría tapando una regresión.
+      expect(error).not.toHaveBeenCalledWith(expect.stringContaining("[respuesta]"));
+      error.mockRestore();
+    }
+  );
+
+  it("reprogramar_cancelar_visita con confianza baja recibe la plantilla de espera, no \"Listo, ...\"", async () => {
+    const result = await handleIncomingMessage(
+      incoming("¿lo podemos mover?"),
+      baseDeps({ classifier: stubClassifier({ intentId: "reprogramar_cancelar_visita", confidence: 0.4 }) })
+    );
+
+    expect(result.responseText).toBe(ESPERA);
+  });
+
+  it("un intent que escala siempre sigue respondiendo con su propia plantilla de espera", async () => {
+    const negociacion = catalog.intents.find((i) => i.id === "negociacion_precio")!;
+    const result = await handleIncomingMessage(
+      incoming("¿me hacés un descuento?"),
+      baseDeps({ classifier: stubClassifier({ intentId: "negociacion_precio", confidence: 0.9 }) })
+    );
+
+    expect(result.responseText).toBe(negociacion.response.template);
+    expect(result.responseText).not.toBe(ESPERA);
+  });
+
+  // Modo de fallo 2 del pre-mortem: la red de última línea.
+  // Hallazgo de la revisión del PR #40: la plantilla de espera le promete al
+  // cliente que el asesor le va a responder. Si la red solo cambiaba el texto,
+  // nadie le avisaba al broker.
+  it("una respuesta con un hueco sin llenar no le llega al cliente, y el mensaje escala de verdad", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    const result = await handleIncomingMessage(
+      incoming("¿sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer("Sí, el de {direccion_corta} sigue disponible."),
+        auditLog,
+        brokerNotifier,
+      })
+    );
+
+    expect(result.responseText).toBe(ESPERA);
+    expect(result.escalatedToBroker).toBe(true);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(brokerNotifier.notifications[0].escalationReason).toContain("datos sin completar");
+    const [entry] = await auditLog.readAll();
+    expect(entry.responseSent).toBe(ESPERA);
+    expect(entry.escalatedToBroker).toBe(true);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("consulta_disponibilidad"));
+  });
+
+  it("un hueco con tilde o mayúscula también cuenta", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await handleIncomingMessage(
+      incoming("¿sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer("Sí, el de {dirección} sigue disponible, {Nombre}."),
+      })
+    );
+
+    expect(result.responseText).toBe(ESPERA);
+  });
+
+  // Hallazgo de la revisión del PR #40: un "ok" del cliente no puede confirmar
+  // horarios que nunca leyó.
+  it("si la red corta una propuesta de horarios, la conversación no queda esperando confirmación", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const conversationStateStore = new InMemoryConversationStateStore();
+
+    const result = await handleIncomingMessage(
+      incoming("quiero ir a ver el de Palermo"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "agendar_visita", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer("Tengo estos horarios para {direccion_corta}: jueves 10, viernes 11."),
+        conversationStateStore,
+      })
+    );
+
+    expect(result.responseText).toBe(ESPERA);
+    expect(result.escalatedToBroker).toBe(true);
+    const estado = await conversationStateStore.get("5491100000001");
+    expect(estado?.step ?? "idle").toBe("idle");
+  });
+
+  // Modo de fallo 3 del pre-mortem: llaves con otro contenido no son un hueco.
+  it("llaves que no son un hueco del catálogo pasan", async () => {
+    const texto = "Sale {USD 350.000} y tiene cochera {opcional: 1}.";
+
+    const result = await handleIncomingMessage(
+      incoming("¿cuánto sale?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer(texto),
+      })
+    );
+
+    expect(result.responseText).toBe(texto);
+  });
+
+  // Hallazgo de la revisión del PR #40: el preview de una orden masiva cita
+  // el mensaje con {nombre}, que se reemplaza al mandarlo. Cortarlo le
+  // escondía el preview al broker y dejaba el plan esperando su "dale".
+  it("en el canal broker la red no actúa: el {nombre} de un preview es legítimo", async () => {
+    const acciones = ["lead-1", "lead-2"].map((leadId) => ({
+      type: "whatsapp_send_message" as const,
+      leadId,
+      message: "Hola {nombre}, bajamos el precio.",
+    }));
+
+    const result = await handleIncomingMessage(
+      incoming("avisales a los leads fríos que bajamos el precio", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_accion_directa", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        brokerAccionDirectaPlanner: stubBrokerAccionDirectaPlanner({
+          actions: acciones,
+          previewSummary: 'Les mando "Hola {nombre}, bajamos el precio."',
+        }),
+      })
+    );
+
+    expect(result.responseText).toContain("{nombre}");
+    expect(result.responseText).toMatch(/confirmás/i);
+    expect(result.escalatedToBroker).toBe(false);
   });
 });
 

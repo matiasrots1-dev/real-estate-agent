@@ -11,7 +11,6 @@ import { formatSlotForHuman, proposeAvailableSlots, type ProposedSlot } from "./
 
 const NO_APPOINTMENT_FALLBACK =
   "No te veo ninguna visita agendada activa — ¿me confirmás la dirección o coordinamos una nueva?";
-const DEFAULT_ESCALATION_TEXT = "Dejame confirmarlo con el asesor y te respondo enseguida.";
 const SECOND_REPROGRAM_ESCALATION_REASON =
   "Si es la 2da reprogramación de la misma visita, escalar (posible señal de desinterés o cliente problemático) en vez de reprogramar automáticamente de nuevo.";
 
@@ -22,6 +21,13 @@ export interface ReprogramarCancelarVisitaDeps {
   appointmentStore: AppointmentStore;
   slotConfirmationClassifier: SlotConfirmationClassifier;
   reprogramActionClassifier: ReprogramActionClassifier;
+  /**
+   * Lo que recibe el cliente cuando el flujo escala: la plantilla de espera del
+   * catálogo (docs/TASKS.md Bloque 38c). Antes, dos de estos escalamientos
+   * mandaban la plantilla del caso exitoso ("Listo, {accion} tu visita de
+   * {direccion_corta}...") con los huecos sin llenar.
+   */
+  plantillaDeEspera: string;
 }
 
 export interface ReprogramarCancelarVisitaStepResult {
@@ -90,7 +96,7 @@ export async function startReprogramarCancelarVisita(
     return {
       responseText: intent.response.template
         ? renderTemplate(template, { accion: "no pudimos reprogramar", direccion_corta: direccionCorta, detalle_nuevo_horario: "" }).trim()
-        : DEFAULT_ESCALATION_TEXT,
+        : deps.plantillaDeEspera,
       toolsCalled: ["tokko.get_property"],
       escalate: true,
       escalationReason: SECOND_REPROGRAM_ESCALATION_REASON,
@@ -102,7 +108,7 @@ export async function startReprogramarCancelarVisita(
 
   if (slots.length === 0) {
     return {
-      responseText: intent.response.template ?? DEFAULT_ESCALATION_TEXT,
+      responseText: deps.plantillaDeEspera,
       toolsCalled,
       escalate: true,
       escalationReason: intent.escalation_reason,
@@ -150,7 +156,7 @@ export async function continueReprogramarCancelarVisita(
   if (chosenIndex === null) {
     await deps.conversationStateStore.save(idleState(message.from, message.from));
     return {
-      responseText: intent.response.template ?? DEFAULT_ESCALATION_TEXT,
+      responseText: deps.plantillaDeEspera,
       toolsCalled: [],
       escalate: true,
       escalationReason: intent.escalation_reason,

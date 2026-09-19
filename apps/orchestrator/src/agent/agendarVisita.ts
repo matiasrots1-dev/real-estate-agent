@@ -13,7 +13,6 @@ import { findPropertyByQuery } from "./tokkoLookup.js";
 import { formatSlotForHuman, proposeAvailableSlots, type ProposedSlot } from "./slotProposal.js";
 
 const NOT_FOUND_FALLBACK = "¿Qué propiedad querés visitar? Pasame la dirección o el link del aviso.";
-const DEFAULT_ESCALATION_TEXT = "Dejame confirmarlo con el asesor y te respondo enseguida.";
 
 export interface AgendarVisitaDeps {
   tokko: TokkoQueries;
@@ -23,6 +22,11 @@ export interface AgendarVisitaDeps {
   composer: ResponseComposer;
   slotConfirmationClassifier: SlotConfirmationClassifier;
   language: string;
+  /**
+   * Lo que recibe el cliente cuando el flujo escala: la plantilla de espera del
+   * catálogo (docs/TASKS.md Bloque 38c). Antes era un texto escrito acá.
+   */
+  plantillaDeEspera: string;
 }
 
 export interface AgendarVisitaStepResult {
@@ -63,7 +67,7 @@ export async function startAgendarVisita(
 
   if (slots.length === 0) {
     return {
-      responseText: intent.response.template ?? DEFAULT_ESCALATION_TEXT,
+      responseText: deps.plantillaDeEspera,
       toolsCalled,
       escalate: true,
       escalationReason: intent.escalation_reason,
@@ -113,7 +117,7 @@ export async function continueAgendarVisita(
   if (chosenIndex === null) {
     await deps.conversationStateStore.save(idleState(message.from, message.from));
     return {
-      responseText: intent.response.template ?? DEFAULT_ESCALATION_TEXT,
+      responseText: deps.plantillaDeEspera,
       toolsCalled: [],
       escalate: true,
       escalationReason: intent.escalation_reason,

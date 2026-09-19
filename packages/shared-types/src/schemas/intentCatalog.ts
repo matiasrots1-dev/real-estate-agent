@@ -70,12 +70,65 @@ export const IntentCatalogMetaSchema = z.object({
   escalation_channel: z.string(),
   audit_log: z.boolean(),
   language: z.string(),
+  /**
+   * El intent cuya plantilla es la respuesta de espera genérica: la que recibe
+   * el cliente cuando algo escala y el intent no tiene una plantilla de espera
+   * propia (docs/TASKS.md Bloque 38c).
+   */
+  escalation_waiting_template_from: z.string(),
 });
 export type IntentCatalogMeta = z.infer<typeof IntentCatalogMetaSchema>;
 
-export const IntentCatalogSchema = z.object({
-  version: z.number(),
-  meta: IntentCatalogMetaSchema,
-  intents: z.array(IntentSchema),
-});
+/**
+ * Un hueco sin llenar de una plantilla del catálogo: `{direccion_corta}`, y
+ * también `{dirección}`, `{Nombre}` o `{direccion2}`, que el reemplazo de
+ * plantillas acepta igual. No cuenta llaves con espacios adentro, como
+ * `{USD 350.000}`: ningún hueco del catálogo los tiene.
+ */
+export const HUECO_DE_PLANTILLA = /\{[^{}\s]+\}/;
+
+/**
+ * Además de la forma, el catálogo tiene que cumplir dos cosas de las que
+ * depende el escalamiento (docs/TASKS.md Bloque 38c). Si no, falla al
+ * cargarlo, antes de mandarle algo roto a un cliente:
+ *
+ * - la plantilla de espera genérica existe y no tiene huecos;
+ * - la plantilla de todo intent que escala siempre (`requires_broker: true`)
+ *   es una plantilla de espera: sin huecos, porque se manda tal cual.
+ */
+export const IntentCatalogSchema = z
+  .object({
+    version: z.number(),
+    meta: IntentCatalogMetaSchema,
+    intents: z.array(IntentSchema),
+  })
+  .superRefine((catalogo, ctx) => {
+    const idEspera = catalogo.meta.escalation_waiting_template_from;
+    const espera = catalogo.intents.find((intent) => intent.id === idEspera);
+    if (!espera) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["meta", "escalation_waiting_template_from"],
+        message: `no existe ningún intent "${idEspera}"`,
+      });
+    } else if (!espera.response.template) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["meta", "escalation_waiting_template_from"],
+        message: `el intent "${idEspera}" no tiene plantilla`,
+      });
+    }
+
+    catalogo.intents.forEach((intent, i) => {
+      const plantilla = intent.response.template;
+      const debeSerDeEspera = intent.requires_broker === true || intent.id === idEspera;
+      if (debeSerDeEspera && plantilla && HUECO_DE_PLANTILLA.test(plantilla)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["intents", i, "response", "template"],
+          message: `"${intent.id}" escala sin llenar datos, así que su plantilla no puede tener huecos: "${plantilla}"`,
+        });
+      }
+    });
+  });
 export type IntentCatalog = z.infer<typeof IntentCatalogSchema>;

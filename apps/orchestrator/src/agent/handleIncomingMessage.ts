@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
-import type { AuditLogEntry, ConversationState, Intent, IntentCatalog } from "shared-types";
+import { HUECO_DE_PLANTILLA, type AuditLogEntry, type ConversationState, type Intent, type IntentCatalog } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
 import { esElNumeroDelBroker } from "../channels/whatsapp/numeroDelBroker.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
 import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
-import { effectiveConfidenceThreshold, filterCatalogByChannel, findIntent } from "./intentCatalog.js";
+import {
+  effectiveConfidenceThreshold,
+  filterCatalogByChannel,
+  findIntent,
+  plantillaDeEspera,
+  respuestaDeEspera,
+} from "./intentCatalog.js";
 import type { ContextoConversacion, IntentClassifier } from "./classifier.js";
 import type { UltimoContactoStore } from "./ultimoContactoStore.js";
 import type { UltimoContacto } from "./ultimoContactoStore.js";
@@ -325,7 +331,8 @@ export async function handleIncomingMessage(
   const decision = decideEscalation(intent, classification.confidence, threshold);
 
   if (decision.shouldEscalate) {
-    const responseText = intent.response.template ?? "Dejame confirmarlo con el asesor y te respondo enseguida.";
+    // La plantilla de espera, nunca la del caso exitoso con huecos (Bloque 38c).
+    const responseText = respuestaDeEspera(deps.catalog, intent);
     const plantilla = decidirEnvioDePlantilla(deps, intent.id, historial, ahora);
     return finalizeEscalation(
       deps,
@@ -434,6 +441,7 @@ function agendarVisitaDeps(deps: HandleMessageDeps, language: string): AgendarVi
     composer: deps.composer,
     slotConfirmationClassifier: deps.slotConfirmationClassifier,
     language,
+    plantillaDeEspera: plantillaDeEspera(deps.catalog),
   };
 }
 
@@ -445,6 +453,7 @@ function reprogramarVisitaDeps(deps: HandleMessageDeps): ReprogramarCancelarVisi
     appointmentStore: deps.appointmentStore,
     slotConfirmationClassifier: deps.slotConfirmationClassifier,
     reprogramActionClassifier: deps.reprogramActionClassifier,
+    plantillaDeEspera: plantillaDeEspera(deps.catalog),
   };
 }
 
@@ -493,6 +502,26 @@ async function finalizeNonEscalating(
   responseText: string,
   mediaUrls?: string[]
 ): Promise<HandleMessageResult> {
+  // Red de última línea (Bloque 38c): una respuesta a un cliente con un hueco
+  // sin llenar no sale, y el mensaje escala. No alcanza con cambiar el texto:
+  // la plantilla de espera le promete al cliente que el asesor le va a
+  // responder, así que el broker se tiene que enterar.
+  if (tieneHuecoParaElCliente(deps, message, intent, responseText)) {
+    // Lo que el handler dejó armado (horarios propuestos, por ejemplo) se
+    // descarta: el cliente no vio esa respuesta, y un "ok" suyo no puede
+    // confirmar algo que nunca leyó.
+    await deps.conversationStateStore.save(idleState(message.from, message.from));
+    return finalizeEscalation(
+      deps,
+      message,
+      intent,
+      confidence,
+      toolsCalled,
+      plantillaDeEspera(deps.catalog),
+      undefined,
+      MOTIVO_RESPUESTA_ROTA
+    );
+  }
   // Modo silencioso: el cliente no recibe nada, pero el broker sí tiene que
   // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
   // que el problema que el modo silencioso vino a resolver.
@@ -520,7 +549,7 @@ async function finalizeEscalation(
   intent: Intent,
   confidence: number | null,
   toolsCalled: string[],
-  responseText: string,
+  respuestaDelHandler: string,
   rule: EscalationRule | undefined,
   reason: string | undefined,
   /**
@@ -530,6 +559,10 @@ async function finalizeEscalation(
    */
   plantilla: DecisionPlantilla = { suprimir: false }
 ): Promise<HandleMessageResult> {
+  // Ya escala y ya avisa: la red solo cambia el texto (Bloque 38c).
+  const responseText = tieneHuecoParaElCliente(deps, message, intent, respuestaDelHandler)
+    ? plantillaDeEspera(deps.catalog)
+    : respuestaDelHandler;
   // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
   // separa "el agente se calla" de "el mensaje se pierde".
   const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
@@ -573,6 +606,33 @@ async function finalizeEscalation(
   });
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: true };
 }
+
+/**
+ * Red de última línea (docs/TASKS.md Bloque 38c): ¿esta respuesta a un
+ * **cliente** tiene un hueco sin llenar (`{direccion_corta}`)? Si lo tiene, no
+ * sale tal cual, y queda un error en el log con el intent para encontrar el
+ * camino que la produjo. Los caminos conocidos ya no producen plantillas
+ * crudas; esto es para el que se agregue mañana sin que nadie lo note.
+ *
+ * Solo para clientes. En el canal broker hay huecos legítimos: el preview de
+ * una orden masiva cita el mensaje con `{nombre}`, que se reemplaza al
+ * mandarlo. Y cortar ahí dejaría un plan esperando confirmación que el broker
+ * nunca vio (hallazgos de la revisión del PR #40).
+ */
+function tieneHuecoParaElCliente(
+  deps: HandleMessageDeps,
+  message: IncomingWhatsAppMessage,
+  intent: Intent,
+  texto: string
+): boolean {
+  if (esDelBroker(deps, message) || !HUECO_DE_PLANTILLA.test(texto)) return false;
+  console.error(`[respuesta] el intent "${intent.id}" armó una respuesta con un hueco sin llenar; no sale tal cual.`);
+  return true;
+}
+
+/** Motivo del escalamiento cuando la red corta una respuesta rota. */
+const MOTIVO_RESPUESTA_ROTA =
+  "La respuesta del bot quedó con datos sin completar y no se le mandó al cliente: le llegó la plantilla de espera. Respondele vos.";
 
 /**
  * Lo opcional de una entrada, por nombre y no por posición: `escalationReason`
