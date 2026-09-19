@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { leerTimeoutAnthropic } from "./agent/clienteAnthropic.js";
+import { leerTimeoutAnthropic } from "./agent/limitesAnthropic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // apps/orchestrator/src -> repo root

@@ -25,12 +25,12 @@ describe("loadConfigFromEnv — flag de firma del webhook", () => {
 
 // docs/TASKS.md Bloque 38b.
 describe("loadConfigFromEnv — timeout de Anthropic", () => {
-  it("sin la variable, 30 s", () => {
-    expect(loadConfigFromEnv({}).anthropicTimeoutMs).toBe(30_000);
+  it("sin la variable, 25 s", () => {
+    expect(loadConfigFromEnv({}).anthropicTimeoutMs).toBe(25_000);
   });
 
   it("con la variable, su valor", () => {
-    expect(loadConfigFromEnv({ ANTHROPIC_TIMEOUT_MS: "45000" }).anthropicTimeoutMs).toBe(45_000);
+    expect(loadConfigFromEnv({ ANTHROPIC_TIMEOUT_MS: "20000" }).anthropicTimeoutMs).toBe(20_000);
   });
 });
 

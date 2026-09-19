@@ -74,7 +74,7 @@ haga que el bot le escriba a clientes, y borrar datos.
       las revisiones del 31 y del 34. Hecho: 38a (si falla el borrador, el
       aviso te llega igual) y 38g (tus ordenes al bot reciben respuesta en
       modo silencioso; desplegado y probado en vivo) y 38b (una llamada
-      colgada a Anthropic falla en unos 90 s en vez de media hora; falta
+      colgada a Anthropic falla en unos 51 s en vez de media hora; falta
       desplegarlo). Lo que **afecta hoy**: la ventana de 24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
       escalada por baja confianza le manda al cliente la plantilla con los
       `{huecos}` sin llenar (pasa desde el Bloque 5).
