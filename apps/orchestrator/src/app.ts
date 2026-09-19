@@ -14,6 +14,7 @@ import { handleIncomingMessage, type HandleMessageDeps } from "./agent/handleInc
 import { SerialConversationQueue, type BackgroundQueue } from "./backgroundQueue.js";
 import { LruMessageDeduplicator, type MessageDeduplicator } from "./messageDedup.js";
 import { extraerContactosSalientes } from "./channels/whatsapp/ecoContacto.js";
+import { esElNumeroDelBroker } from "./channels/whatsapp/numeroDelBroker.js";
 import type { UltimoContactoStore } from "./agent/ultimoContactoStore.js";
 import type { ContactosConocidos } from "./agent/contactosConocidos.js";
 import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
@@ -385,7 +386,7 @@ async function handleIncomingWebhook(
   // Las órdenes del broker no cuentan para el aviso de fallos: es una alarma
   // sobre clientes sin respuesta, y al broker le diría "contestale vos" sobre
   // su propio mensaje. Él ya se entera: le falta la confirmación de la orden.
-  const avisoDeFallos = message.from === deps.brokerWhatsappNumber ? undefined : deps.avisoDeFallos;
+  const avisoDeFallos = esElNumeroDelBroker(message.from, deps.brokerWhatsappNumber) ? undefined : deps.avisoDeFallos;
 
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la

@@ -181,7 +181,10 @@ describe("executeActionPlan — en modo silencioso", () => {
     const resumen = summarizeExecution(results);
     expect(resumen).not.toContain("✓");
     expect(resumen).not.toContain("enviado a");
-    expect(resumen).toContain("sin enviar");
+    // Hallazgo de la revisión del PR: el teléfono ya estaba resuelto; sin él,
+    // el broker no sabe a quién mandárselo a mano.
+    expect(resumen).toContain("✗ Enviar mensaje a 5491100000001");
+    expect(results[0].telefono).toBe("5491100000001");
   });
 
   it("una plantilla a un cliente, tampoco", async () => {
@@ -202,7 +205,7 @@ describe("executeActionPlan — en modo silencioso", () => {
     });
 
     expect(results[0]).toMatchObject({ ok: false });
-    expect(summarizeExecution(results)).toContain("sin enviar");
+    expect(summarizeExecution(results)).toContain('✗ Enviar la plantilla "recontacto" a 5491100000001');
   });
 
   it("las acciones de calendario se ejecutan igual: el calendario es del broker", async () => {
@@ -225,6 +228,44 @@ describe("executeActionPlan — en modo silencioso", () => {
     });
 
     expect(gcal.createEvent).toHaveBeenCalledTimes(1);
+    expect(results[0]).toMatchObject({ ok: true });
+  });
+});
+
+// Hallazgos de la revisión del PR #37.
+describe("summarizeExecution — lo que falló no se describe como hecho ni como no hecho", () => {
+  it("si el evento se creó y falló guardarlo, no dice que la visita quedó sin agendar", async () => {
+    const appointmentStore = new InMemoryAppointmentStore();
+    appointmentStore.save = vi.fn(async () => {
+      throw new Error("disco lleno");
+    });
+    const action: PlannedAction = {
+      type: "gcal_create_event",
+      leadId: "lead-1",
+      propertyId: "prop-1",
+      startDateTime: "2026-08-02T15:00:00.000Z",
+      endDateTime: "2026-08-02T15:30:00.000Z",
+      summary: "Visita - Depto Palermo",
+    };
+
+    const results = await executeActionPlan([action], { gcal: stubGcal(), appointmentStore });
+
+    const resumen = summarizeExecution(results);
+    expect(resumen).toBe("✗ Agendar visita para lead-1 (Visita - Depto Palermo) (disco lleno)");
+  });
+
+  it("un sender que no devuelve nada no convierte un envío en fallo", async () => {
+    const sender = stubSender();
+    sender.sendText = vi.fn(async () => undefined as never);
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola" };
+
+    const results = await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender,
+    });
+
     expect(results[0]).toMatchObject({ ok: true });
   });
 });

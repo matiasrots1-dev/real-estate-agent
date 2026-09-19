@@ -405,6 +405,17 @@ describe("los mensajes del broker", () => {
     expect(crudo.map((e) => e.etapa)).toEqual(["recibido", "fallido"]);
   });
 
+  // docs/TASKS.md Bloque 38g: la misma definición de "es el broker" que el
+  // ruteo y el modo silencioso, que compara dígitos.
+  it("se reconocen aunque el número del broker esté configurado con + y espacios", async () => {
+    const banco = await levantar(async () => sinCredito(), { brokerWhatsappNumber: "+54 9 11 0000-0000" });
+
+    await postear(banco.baseUrl, "pausá el agente", "wamid.UNO", BROKER);
+    await banco.queue.idle();
+
+    expect(banco.avisos).toEqual([]);
+  });
+
   it("si fallan, no cuentan para agrupar los fallos de clientes", async () => {
     const banco = await levantar(async () => sinCredito(), { brokerWhatsappNumber: BROKER });
 

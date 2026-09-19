@@ -617,6 +617,53 @@ describe("handleIncomingMessage — canal broker (Bloque 8)", () => {
     expect(entry.responseSent).toBe("No tenés visitas esta semana.");
   });
 
+  // Hallazgo de la revisión del PR #37: la excepción para el broker también se
+  // aplicaba a los escalamientos, y una orden del broker que no se entendió le
+  // devolvía la plantilla del intent, por ejemplo "Listo, {accion} para
+  // {alcance}.", que se lee como que la orden se ejecutó.
+  it("en modo silencioso, una orden del broker que escala no le devuelve la plantilla", async () => {
+    const brokerNotifier = recordingBrokerNotifier();
+
+    const result = await handleIncomingMessage(
+      incoming("reactivá el agente", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_pausar_agente", confidence: 0.3 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        brokerNotifier,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.escalatedToBroker).toBe(true);
+    expect(result.responseText).toBeNull();
+    // Se entera por el aviso del escalamiento, con la confianza.
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  // Hallazgo de la revisión del PR #37: el ruteo comparaba el texto exacto y el
+  // modo silencioso solo los dígitos. Con "+54 9 ..." en la configuración,
+  // las órdenes del broker se ruteaban como de un cliente.
+  it("el número del broker configurado con + y espacios igual se reconoce", async () => {
+    const classifier = capturingClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 });
+    const gcal = stubGcal();
+    gcal.listEvents = vi.fn(async () => []);
+
+    await handleIncomingMessage(
+      incoming("¿cómo viene la agenda?", BROKER_NUMBER),
+      baseDeps({ classifier, gcal, brokerWhatsappNumber: "+54 9 11 9999-9999" })
+    );
+
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(true);
+  });
+
+  it("con el número del broker vacío en la configuración, nadie es el broker", async () => {
+    const classifier = capturingClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9, searchQuery: "x" });
+
+    await handleIncomingMessage(incoming("hola", ""), baseDeps({ classifier, brokerWhatsappNumber: "" }));
+
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(false);
+  });
+
   // Modo de fallo 3 del pre-mortem: la excepción no puede alcanzar a un cliente.
   it("en modo silencioso, un cliente sigue sin recibir respuesta, con número de broker configurado", async () => {
     const result = await handleIncomingMessage(

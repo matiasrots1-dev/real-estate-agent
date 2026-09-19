@@ -44,7 +44,10 @@ export async function executeActionPlan(
       const telefono = await executeOne(action, deps);
       results.push({ action, ok: true, telefono });
     } catch (error) {
-      results.push({ action, ok: false, error: (error as Error).message });
+      // Si el teléfono ya se había resuelto, va en el resumen: el broker tiene
+      // que saber a quién no le llegó para mandárselo a mano.
+      const telefono = error instanceof EnvioQueNoSalio ? error.telefono : undefined;
+      results.push({ action, ok: false, error: (error as Error).message, telefono });
     }
   }
   return results;
@@ -108,7 +111,10 @@ async function executeOne(
     case "whatsapp_send_message": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
       const lead = await resolverLead(action.leadId, deps);
-      exigirQueSalio(await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead)));
+      exigirQueSalio(
+        await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead)),
+        lead.telefonoWhatsapp
+      );
       return lead.telefonoWhatsapp;
     }
     case "whatsapp_send_template": {
@@ -120,10 +126,18 @@ async function executeOne(
           action.templateName,
           action.languageCode,
           action.bodyParams.map((p) => personalizar(p, lead))
-        )
+        ),
+        lead.telefonoWhatsapp
       );
       return lead.telefonoWhatsapp;
     }
+  }
+}
+
+/** Un envío que no salió, con el teléfono ya resuelto. */
+class EnvioQueNoSalio extends Error {
+  constructor(readonly telefono: string) {
+    super("no se mandó: el modo silencioso bloquea los mensajes a clientes");
   }
 }
 
@@ -132,10 +146,8 @@ async function executeOne(
  * en vez de tirar. Sin esta guarda, el resumen le diría al broker "✓ Mensaje
  * enviado" sobre algo que no salió (docs/TASKS.md Bloque 38g).
  */
-function exigirQueSalio(resultado: WhatsAppSendResult): void {
-  if (resultado.bloqueado === "modo_silencioso") {
-    throw new Error("no se mandó: el modo silencioso bloquea los mensajes a clientes");
-  }
+function exigirQueSalio(resultado: WhatsAppSendResult | undefined, telefono: string): void {
+  if (resultado?.bloqueado === "modo_silencioso") throw new EnvioQueNoSalio(telefono);
 }
 
 const TOOL_NAME_BY_ACTION_TYPE: Record<PlannedAction["type"], string> = {
@@ -154,7 +166,7 @@ export function toolsCalledForPlan(actions: PlannedAction[]): string[] {
 export function summarizeExecution(results: ExecutedAction[]): string {
   if (results.length === 0) return "No había ninguna acción para ejecutar.";
   const lines = results.map((r) =>
-    r.ok ? `✓ ${describeAction(r.action, r.telefono)}` : `✗ ${describeFailedAction(r.action, r.telefono)} (${r.error})`
+    r.ok ? `✓ ${describeAction(r.action, r.telefono, true)}` : `✗ ${describeAction(r.action, r.telefono, false)} (${r.error})`
   );
   return lines.join("\n");
 }
@@ -163,32 +175,26 @@ export function summarizeExecution(results: ExecutedAction[]): string {
  * El resumen va al broker, que es el dueño de estos datos, así que muestra
  * el teléfono real — pero el que se resolvió en ejecución, no uno que haya
  * salido de la planificación (ahí ya no existe).
+ *
+ * Una acción que falló se describe en infinitivo, sin afirmar ni negar lo que
+ * pasó: "✗ Mensaje enviado a ..." se lee como que salió, y "Visita sin
+ * agendar" puede ser falso si el evento se creó y lo que falló fue guardarlo
+ * (docs/TASKS.md Bloque 38g). El motivo va entre paréntesis.
  */
-function describeAction(action: PlannedAction, telefono?: string): string {
+function describeAction(action: PlannedAction, telefono: string | undefined, ok: boolean): string {
   const destinatario = telefono ?? `lead ${action.leadId}`;
   switch (action.type) {
     case "gcal_create_event":
-      return `Visita agendada para ${action.leadId} (${action.summary})`;
+      return ok
+        ? `Visita agendada para ${action.leadId} (${action.summary})`
+        : `Agendar visita para ${action.leadId} (${action.summary})`;
     case "gcal_patch_event":
-      return `Visita modificada para ${action.leadId}`;
+      return ok ? `Visita modificada para ${action.leadId}` : `Modificar la visita de ${action.leadId}`;
     case "whatsapp_send_message":
-      return `Mensaje enviado a ${destinatario}`;
+      return ok ? `Mensaje enviado a ${destinatario}` : `Enviar mensaje a ${destinatario}`;
     case "whatsapp_send_template":
-      return `Plantilla "${action.templateName}" enviada a ${destinatario}`;
-  }
-}
-
-/** Lo mismo, sin afirmar que pasó: "✗ Mensaje enviado a ..." se lee como que salió. */
-function describeFailedAction(action: PlannedAction, telefono?: string): string {
-  const destinatario = telefono ?? `lead ${action.leadId}`;
-  switch (action.type) {
-    case "gcal_create_event":
-      return `Visita para ${action.leadId} sin agendar`;
-    case "gcal_patch_event":
-      return `Visita de ${action.leadId} sin modificar`;
-    case "whatsapp_send_message":
-      return `Mensaje a ${destinatario} sin enviar`;
-    case "whatsapp_send_template":
-      return `Plantilla "${action.templateName}" a ${destinatario} sin enviar`;
+      return ok
+        ? `Plantilla "${action.templateName}" enviada a ${destinatario}`
+        : `Enviar la plantilla "${action.templateName}" a ${destinatario}`;
   }
 }

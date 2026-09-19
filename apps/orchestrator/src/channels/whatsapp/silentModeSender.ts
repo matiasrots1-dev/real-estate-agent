@@ -1,3 +1,4 @@
+import { esElNumeroDelBroker } from "./numeroDelBroker.js";
 import type { WhatsAppSendResult, WhatsAppSender } from "./sender.js";
 
 /**
@@ -53,8 +54,7 @@ export class SilentModeSender implements WhatsAppSender {
    * mensaje a un desconocido no se deshace, el de no mandar ninguno sí.
    */
   private esBroker(to: string): boolean {
-    if (!this.brokerWhatsappNumber) return false;
-    return soloDigitos(to) === soloDigitos(this.brokerWhatsappNumber);
+    return esElNumeroDelBroker(to, this.brokerWhatsappNumber);
   }
 
   private bloquear(to: string, tipo: string): WhatsAppSendResult {
@@ -70,10 +70,6 @@ export class SilentModeSender implements WhatsAppSender {
     // broker qué se mandó no puede contarlo como enviado (Bloque 38g).
     return { raw: { messaging_product: "whatsapp" }, bloqueado: "modo_silencioso" };
   }
-}
-
-function soloDigitos(numero: string): string {
-  return numero.replace(/\D/g, "");
 }
 
 function avisarPorDefecto(destino: string, tipo: string, total: number): void {

@@ -2670,25 +2670,57 @@ incidente del 12/08 (Bloque 21).
    sigue bloqueando abajo: son dos capas.
 
 **Como quedo**
-- [x] `esDelBroker` es la unica definicion de "el mensaje viene del broker",
-      para el ruteo y para el modo silencioso. `silenciarPara` calla solo a
-      los clientes.
-- [x] En modo silencioso, las ordenes del broker reciben su respuesta, que
-      queda en el audit log como enviada (`responseSent`).
+- [x] `esElNumeroDelBroker` (`channels/whatsapp/numeroDelBroker.ts`) es la
+      unica definicion de "este numero es el del broker": compara solo
+      digitos, sin normalizar, y sin numero configurado (vacio o ausente)
+      nadie es el broker. La usan el ruteo por canal, `SilentModeSender` y el
+      aviso de fallos de `app.ts`. Antes eran tres, y el ruteo comparaba el
+      texto exacto.
+- [x] En modo silencioso, las **respuestas** a las ordenes del broker salen
+      (`silenciarPara` calla solo a los clientes) y quedan en el audit log
+      como enviadas. Los **escalamientos** de sus ordenes siguen en silencio:
+      la plantilla de espera podria salir con los `{huecos}` sin llenar
+      (38c) y decir que la orden se ejecuto. Le llega el aviso, con la
+      confianza.
 - [x] `SilentModeSender` marca lo que bloquea (`bloqueado: "modo_silencioso"`).
-      El ejecutor de `broker_accion_directa` lo cuenta como no enviado, y el
-      resumen de una accion fallida ya no dice "enviado": dice "Mensaje a ...
-      sin enviar (motivo)".
-- [x] 8 tests nuevos; los del ejecutor usan el `SilentModeSender` real.
+      El ejecutor de `broker_accion_directa` lo cuenta como no enviado, con el
+      telefono del destinatario para que el broker lo mande a mano.
+- [x] El preview de una accion masiva, en modo silencioso y con mensajes a
+      clientes, avisa que esos mensajes no van a salir.
+- [x] El resumen describe lo que fallo en infinitivo ("✗ Enviar mensaje a
+      ...", "✗ Agendar visita para ..."), sin afirmar ni negar lo que paso.
+- [x] 21 tests nuevos. Los del ejecutor usan el `SilentModeSender` real.
       Mutation testing, una por vez:
       - G1. el camino que no escala silencia al broker (lo de antes): 1 test en rojo
       - G2. `silenciarPara` ignora al broker: 1 test en rojo
-      - G3. `silenciarPara` no silencia a nadie: 10 tests en rojo
-      - G4. sin numero de broker, todos son el broker: 11 tests en rojo
+      - G3. `silenciarPara` no silencia a nadie: 8 tests en rojo
+      - G4. sin numero de broker, todos son el broker: 16 tests en rojo
       - G5. el sender no marca lo bloqueado: 3 tests en rojo
       - G6. el ejecutor ignora la marca: 2 tests en rojo
       - G7. el fallo dice "enviado": 1 test en rojo
       - G8. la plantilla no se controla: 1 test en rojo
+      - H1. el escalamiento de una orden del broker no se silencia: 1 test en rojo
+      - H2. el numero se compara exacto (lo de antes): 4 tests en rojo
+      - H3. el preview no avisa: 1 test en rojo
+      - H4. el preview avisa aunque no haya envios a clientes: 1 test en rojo
+      - H5. el fallo no lleva el telefono: 2 tests en rojo
+      - H6. sin guarda contra un resultado vacio: 1 test en rojo
+      - H7. `app.ts` compara exacto: 1 test en rojo
+
+**Revision del PR (#37)**: 13 hallazgos. Lo mas serio, reproducido con un
+test: la excepcion para el broker tambien alcanzaba a los escalamientos, y
+una orden ambigua (por ejemplo "reactiva el agente" con confianza baja) le
+devolvia "Listo, {accion} para {alcance}.", que se lee como hecha. Se
+arreglaron 8 (arriba). Quedan anotados:
+- [ ] El resultado del envio sigue teniendo forma de exito con una marca
+      opcional: cada llamador tiene que acordarse de mirarla. Hoy solo la mira
+      el ejecutor; los jobs no corren en modo silencioso. Un resultado
+      discriminado haria que el compilador lo exija.
+- [ ] En modo silencioso, cada envio de un plan masivo igual consulta el lead
+      en Tokko antes de que el sender lo bloquee.
+- [ ] `toolsCalled` del audit log sigue listando los envios que el modo
+      silencioso bloqueo. El resumen, que queda en `responseSent`, si dice
+      cuales no salieron.
 - [ ] **Prueba en vivo, despues del deploy**: el broker le escribe "resumen de
       agenda" a la linea del bot desde el ...6699. Confirma el modo de fallo
       1 (el formato de su numero), que no se pudo verificar con datos.
