@@ -7,10 +7,13 @@ de negocio) y `docs/TASKS.md` (que tiene el backlog).
 
 ## Regla central
 
-**Nunca se commitea directo a `main`.** La rama está protegida (GitHub →
-Settings → Branches) para que un push directo falle. Todo cambio entra por
-una rama + Pull Request, revisado y aprobado por el dueño del repo antes de
-mergear.
+**Nunca se commitea directo a `main`.** Todo cambio entra por una rama +
+Pull Request, revisado antes de mergear (paso 7).
+
+Ojo: **hoy `main` no tiene protección configurada en GitHub** (verificado
+el 2026-09-19: ni reglas de rama ni rulesets). Un push directo no falla: la
+regla se sostiene por disciplina hasta que el dueño del repo active una
+regla que exija PR para mergear.
 
 ## Paso a paso
 
@@ -46,21 +49,27 @@ mergear.
    ```
    git push -u origin bloque-N-slug-corto
    ```
-   Git devuelve en la salida la URL directa para abrir el Pull Request
-   ("Create a pull request for '...' on GitHub by visiting: ..."). No hay
-   `gh` CLI configurado en este entorno, así que **quien empujó la rama le
-   pasa ese link al dueño del repo** (o lo abre él mismo si es quien
-   pushea) — el PR se crea a mano desde la web de GitHub con ese link,
-   completando título y cuerpo con el resumen del bloque: qué se
+   Después abrí el PR con `gh pr create` (el `gh` CLI está instalado y
+   autenticado en la laptop del dueño del repo; en Windows vive en
+   `C:\Program Files\GitHub CLI\gh.exe` y puede no estar en el PATH de la
+   terminal). Título y cuerpo con el resumen del bloque: qué se
    implementó, decisiones de diseño no obvias, qué quedó
    mockeado/pendiente de una credencial real, y el conteo de tests. Mismo
    tono que las entradas de `docs/TASKS.md`.
+7. **Revisión y merge.** Desde el 2026-09-19, por decisión del dueño del
+   repo, **los PRs de Claude Code los revisa y los mergea Claude Code**:
+   - corre un code review sobre el PR;
+   - arregla en la misma rama lo que sea del propio bloque (regresiones, o
+     promesas que el bloque hace y no cumple), con tests y mutation testing;
+   - anota el resto como riesgo abierto en `docs/TASKS.md`;
+   - deja la revisión como comentario en el PR, para que el dueño la pueda
+     leer después;
+   - mergea con merge commit (`gh pr merge N --merge`).
 
-   (Si en algún momento se instala y autentica `gh` CLI, `gh pr create`
-   hace este paso sin pasar por la web — pero no es el flujo actual.)
-7. **Esperá la revisión.** Quien pushea no mergea su propio PR ni asume que
-   va a aprobarse — el dueño del repo lo revisa y aprueba desde GitHub. Si
-   pide cambios, hacé los commits nuevos en la misma rama.
+   **Tres cosas siguen necesitando el OK explícito del dueño antes de
+   mergear**: apagar el modo silencioso, cualquier cambio que haga que el
+   bot le escriba a clientes, y borrar datos. Nunca se usa `--admin` para
+   saltear una protección de la rama.
 8. **Después de que se mergea**, volvé a `main` y actualizá antes de
    arrancar el próximo bloque:
    ```
@@ -147,9 +156,10 @@ el PR por qué se saltó.
 
 ## Por qué este flujo
 
-- **Puntos de revisión reales**: el dueño del repo tiene conocimientos
-  técnicos pero no revisa cada línea en tiempo real — el PR es el momento
-  en que sí lo hace, con el diff completo a la vista.
+- **Puntos de revisión reales**: el PR es el momento de la revisión, con el
+  diff completo a la vista. El dueño del repo tiene conocimientos técnicos
+  pero no revisa cada línea: la revisión queda escrita como comentario en
+  el PR, para que la pueda leer y discutir cuando quiera.
 - **`main` siempre en un estado conocido y andando**: si un bloque queda a
   mitad de camino, vive en su rama, no rompe lo que ya funciona.
 - **Historia legible por bloque**: cada PR mapea 1:1 a un ítem de
