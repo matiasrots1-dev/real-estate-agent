@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { describirIlegibles, esObjeto, leerLineasJsonl, saltoQueFalta, type LineaJsonl } from "./jsonl.js";
 import type { PurgedRecord } from "./purge.js";
 
 /**
@@ -45,12 +46,28 @@ export class InMemoryRetentionReportStore implements RetentionReportStore {
   }
 }
 
+const ETIQUETA = "retention";
+
+/** Un reporte legible tiene, como mínimo, su id y la fecha de la corrida. */
+function esReporte(valor: unknown): valor is RetentionReport {
+  return esObjeto(valor) && typeof valor.id === "string" && typeof valor.corridaAt === "string";
+}
+
 /**
  * JSONL, igual que el audit log. Conserva las últimas `maxCorridas` corridas
  * — suficiente para comparar semana contra semana sin acumular para siempre
- * un archivo con datos personales (aunque sean enmascarados).
+ * un archivo con datos personales (aunque sean enmascarados). (Ojo: la
+ * retención corre en cada vuelta del scheduler, cada 5 minutos, así que hoy
+ * 12 corridas son una hora. Ver docs/TASKS.md Bloque 40.)
+ *
+ * **Una línea rota no lo frena** (docs/TASKS.md Bloque 39). Antes, `readAll`
+ * tiraba: el recorte no se hacía nunca más, el archivo crecía, y el job moría
+ * antes de loguear su resumen.
  */
 export class FileRetentionReportStore implements RetentionReportStore {
+  /** Las líneas ilegibles del último aviso: se avisa cuando cambian, no en cada corrida. */
+  private ultimoAviso = "";
+
   constructor(
     private readonly filePath: string,
     private readonly maxCorridas = 12
@@ -58,18 +75,31 @@ export class FileRetentionReportStore implements RetentionReportStore {
 
   async append(report: RetentionReport): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    await appendFile(this.filePath, `${JSON.stringify(report)}\n`, "utf-8");
+    // El salto que falta va en la misma escritura: si el archivo termina en
+    // media línea, este reporte no se pega a ella (modo de fallo 1).
+    const prefijo = await saltoQueFalta(this.filePath, ETIQUETA);
+    await appendFile(this.filePath, `${prefijo}${JSON.stringify(report)}\n`, "utf-8");
 
-    const todos = await this.readAll();
-    if (todos.length > this.maxCorridas) {
-      const conservar = todos.slice(-this.maxCorridas);
+    // El recorte es por posición, como la rotación misma (modo de fallo 3):
+    // se conserva todo desde el primer reporte que queda, líneas rotas
+    // incluidas. Las rotas anteriores a ese punto son más viejas que lo que se
+    // conserva y caen con la rotación, igual que caería un reporte legible.
+    const lineas = await this.leer();
+    const posiciones = lineas.flatMap((l, i) => (l.valor ? [i] : []));
+    if (posiciones.length > this.maxCorridas) {
+      const desde = posiciones[posiciones.length - this.maxCorridas];
+      const conservar = lineas.slice(desde).map((l) => (l.valor ? JSON.stringify(l.valor) : l.ilegible.texto));
       const tmp = `${this.filePath}.tmp`;
-      await writeFile(tmp, `${conservar.map((r) => JSON.stringify(r)).join("\n")}\n`, "utf-8");
+      await writeFile(tmp, `${conservar.join("\n")}\n`, "utf-8");
       await rename(tmp, this.filePath);
     }
   }
 
   async readAll(): Promise<RetentionReport[]> {
+    return (await this.leer()).flatMap((l) => (l.valor ? [l.valor] : []));
+  }
+
+  private async leer(): Promise<LineaJsonl<RetentionReport>[]> {
     let content: string;
     try {
       content = await readFile(this.filePath, "utf-8");
@@ -77,9 +107,14 @@ export class FileRetentionReportStore implements RetentionReportStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    return content
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .map((line) => JSON.parse(line) as RetentionReport);
+    const lineas = leerLineasJsonl(content, esReporte);
+    // Tolerar en silencio escondería el problema (modo de fallo 2).
+    const ilegibles = lineas.flatMap((l) => (l.ilegible ? [l.ilegible] : []));
+    const clave = ilegibles.map((l) => l.numero).join(",");
+    if (clave !== this.ultimoAviso) {
+      this.ultimoAviso = clave;
+      if (ilegibles.length > 0) console.warn(describirIlegibles(ETIQUETA, this.filePath, ilegibles));
+    }
+    return lineas;
   }
 }
