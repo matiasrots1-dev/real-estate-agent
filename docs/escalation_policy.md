@@ -43,6 +43,14 @@ El agente **nunca queda mudo** frente al cliente. La secuencia es:
      máquina de conversación).
    - Un borrador de respuesta sugerido (generado por el LLM, marcado
      claramente como borrador, nunca enviado sin aprobación).
+
+   **Si el borrador no se puede generar** (la API del LLM falla o devuelve
+   vacío), la notificación sale igual, sin borrador y diciéndolo
+   explícitamente: sin la notificación, el broker no se entera del
+   escalamiento. Si hay una respuesta que el agente habría mandado (modo
+   silencioso), va esa como borrador, marcada como tal. Qué pasó con la
+   notificación queda en el audit log (`avisoAlBroker`). Ver
+   `docs/TASKS.md` Bloque 38a.
 3. Espera la respuesta del broker (aprobación tal cual, edición, o
    respuesta manual directa) antes de continuar la conversación con el
    cliente en ese hilo.

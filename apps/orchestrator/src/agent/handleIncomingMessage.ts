@@ -19,6 +19,7 @@ import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier } from "./brokerNotifier.js";
 import type { AuditLogStore } from "./auditLog.js";
 import { colapsarPorMensaje } from "./auditPorMensaje.js";
+import { describirError } from "./registroDeLlegada.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { ConversationStateStore } from "./conversationStateStore.js";
 import { idleState } from "./conversationStateStore.js";
@@ -173,7 +174,7 @@ function decidirEnvioDePlantilla(
 
 /** Motivo que se registra en el audit log y se le manda al broker en modo silencioso. */
 const MOTIVO_SILENCIOSO =
-  "Modo silencioso activo: el cliente NO recibió respuesta. Este borrador es para que respondas vos a mano.";
+  "Modo silencioso activo: el cliente NO recibió respuesta. Respondele vos a mano.";
 
 export interface HandleMessageDeps {
   catalog: IntentCatalog;
@@ -260,7 +261,7 @@ export async function handleIncomingMessage(
   // Nunca aplica al canal broker: el broker siempre tiene que poder hablar
   // con el agente, aunque sea para reactivarlo.
   if (channel === "cliente" && (state.pausedByBroker || (await deps.globalPauseStore.isPaused()))) {
-    await appendAudit(deps, message, PAUSED_SENTINEL_INTENT_ID, null, [], false, undefined, undefined, undefined);
+    await appendAudit(deps, message, PAUSED_SENTINEL_INTENT_ID, null, [], false);
     return { responseText: null, intentId: PAUSED_SENTINEL_INTENT_ID, confidence: null, escalatedToBroker: false };
   }
 
@@ -469,15 +470,20 @@ async function finalizeNonEscalating(
   // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
   // que el problema que el modo silencioso vino a resolver.
   if (deps.modoSilencioso) {
-    await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO);
+    // La respuesta que el bot habría mandado va como respaldo del borrador:
+    // si Claude no puede redactarlo, el broker recibe esa en vez de nada.
+    const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO, responseText);
     // `responseSent: undefined` a propósito: no se envió nada, y el audit log
     // no puede decir lo contrario. Es el registro que se usa para reconstruir
     // qué recibió cada persona.
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, undefined, MOTIVO_SILENCIOSO, undefined);
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, {
+      escalationReason: MOTIVO_SILENCIOSO,
+      aviso,
+    });
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: false };
   }
 
-  await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, undefined, undefined, responseText);
+  await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, { responseSent: responseText });
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: false, mediaUrls };
 }
 
@@ -499,26 +505,52 @@ async function finalizeEscalation(
 ): Promise<HandleMessageResult> {
   // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
   // separa "el agente se calla" de "el mensaje se pierde".
-  await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
+  const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
 
   // La plantilla ya salio en esta conversacion y el broker todavia no
   // contesto: se escalo igual, pero al cliente no le llega otra copia de la
-  // misma frase. `responseSent: undefined` a proposito — el audit log es el
+  // misma frase. `responseSent` sin cargar a proposito — el audit log es el
   // registro de que recibio cada persona y no puede decir que se envio algo
   // que no se envio.
   if (plantilla.suprimir && !deps.modoSilencioso) {
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, plantilla.motivo, undefined);
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
+      escalationRule: rule,
+      escalationReason: plantilla.motivo,
+      aviso,
+    });
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
 
   if (deps.modoSilencioso) {
     // Ya escalaba y ya notificaba al broker; lo único que cambia es que la
     // plantilla de espera tampoco sale.
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, undefined);
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
+      escalationRule: rule,
+      escalationReason: reason,
+      aviso,
+    });
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
-  await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, responseText);
+  await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
+    escalationRule: rule,
+    escalationReason: reason,
+    responseSent: responseText,
+    aviso,
+  });
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: true };
+}
+
+/**
+ * Lo opcional de una entrada, por nombre y no por posición: `escalationReason`
+ * y `responseSent` son los dos `string | undefined`, e intercambiarlos
+ * compilaría igual y registraría como enviada una respuesta que no salió.
+ */
+interface ExtrasDeAuditoria {
+  escalationRule?: EscalationRule;
+  escalationReason?: string;
+  /** Lo que efectivamente recibió el cliente. Sin cargar si no recibió nada. */
+  responseSent?: string;
+  aviso?: ResultadoDelAviso;
 }
 
 async function appendAudit(
@@ -528,9 +560,7 @@ async function appendAudit(
   confidence: number | null,
   toolsCalled: string[],
   escalatedToBroker: boolean,
-  escalationRule: EscalationRule | undefined,
-  escalationReason: string | undefined,
-  responseText: string | undefined
+  extras: ExtrasDeAuditoria = {}
 ): Promise<void> {
   const entry: AuditLogEntry = {
     id: randomUUID(),
@@ -541,26 +571,61 @@ async function appendAudit(
     confidence,
     toolsCalled,
     escalatedToBroker,
-    escalationRule,
-    escalationReason,
-    responseSent: responseText,
+    escalationRule: extras.escalationRule,
+    escalationReason: extras.escalationReason,
+    responseSent: extras.responseSent,
     // Vincula esta entrada con la `recibido` del mismo mensaje, que se escribió
     // al llegar (docs/TASKS.md Bloque 34).
     messageId: message.messageId,
+    avisoAlBroker: extras.aviso?.estado,
+    avisoAlBrokerMotivo: extras.aviso?.motivo,
   };
   await deps.auditLog.append(entry);
 }
 
+interface ResultadoDelAviso {
+  estado: NonNullable<AuditLogEntry["avisoAlBroker"]>;
+  /** Por qué falló el borrador o el aviso. */
+  motivo?: string;
+}
+
+/**
+ * Avisa al broker con un borrador. **Nunca tira**: un fallo del aviso no
+ * puede hacer fallar el mensaje (docs/TASKS.md Bloque 38a). Si tirara, el
+ * mensaje pasaría a `fallido` y el aviso de fallos del Bloque 34 mandaría otro
+ * aviso por el mismo canal que acaba de fallar.
+ *
+ * El borrador y el aviso van separados: el borrador es una llamada a Claude
+ * distinta del clasificador y puede fallar sola (sobrecarga, rate limit).
+ * Antes iban en el mismo `try`, y si fallaba el borrador no salía nada. Si
+ * falla y hay `respaldo` (la respuesta que el bot habría mandado), va esa.
+ *
+ * Devuelve qué pasó, para el audit log.
+ */
 async function notifyBrokerBestEffort(
   deps: HandleMessageDeps,
   message: IncomingWhatsAppMessage,
   intent: Intent,
   confidence: number | null,
-  escalationReason: string | undefined
-): Promise<void> {
-  if (!deps.brokerNotifier) return;
+  escalationReason: string | undefined,
+  respaldo?: string
+): Promise<ResultadoDelAviso> {
+  if (!deps.brokerNotifier) return { estado: "sin_destinatario" };
+
+  let draftReply: string | null = null;
+  let motivoFalloBorrador: string | undefined;
   try {
-    const draftReply = await deps.draftComposer.composeDraft(message.text, intent.description);
+    const borrador = await deps.draftComposer.composeDraft(message.text, intent.description);
+    // Un borrador vacío no se distingue de "no tenía nada que sugerir".
+    if (!borrador.trim()) throw new Error("Claude devolvió un borrador vacío");
+    draftReply = borrador;
+  } catch (error) {
+    motivoFalloBorrador = describirError(error);
+    console.error("No se pudo redactar el borrador; el aviso al broker sale sin él:", error);
+    if (respaldo?.trim()) draftReply = respaldo;
+  }
+
+  try {
     await deps.brokerNotifier.notify({
       conversationId: message.from,
       incomingMessage: message.text,
@@ -568,8 +633,12 @@ async function notifyBrokerBestEffort(
       confidence,
       escalationReason,
       draftReply,
+      motivoFalloBorrador,
     });
   } catch (error) {
-    console.error("No se pudo notificar al broker (el cliente igual recibe su respuesta):", error);
+    console.error("No se pudo mandar el aviso al broker: no se enteró por WhatsApp de este mensaje:", error);
+    return { estado: "fallo", motivo: describirError(error) };
   }
+  if (motivoFalloBorrador === undefined) return { estado: "enviado" };
+  return { estado: draftReply === null ? "sin_borrador" : "respaldo", motivo: motivoFalloBorrador };
 }

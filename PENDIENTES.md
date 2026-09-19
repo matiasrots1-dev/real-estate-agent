@@ -69,10 +69,11 @@ haga que el bot le escriba a clientes, y borrar datos.
 ## Bloquea apagar el modo silencioso
 
 - [ ] **Bloque 38**: escalamientos y avisos al broker. Lo que dejaron abierto
-      las revisiones del 31 y del 34. Tres cosas **afectan hoy**, con el modo
-      silencioso prendido: la ventana de 24 hs (arriba), que nadie se entera
-      si falla el aviso al broker, y que una llamada colgada a Anthropic no
-      cuenta como fallo. El resto muerde al apagarlo; lo mas grave es que una
+      las revisiones del 31 y del 34. Hecho: 38a (si falla el borrador, el
+      aviso te llega igual). Lo que **afecta hoy**, con el modo silencioso
+      prendido: tus ordenes al bot no reciben respuesta (38g, lo proximo), una
+      llamada colgada a Anthropic no cuenta como fallo (38b), y la ventana de
+      24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
       escalada por baja confianza le manda al cliente la plantilla con los
       `{huecos}` sin llenar (pasa desde el Bloque 5).
 - [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:

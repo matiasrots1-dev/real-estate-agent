@@ -61,6 +61,7 @@ interface Entrada {
   matchedIntentId: string;
   escalatedToBroker?: boolean;
   responseSent?: string;
+  avisoAlBroker?: string;
   messageId?: string;
   etapa?: string;
 }
@@ -77,6 +78,15 @@ const entradas: Entrada[] = colapsarPorMensaje(
 // escribe "quiero ver el depto" y después "hola?". Se guarda el ÚLTIMO mensaje
 // (que es al que hay que contestar) pero la MEJOR prioridad de toda la
 // conversación — si en algún momento quiso agendar, eso manda.
+/**
+ * El agente le contesto al cliente y el broker se entero. Si el aviso al broker
+ * fallo (docs/TASKS.md Bloque 38a), el cliente recibio solo la plantilla de
+ * espera y el broker no sabe nada: esa conversacion sigue pendiente.
+ */
+function fueRespondida(e: Entrada): boolean {
+  return e.responseSent !== undefined && e.avisoAlBroker !== "fallo";
+}
+
 interface Conversacion {
   id: string;
   mensajes: number;
@@ -94,7 +104,7 @@ for (const e of entradas) {
       mensajes: 1,
       ultimo: e,
       mejorIntent: e.matchedIntentId,
-      respondida: e.responseSent !== undefined,
+      respondida: fueRespondida(e),
     });
     continue;
   }
@@ -105,7 +115,7 @@ for (const e of entradas) {
   // `fallido` de hoy desaparecería de la lista (docs/TASKS.md Bloque 34).
   if (e.timestamp > previo.ultimo.timestamp) {
     previo.ultimo = e;
-    previo.respondida = e.responseSent !== undefined;
+    previo.respondida = fueRespondida(e);
   }
   if (prioridadDe(e.matchedIntentId) < prioridadDe(previo.mejorIntent)) previo.mejorIntent = e.matchedIntentId;
 }
@@ -229,7 +239,8 @@ for (const c of lista) {
   console.log(`    "${texto}"`);
   console.log(
     `    ${haceCuanto(c.ultimo.timestamp)} · ${c.mejorIntent} · ${c.mensajes} ${c.mensajes === 1 ? "mensaje" : "mensajes"}` +
-      `${c.respondida ? " · respondida por el agente" : ""}${respondioElBroker(c) ? " · YA LE CONTESTASTE VOS" : ""}`
+      `${c.respondida ? " · respondida por el agente" : ""}${respondioElBroker(c) ? " · YA LE CONTESTASTE VOS" : ""}` +
+      `${c.ultimo.avisoAlBroker === "fallo" ? " · EL AVISO NO TE LLEGÓ" : ""}`
   );
   console.log("");
 }

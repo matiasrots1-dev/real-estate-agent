@@ -9,7 +9,7 @@ import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import type { IntentClassification, IntentClassifier } from "./classifier.js";
 import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
-import type { BrokerNotifier, BrokerNotification } from "./brokerNotifier.js";
+import { formatBrokerNotificationText, type BrokerNotifier, type BrokerNotification } from "./brokerNotifier.js";
 import { InMemoryAuditLogStore } from "./auditLog.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import { InMemoryConversationStateStore, idleState } from "./conversationStateStore.js";
@@ -218,6 +218,208 @@ describe("handleIncomingMessage — intents que siempre escalan (Bloque 4)", () 
     const reclamoQueja = catalog.intents.find((i) => i.id === "reclamo_queja");
     expect(result.responseText).toBe(reclamoQueja?.response.template);
     expect(result.escalatedToBroker).toBe(true);
+  });
+});
+
+// docs/TASKS.md Bloque 38a. Antes el borrador y el aviso iban en el mismo
+// `try`: si fallaba el borrador, el broker no recibía nada.
+describe("handleIncomingMessage — el aviso al broker no depende del borrador (Bloque 38a)", () => {
+  function borradorQueFalla(): DraftReplyComposer {
+    return {
+      composeDraft: vi.fn(async () => {
+        throw new Error("529 Overloaded");
+      }),
+    };
+  }
+
+  it("si el borrador falla, el aviso sale igual, sin borrador y con el motivo", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    const result = await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        auditLog,
+      })
+    );
+
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(brokerNotifier.notifications[0]).toMatchObject({ matchedIntentId: "reclamo_queja", draftReply: null });
+    expect(brokerNotifier.notifications[0].motivoFalloBorrador).toContain("529 Overloaded");
+    // Lo que recibe el cliente no cambia.
+    const reclamoQueja = catalog.intents.find((i) => i.id === "reclamo_queja");
+    expect(result.responseText).toBe(reclamoQueja?.response.template);
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_borrador");
+    expect(entry.avisoAlBrokerMotivo).toContain("529 Overloaded");
+  });
+
+  // En modo silencioso el aviso es lo único que produce el bot. Hallazgo de la
+  // revisión del PR: el aviso decía "Este borrador es para que respondas vos"
+  // justo arriba de "Sin borrador".
+  it("en modo silencioso también, y el aviso no se contradice", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        auditLog,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(brokerNotifier.notifications[0].draftReply).toBeNull();
+    const texto = formatBrokerNotificationText(brokerNotifier.notifications[0]);
+    expect(texto).toContain("Sin borrador");
+    expect(texto).not.toContain("Este borrador");
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_borrador");
+  });
+
+  // El motivo del modo silencioso va en el camino que no escala. Sin respaldo
+  // (la respuesta quedó vacía), el aviso no puede decir "este borrador" arriba
+  // de "sin borrador".
+  it("en modo silencioso, sin borrador ni respaldo, el motivo no habla de un borrador", async () => {
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer(""),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(brokerNotifier.notifications[0].draftReply).toBeNull();
+    const texto = formatBrokerNotificationText(brokerNotifier.notifications[0]);
+    expect(texto).toContain("Modo silencioso");
+    expect(texto).toContain("Sin borrador");
+    expect(texto).not.toContain("Este borrador");
+  });
+
+  // Hallazgo de la revisión del PR: en modo silencioso el bot ya tiene la
+  // respuesta que habría mandado, armada con los datos de Tokko.
+  it("en modo silencioso, si el borrador falla, va la respuesta que el bot habría mandado", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        composer: stubComposer("Sigue disponible por $350.000."),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        auditLog,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(brokerNotifier.notifications[0]).toMatchObject({ draftReply: "Sigue disponible por $350.000." });
+    expect(brokerNotifier.notifications[0].motivoFalloBorrador).toContain("529 Overloaded");
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("respaldo");
+    expect(entry.responseSent).toBeUndefined();
+  });
+
+  // Hallazgo de la revisión del PR: un borrador vacío salía como "Borrador
+  // sugerido:" seguido de nada, y quedaba como enviado.
+  it("un borrador vacío cuenta como falla", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        draftComposer: stubDraftComposer("   "),
+        brokerNotifier,
+        auditLog,
+      })
+    );
+
+    expect(brokerNotifier.notifications[0].draftReply).toBeNull();
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_borrador");
+    expect(entry.avisoAlBrokerMotivo).toContain("vacío");
+  });
+
+  it("si el aviso no se puede mandar, el mensaje no falla y el audit log lo dice", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier: BrokerNotifier = {
+      notify: vi.fn(async () => {
+        throw new Error("WhatsApp Cloud API caída");
+      }),
+    };
+
+    await expect(
+      handleIncomingMessage(
+        incoming("esto es un desastre"),
+        baseDeps({ classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }), brokerNotifier, auditLog })
+      )
+    ).resolves.toBeDefined();
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.escalatedToBroker).toBe(true);
+    expect(entry.avisoAlBroker).toBe("fallo");
+    expect(entry.avisoAlBrokerMotivo).toContain("WhatsApp Cloud API caída");
+  });
+
+  it("con borrador, el audit log registra el aviso como enviado", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        brokerNotifier: recordingBrokerNotifier(),
+        auditLog,
+      })
+    );
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("enviado");
+  });
+
+  // Hallazgo de la revisión del PR: sin número del broker, la entrada no se
+  // distinguía de una anterior al Bloque 38a.
+  it("sin número del broker, el audit log dice que nadie se enteró", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({ classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }), auditLog })
+    );
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_destinatario");
+  });
+
+  it("un mensaje que no escala no registra aviso", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+
+    await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        brokerNotifier: recordingBrokerNotifier(),
+        auditLog,
+      })
+    );
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBeUndefined();
   });
 });
 
