@@ -50,7 +50,12 @@ export interface SerialConversationQueueOptions {
   onError?: (error: unknown, conversationId: string) => void;
 }
 
-const DEFAULT_TASK_TIMEOUT_MS = 60_000;
+/**
+ * 90 s. Tiene que cerrar con el timeout de Anthropic (`agent/limitesAnthropic.ts`):
+ * una llamada colgada tiene que fallar, y escribirse su `fallido`, antes de
+ * que la cola abandone la tarea (docs/TASKS.md Bloque 38b). Un test lo verifica.
+ */
+export const DEFAULT_TASK_TIMEOUT_MS = 90_000;
 
 function reportarPorDefecto(error: unknown, conversationId: string): void {
   // Sin el id de conversación (un teléfono) en el mensaje: es un dato personal

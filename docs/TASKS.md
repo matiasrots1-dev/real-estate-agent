@@ -1985,7 +1985,7 @@ o promesas que el bloque hace y no cumplia) y se arreglaron aca:
       caido, Claude andando; o Claude caido y un cliente pausado que no lo
       necesita) cada fallo sale suelto y el exito siguiente manda "volvio a
       procesar". Es ruido, no perdida: el aviso de cada fallo sale igual.
-- [ ] **Una llamada que se cuelga no es un fallo.** Si la API de Anthropic no
+- [x] *(Resuelto en el Bloque 38b.)* **Una llamada que se cuelga no es un fallo.** Si la API de Anthropic no
       responde (en vez de tirar error), la cola descarta la tarea a los 60 s
       y sigue, pero no se escribe `fallido` ni sale aviso hasta que la
       llamada termine: el SDK espera 10 minutos por intento, con reintentos.
@@ -2529,7 +2529,8 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       borrador (Claude) o el envio, el escalamiento se pierde en su propio
       `catch`. Viene del Bloque 5. El aviso de fallos del Bloque 34 no lo
       cubre: ese salta cuando falla el procesamiento, no la notificacion.
-- [ ] **Una llamada a Anthropic que se cuelga no es un fallo.** El cliente del
+- [x] *(Resuelto en 38b: 25 s por intento, 1 reintento; la cola, 90 s.)*
+      **Una llamada a Anthropic que se cuelga no es un fallo.** El cliente del
       SDK no tiene timeout propio (10 minutos por intento, con reintentos).
       La cola descarta la tarea a los 60 s, pero no se escribe `fallido` ni
       sale aviso hasta que la llamada termine. Arreglo: timeout explicito en
@@ -2619,6 +2620,95 @@ hasta que se rinda.
   el error sin registrarlo. No corre en modo silencioso; va con el Bloque 27.
 - Pasar `draftReply` y `motivoFalloBorrador` a una union discriminada.
   Detalle de tipos, sin efecto hoy.
+
+### 38b — Una llamada a Anthropic que se cuelga cuenta como fallo
+El cliente de Anthropic se crea sin opciones, y el SDK (0.32) espera **10
+minutos por intento, con 2 reintentos**: una llamada que se cuelga en vez de
+fallar tarda hasta media hora en convertirse en error. Mientras tanto no hay
+`fallido`, ni aviso de fallos (Bloque 34), ni aviso sin borrador (38a): la
+cola descarta la tarea a los 60 s y sigue, pero la llamada sigue colgada.
+
+**Lo que se midio antes de disenar** (audit log del servidor, 25 mensajes con
+`recibido` y resolucion): de punta a punta, un mensaje tarda 7,6 s la mitad
+de las veces, 9,9 s el 90% y 18,4 s como maximo (un `agendar_visita`), con 2
+o 3 llamadas a Claude por mensaje. La mas pesada es la del planificador de
+`broker_accion_directa` (1024 tokens de salida); las demas, 300 o menos.
+
+**Decision** (corregida en la revision del PR, ver abajo): 25 s por intento y
+1 reintento, y el techo por tarea de la cola sube de 60 a 90 s. Peor caso de
+una llamada colgada: unos 51 s en vez de media hora, y falla antes de que la
+cola abandone la tarea. Configurable con `ANTHROPIC_TIMEOUT_MS`, entre 1 y
+30 s.
+
+**Pre-mortem**
+
+**1. El timeout es corto y convierte llamadas lentas pero sanas en fallos.**
+En un rato de API lenta, los mensajes pasan a `fallido` y el aviso de fallos
+le manda rafagas al broker por algo que se habria resuelto solo.
+   *Mitigacion*: el valor sale de lo medido (arriba), con margen de 3 veces y
+   con los reintentos. Configurable sin tocar codigo. Despues del deploy, mirar
+   si aparecen `fallido` con "timed out" en el audit log.
+
+**2. El timeout no llega a todas las llamadas.** Otro `new Anthropic(` en el
+orchestrator, o la opcion mal escrita, y alguna llamada sigue esperando 10
+minutos sin que ningun test lo note.
+   *Mitigacion*: el cliente se crea en una sola funcion. Un test recorre el
+   codigo del orchestrator y falla si aparece otro `new Anthropic(`. Otro test
+   hace una llamada real del SDK contra un `fetch` que nunca responde y
+   verifica que tire por timeout.
+
+**3. Un valor mal escrito en el .env tumba el bot.** El SDK valida el timeout
+al construir el cliente y tira si no es un entero positivo: con
+`ANTHROPIC_TIMEOUT_MS=30s`, el proceso muere al arrancar y systemd lo
+reinicia en loop, la misma clase de caida del Bloque 37.
+   *Mitigacion*: un valor invalido se ignora con un aviso en el log y se usa el
+   de por defecto. Test.
+
+**Como quedo**
+- [x] `agent/clienteAnthropic.ts`: el unico lugar donde se crea el cliente.
+      Los numeros viven en `agent/limitesAnthropic.ts`, sin dependencias, asi
+      la config no carga el SDK.
+- [x] 25 s por intento, 1 reintento; el techo de la cola, 90 s. Un test
+      verifica que cierren: el mensaje mas lento medido mas el peor caso de una
+      llamada colgada tiene que quedar por debajo del techo, con el default y
+      con el maximo que acepta el .env.
+- [x] `ANTHROPIC_TIMEOUT_MS` se acepta entre 1 y 30 s; fuera de rango, o si no
+      es un entero en decimal, se ignora con un aviso.
+- [x] 11 tests nuevos. Uno hace una llamada real del SDK contra un `fetch` que
+      nunca responde. La guarda contra un segundo cliente reconoce el SDK
+      importado con otro nombre e ignora los comentarios, y tiene sus propios
+      tests. Mutation testing, una por vez:
+      - I1. el cliente sin timeout (lo de antes): 2 tests en rojo
+      - I2. el timeout por default vuelve a 10 minutos: 3 tests en rojo
+      - I3. dos reintentos (la primera version): 3 tests en rojo
+      - I4. acepta cualquier entero positivo: 1 test en rojo
+      - I5. la config ignora la variable: 1 test en rojo
+      - I6a. `server.ts` crea su propio cliente: **sobrevivio** al principio,
+        porque la guarda solo miraba nombres importados y la mutacion no
+        importaba el SDK. Se reforzo: 1 test en rojo
+      - I6b. otro archivo crea un cliente con otro nombre: 1 test en rojo
+      - I7. la cola vuelve a 60 s: 2 tests en rojo
+      - I8. el maximo del .env vuelve a 35 s: 1 test en rojo
+
+**Revision del PR (#39)**: 8 hallazgos. El principal: con 30 s y 2
+reintentos, una llamada colgada fallaba a los ~91 s, y la cola abandonaba la
+tarea a los 60 s, antes del `fallido`. El problema quedaba resuelto a
+medias. Arreglado con los numeros de arriba y el test que los ata. Tambien:
+el rango del .env (un `30` pensado en segundos hacia fallar todas las
+llamadas), la guarda con alias, y la config sin el SDK. Quedan anotados:
+- [ ] **El timeout del SDK 0.32 cubre solo hasta los encabezados.** Si la
+      conexion se traba a mitad del cuerpo de la respuesta, se espera hasta
+      que el socket se da por inactivo (5 minutos). Las respuestas son chicas y
+      no es comun, pero el peor caso de 51 s no vale ahi.
+- [ ] Una llamada lenta pero sana (mas de 25 s dos veces seguidas) ahora es un
+      fallo, y cada intento abortado se puede cobrar igual. El planificador de
+      `broker_accion_directa` es el mas expuesto. Se puede subir hasta 30 s
+      por .env.
+- [ ] Lo de fondo: la cola no puede cancelar la tarea que abandona. Una fecha
+      limite (`AbortSignal`) que baje de la cola a cada llamada ataria los dos
+      numeros en vez de mantenerlos a mano.
+- [ ] Despues del deploy, mirar si aparecen `fallido` con "timed out" en el
+      audit log (modo de fallo 1).
 
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
