@@ -38,6 +38,7 @@ meta:
   escalation_channel: broker_whatsapp
   audit_log: true
   language: es-AR
+  escalation_waiting_template_from: foo
 intents:
   - id: foo
     description: bar
@@ -52,6 +53,14 @@ intents:
       template: "hola"
 `;
     expect(() => parseIntentCatalog(invalidYaml)).toThrow(IntentCatalogValidationError);
+    // Y falla por eso: sin el campo de la plantilla de espera (Bloque 38c)
+    // también fallaba, y el test no probaba lo que dice.
+    try {
+      parseIntentCatalog(invalidYaml);
+    } catch (error) {
+      const issues = (error as IntentCatalogValidationError).issues;
+      expect(issues.every((issue) => issue.includes("requires_broker"))).toBe(true);
+    }
   });
 });
 

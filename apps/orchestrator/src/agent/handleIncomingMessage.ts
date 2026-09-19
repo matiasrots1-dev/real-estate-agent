@@ -499,10 +499,29 @@ async function finalizeNonEscalating(
   intent: Intent,
   confidence: number | null,
   toolsCalled: string[],
-  respuestaDelHandler: string,
+  responseText: string,
   mediaUrls?: string[]
 ): Promise<HandleMessageResult> {
-  const responseText = sinHuecosSinLlenar(deps, message, intent, respuestaDelHandler);
+  // Red de última línea (Bloque 38c): una respuesta a un cliente con un hueco
+  // sin llenar no sale, y el mensaje escala. No alcanza con cambiar el texto:
+  // la plantilla de espera le promete al cliente que el asesor le va a
+  // responder, así que el broker se tiene que enterar.
+  if (tieneHuecoParaElCliente(deps, message, intent, responseText)) {
+    // Lo que el handler dejó armado (horarios propuestos, por ejemplo) se
+    // descarta: el cliente no vio esa respuesta, y un "ok" suyo no puede
+    // confirmar algo que nunca leyó.
+    await deps.conversationStateStore.save(idleState(message.from, message.from));
+    return finalizeEscalation(
+      deps,
+      message,
+      intent,
+      confidence,
+      toolsCalled,
+      plantillaDeEspera(deps.catalog),
+      undefined,
+      MOTIVO_RESPUESTA_ROTA
+    );
+  }
   // Modo silencioso: el cliente no recibe nada, pero el broker sí tiene que
   // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
   // que el problema que el modo silencioso vino a resolver.
@@ -540,7 +559,10 @@ async function finalizeEscalation(
    */
   plantilla: DecisionPlantilla = { suprimir: false }
 ): Promise<HandleMessageResult> {
-  const responseText = sinHuecosSinLlenar(deps, message, intent, respuestaDelHandler);
+  // Ya escala y ya avisa: la red solo cambia el texto (Bloque 38c).
+  const responseText = tieneHuecoParaElCliente(deps, message, intent, respuestaDelHandler)
+    ? plantillaDeEspera(deps.catalog)
+    : respuestaDelHandler;
   // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
   // separa "el agente se calla" de "el mensaje se pierde".
   const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
@@ -586,31 +608,31 @@ async function finalizeEscalation(
 }
 
 /**
- * Red de última línea (docs/TASKS.md Bloque 38c): una respuesta con un hueco
- * sin llenar (`{direccion_corta}`) **no sale tal cual**. Al cliente le va la
- * plantilla de espera del catálogo; al broker, un aviso de que la respuesta no
- * se pudo armar. Queda un error en el log con el intent, para encontrar el
- * camino que la produjo.
+ * Red de última línea (docs/TASKS.md Bloque 38c): ¿esta respuesta a un
+ * **cliente** tiene un hueco sin llenar (`{direccion_corta}`)? Si lo tiene, no
+ * sale tal cual, y queda un error en el log con el intent para encontrar el
+ * camino que la produjo. Los caminos conocidos ya no producen plantillas
+ * crudas; esto es para el que se agregue mañana sin que nadie lo note.
  *
- * Los caminos conocidos ya no producen plantillas crudas; esto es para el que
- * se agregue mañana sin que nadie lo note.
+ * Solo para clientes. En el canal broker hay huecos legítimos: el preview de
+ * una orden masiva cita el mensaje con `{nombre}`, que se reemplaza al
+ * mandarlo. Y cortar ahí dejaría un plan esperando confirmación que el broker
+ * nunca vio (hallazgos de la revisión del PR #40).
  */
-function sinHuecosSinLlenar(
+function tieneHuecoParaElCliente(
   deps: HandleMessageDeps,
   message: IncomingWhatsAppMessage,
   intent: Intent,
   texto: string
-): string {
-  if (!HUECO_DE_PLANTILLA.test(texto)) return texto;
-  console.error(
-    `[respuesta] el intent "${intent.id}" armó una respuesta con un hueco sin llenar; no sale tal cual.`
-  );
-  return esDelBroker(deps, message) ? RESPUESTA_ROTA_AL_BROKER : plantillaDeEspera(deps.catalog);
+): boolean {
+  if (esDelBroker(deps, message) || !HUECO_DE_PLANTILLA.test(texto)) return false;
+  console.error(`[respuesta] el intent "${intent.id}" armó una respuesta con un hueco sin llenar; no sale tal cual.`);
+  return true;
 }
 
-/** Lo que recibe el broker si la respuesta a su orden salió con huecos sin llenar. */
-const RESPUESTA_ROTA_AL_BROKER =
-  "⚠️ No pude armar la respuesta a tu orden: quedó con datos sin completar. No asumas que se hizo; revisá el log del servidor.";
+/** Motivo del escalamiento cuando la red corta una respuesta rota. */
+const MOTIVO_RESPUESTA_ROTA =
+  "La respuesta del bot quedó con datos sin completar y no se le mandó al cliente: le llegó la plantilla de espera. Respondele vos.";
 
 /**
  * Lo opcional de una entrada, por nombre y no por posición: `escalationReason`

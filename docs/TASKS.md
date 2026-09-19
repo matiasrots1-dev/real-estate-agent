@@ -2767,26 +2767,69 @@ vez de la respuesta.
       propia plantilla de espera; cualquier otro, con la de espera del
       catalogo. La usan el handler y los flujos de agendar y reprogramar, que
       ya no tienen el texto escrito en TypeScript.
-- [x] Red de ultima linea en el handler: una respuesta con un hueco sin
-      llenar no sale. Al cliente le va la plantilla de espera; al broker, un
-      aviso de que no asuma que su orden se hizo. Queda un error en el log con
-      el intent.
+- [x] Red de ultima linea en el handler, **solo para respuestas a clientes**:
+      una respuesta con un hueco sin llenar no sale. Le llega la plantilla de
+      espera, el mensaje **escala de verdad** (aviso al broker,
+      `escalatedToBroker` en el audit log, sin las fotos) y la conversacion
+      vuelve a idle, para que un "ok" no confirme algo que el cliente no vio.
+      Queda un error en el log con el intent.
+- [x] El patron de hueco (`HUECO_DE_PLANTILLA`, en shared-types) ve tambien
+      tildes, mayusculas y numeros (`{direccion}`, `{Nombre}`, `{direccion2}`),
+      y no cuenta llaves con espacios (`{USD 350.000}`).
+- [x] `docs/escalation_policy.md` paso 1: que plantilla recibe el cliente.
 - [x] Tests nuevos: un recorrido por **todos** los intents del catalogo real
       con confianza baja, que ademas verifica que la red no tuvo que actuar
       (si actuara, estaria tapando una regresion del camino principal); los
       escalamientos de agendar y reprogramar, mirando el texto que recibe el
       cliente (ningun test lo miraba: se vio al agregar la dependencia nueva y
-      no fallar nada); y catalogos rotos a proposito. Mutation testing, una
-      por vez:
+      no fallar nada); la red escalando y reseteando el estado; el `{nombre}`
+      legitimo del canal broker; y catalogos rotos a proposito. Mutation
+      testing, una por vez:
       - J1. la baja confianza usa la plantilla del intent (lo de antes): 5 tests en rojo
       - J2. `respuestaDeEspera` usa siempre la propia: 5 tests en rojo
-      - J3. sin red de ultima linea: 2 tests en rojo
-      - J4. la red le manda al broker la plantilla de espera: 1 test en rojo
+      - J3. sin red de ultima linea: 3 tests en rojo
+      - J4. la red actua en el canal broker: 1 test en rojo
       - J5. reprogramar sin horarios manda la plantilla cruda: 1 test en rojo
       - J6. reprogramar sin eleccion manda la plantilla cruda: 1 test en rojo
       - J7. el schema no exige que exista el intent de espera: 1 test en rojo
       - J8. el schema acepta huecos en los que escalan siempre: 1 test en rojo
-      - J9. el patron de hueco es demasiado amplio: 3 tests en rojo
+      - J9a. el patron de hueco acepta llaves con espacios: 3 tests en rojo
+      - J9b. el patron de hueco no ve tildes ni mayusculas (la primera version): 1 test en rojo
+      - J10. la red cambia el texto pero no escala (la primera version): 2 tests en rojo
+      - J11. la red no resetea el estado: 1 test en rojo
+
+**Revision del PR (#40)**: 15 hallazgos. Los mas serios eran sobre la red de
+ultima linea, que en la primera version estaba mal pensada:
+- en el camino que no escala cambiaba el texto por "te respondo enseguida"
+  **sin avisarle al broker**: una promesa sin nadie que la cumpla;
+- en el canal broker bloqueaba el `{nombre}` legitimo de los previews de
+  ordenes masivas y dejaba el plan armado: el siguiente "dale" lo ejecutaba
+  sin que el broker hubiera visto el preview;
+- decia "no asumas que se hizo" sobre acciones que ya se habian hecho.
+Arreglado (arriba), junto con el patron de hueco, la politica de
+escalamiento, un test del schema que habia perdido sentido (fallaba por el
+campo nuevo, no por lo que decia probar) y los spies de consola sin
+restaurar. Quedan anotados:
+- [ ] Un intent que escala siempre responde con su plantilla aunque la
+      confianza sea bajisima: `rechazo_desinteres` a 0.2 le dice al cliente
+      "Gracias por avisarme..." y cierra la conversacion. Ya pasaba; es del
+      catalogo (Bloque 28).
+- [ ] Con el modo silencioso apagado, una orden ambigua del broker le
+      responde "Dejame confirmarlo con el asesor...", pensada para clientes.
+      En modo silencioso no sale (38g).
+- [ ] Lo de fondo: hay tres copias de `renderTemplate`, y ninguna avisa si
+      queda un hueco sin llenar. Un reemplazo compartido que falle ahi, donde
+      el llamador todavia sabe el contexto, cubriria tambien los envios que no
+      pasan por el handler (jobs, acciones directas).
+- [ ] La supresion de la plantilla repetida (Bloque 31) sigue decidiendo por
+      id de intent: los escalamientos por baja confianza ahora mandan la frase
+      de espera y no cuentan para el cupo. Es 38e.
+
+**Pregunta que lo habria agarrado antes** (desde el Bloque 5): *"¿que texto
+recibe el cliente cuando esto escala?"*. Los tests del escalamiento miraban
+`escalate` y el motivo, nunca el texto que salia. Un flujo nuevo con
+escalamientos tiene que tener un test del mensaje que recibe el cliente.
+
 - [ ] Sigue igual, a proposito: la segunda reprogramacion responde "Listo, no
       pudimos reprogramar tu visita de ...". Esta completa, no tiene huecos,
       pero el "Listo," suena raro.
@@ -2914,10 +2957,11 @@ arreglaron 8 (arriba). Quedan anotados:
       `reprogramar_cancelar_visita`, `recordatorio_visita`,
       `seguimiento_post_visita`, `broker_pausar_agente`.
 - [ ] **La misma frase se puede repetir por caminos que el Bloque 31 no
-      cubre.** Los escalamientos por baja confianza de intents generativos
-      usan el texto por defecto, y los flujos de visita usan
-      `DEFAULT_ESCALATION_TEXT`. La supresion se decide por id de intent;
-      deberia decidirse por el texto que efectivamente sale.
+      cubre.** Desde 38c, todo escalamiento que no es de un intent que escala
+      siempre (baja confianza, flujos de visita, la red de ultima linea)
+      manda la plantilla de espera del catalogo, y ninguno cuenta para el
+      cupo, que se decide por id de intent. Deberia decidirse por el texto
+      que efectivamente sale.
 - [ ] **Un envio al cliente que falla no es un fallo.** La captura del Bloque
       34 termina antes de `sendText`: si el envio falla, no hay `fallido` ni
       aviso, y `pendientes` la marca como respondida.

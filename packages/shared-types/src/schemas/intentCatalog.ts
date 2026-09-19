@@ -79,8 +79,13 @@ export const IntentCatalogMetaSchema = z.object({
 });
 export type IntentCatalogMeta = z.infer<typeof IntentCatalogMetaSchema>;
 
-/** Un hueco sin llenar de una plantilla del catálogo: `{direccion_corta}`. */
-export const HUECO_DE_PLANTILLA = /\{[a-z_]+\}/;
+/**
+ * Un hueco sin llenar de una plantilla del catálogo: `{direccion_corta}`, y
+ * también `{dirección}`, `{Nombre}` o `{direccion2}`, que el reemplazo de
+ * plantillas acepta igual. No cuenta llaves con espacios adentro, como
+ * `{USD 350.000}`: ningún hueco del catálogo los tiene.
+ */
+export const HUECO_DE_PLANTILLA = /\{[^{}\s]+\}/;
 
 /**
  * Además de la forma, el catálogo tiene que cumplir dos cosas de las que

@@ -32,9 +32,19 @@ Un mensaje se escala al broker (no se responde solo) si se cumple
 
 El agente **nunca queda mudo** frente al cliente. La secuencia es:
 
-1. Responde al cliente con la plantilla de espera correspondiente al
-   intent (campo `response.template` en el catálogo), dentro de la
-   ventana de 24hs de WhatsApp.
+1. Responde al cliente con una plantilla de espera, dentro de la ventana
+   de 24hs de WhatsApp:
+   - si el intent escala siempre (`requires_broker: true`), con su propia
+     plantilla (`response.template`), que es de espera;
+   - si no (escala por baja confianza, o desde un flujo de visitas), con la
+     plantilla de espera genérica que nombra
+     `meta.escalation_waiting_template_from`. La propia de esos intents es
+     la del caso exitoso ("Listo, {accion} tu visita de..."), con huecos
+     sin llenar y afirmando algo que no pasó.
+
+   Ninguna respuesta con un hueco sin llenar le llega a un cliente: si pasa,
+   se reemplaza por la plantilla de espera y el mensaje escala. Ver
+   `docs/TASKS.md` Bloque 38c.
 2. Genera una notificación al broker con:
    - Transcripción completa del mensaje del cliente.
    - Intent matcheado (o `fallback_low_confidence` si no matcheó nada).
