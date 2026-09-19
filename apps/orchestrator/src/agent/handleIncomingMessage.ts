@@ -8,6 +8,12 @@ import type { WeatherQueries } from "../mcp/weatherMcpClient.js";
 import { effectiveConfidenceThreshold, filterCatalogByChannel, findIntent } from "./intentCatalog.js";
 import type { ContextoConversacion, IntentClassifier } from "./classifier.js";
 import type { UltimoContactoStore } from "./ultimoContactoStore.js";
+import type { UltimoContacto } from "./ultimoContactoStore.js";
+import {
+  decidirPlantilla,
+  plantillasFijas,
+  type DecisionPlantilla,
+} from "./plantillaRepetida.js";
 import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier } from "./brokerNotifier.js";
@@ -57,43 +63,98 @@ export class NotImplementedIntentError extends Error {
 }
 
 /**
- * Arma el hilo de la conversación para el clasificador.
+ * Lee de una sola pasada lo que necesitan el contexto del clasificador y la
+ * supresion de plantilla repetida: las entradas de esta conversacion y el
+ * ultimo contacto del broker.
  *
- * Un fallo acá no puede tumbar el mensaje: si el audit log o el registro de
- * contactos fallan, se clasifica sin contexto — que es exactamente lo que se
- * hacía antes. Peor clasificación es aceptable; perder el mensaje no.
+ * Devuelve `null` si la lectura falla. Los dos consumidores lo interpretan
+ * distinto a proposito, porque el costo de equivocarse es distinto en cada
+ * uno (ver `armarContexto` y `decidirEnvioDePlantilla`).
  */
-async function armarContexto(
+async function leerHistorial(
   deps: HandleMessageDeps,
   message: IncomingWhatsAppMessage
-): Promise<ContextoConversacion | undefined> {
+): Promise<{ entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null> {
   try {
-    const previos: string[] = [];
+    const entradas: AuditLogEntry[] = [];
     for (const entrada of await deps.auditLog.readAll()) {
-      // Igualdad EXACTA del conversationId, nunca comparación canónica: un
-      // match flojo mezclaría el hilo de dos personas distintas y el
-      // clasificador leería la conversación de otro (docs/TASKS.md Bloque 17,
+      // Igualdad EXACTA del conversationId, nunca comparacion canonica: un
+      // match flojo mezclaria el hilo de dos personas distintas y el
+      // clasificador leeria la conversacion de otro (docs/TASKS.md Bloque 17,
       // el leadId inconsistente).
       if (entrada.conversationId !== message.from) continue;
-      if (entrada.incomingMessage) previos.push(entrada.incomingMessage);
+      entradas.push(entrada);
     }
-
-    let horasDesdeContactoDelBroker: number | undefined;
-    const contacto = await deps.ultimoContactoStore?.get(message.from);
-    if (contacto) {
-      const ms = Date.now() - new Date(contacto.contactadoAt).getTime();
-      // Sólo se informa si es reciente: que el broker haya escrito hace tres
-      // meses no ayuda a interpretar el mensaje de hoy, y meterlo en el prompt
-      // sólo agrega ruido.
-      if (ms >= 0 && ms <= 7 * 24 * 3600 * 1000) horasDesdeContactoDelBroker = ms / 3_600_000;
-    }
-
-    if (previos.length === 0 && horasDesdeContactoDelBroker === undefined) return undefined;
-    return { mensajesPrevios: previos, horasDesdeContactoDelBroker };
+    const ultimoContacto = (await deps.ultimoContactoStore?.get(message.from)) ?? null;
+    return { entradas, ultimoContacto };
   } catch (error) {
-    console.warn("No se pudo armar el contexto de la conversación; se clasifica sin él:", error);
-    return undefined;
+    console.warn("No se pudo leer el historial de la conversacion:", error);
+    return null;
   }
+}
+
+/**
+ * Arma el hilo de la conversacion para el clasificador.
+ *
+ * Un fallo aca no puede tumbar el mensaje: si el historial no se pudo leer se
+ * clasifica sin contexto, que es exactamente lo que se hacia antes. Peor
+ * clasificacion es aceptable; perder el mensaje no.
+ */
+function armarContexto(
+  historial: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null,
+  ahora: Date
+): ContextoConversacion | undefined {
+  if (!historial) return undefined;
+
+  const previos: string[] = [];
+  for (const entrada of historial.entradas) {
+    if (entrada.incomingMessage) previos.push(entrada.incomingMessage);
+  }
+
+  let horasDesdeContactoDelBroker: number | undefined;
+  if (historial.ultimoContacto) {
+    const ms = ahora.getTime() - new Date(historial.ultimoContacto.contactadoAt).getTime();
+    // Solo se informa si es reciente: que el broker haya escrito hace tres
+    // meses no ayuda a interpretar el mensaje de hoy, y meterlo en el prompt
+    // solo agrega ruido.
+    if (ms >= 0 && ms <= 7 * 24 * 3600 * 1000) horasDesdeContactoDelBroker = ms / 3_600_000;
+  }
+
+  if (previos.length === 0 && horasDesdeContactoDelBroker === undefined) return undefined;
+  return { mensajesPrevios: previos, horasDesdeContactoDelBroker };
+}
+
+/**
+ * Decide si la plantilla fija sale o se suprime (docs/TASKS.md Bloque 31).
+ *
+ * **Falla cerrado**: si el historial no se pudo leer, se suprime. Decision del
+ * dueno del repo — 16 repeticiones de la misma frase es peor que el silencio,
+ * asi que ante la duda no se manda. El costo es perder una plantilla legitima
+ * en el caso raro de que el audit log no se pueda leer.
+ */
+function decidirEnvioDePlantilla(
+  deps: HandleMessageDeps,
+  intentId: string,
+  historial: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null,
+  ahora: Date
+): DecisionPlantilla {
+  const fijas = plantillasFijas(deps.catalog);
+  if (!fijas.has(intentId)) return { suprimir: false };
+  if (!historial) {
+    return {
+      suprimir: true,
+      motivo:
+        "No se pudo leer el historial para saber si la plantilla ya se habia enviado; " +
+        "se suprime por las dudas. El cliente NO recibio nada (docs/TASKS.md Bloque 31).",
+    };
+  }
+  return decidirPlantilla({
+    intentId,
+    fijas,
+    historial: historial.entradas,
+    ultimoContacto: historial.ultimoContacto,
+    ahora,
+  });
 }
 
 /** Motivo que se registra en el audit log y se le manda al broker en modo silencioso. */
@@ -210,7 +271,9 @@ export async function handleIncomingMessage(
 
   const catalogForChannel = filterCatalogByChannel(deps.catalog, channel);
 
-  const contexto = await armarContexto(deps, message);
+  const ahora = new Date();
+  const historial = await leerHistorial(deps, message);
+  const contexto = armarContexto(historial, ahora);
   const classification = await deps.classifier.classify(message.text, catalogForChannel, contexto);
   const intent = findIntent(deps.catalog, classification.intentId);
   if (!intent) {
@@ -222,7 +285,18 @@ export async function handleIncomingMessage(
 
   if (decision.shouldEscalate) {
     const responseText = intent.response.template ?? "Dejame confirmarlo con el asesor y te respondo enseguida.";
-    return finalizeEscalation(deps, message, intent, classification.confidence, [], responseText, decision.rule, decision.reason);
+    const plantilla = decidirEnvioDePlantilla(deps, intent.id, historial, ahora);
+    return finalizeEscalation(
+      deps,
+      message,
+      intent,
+      classification.confidence,
+      [],
+      responseText,
+      decision.rule,
+      decision.reason,
+      plantilla
+    );
   }
 
   const language = deps.catalog.meta.language;
@@ -401,9 +475,28 @@ async function finalizeEscalation(
   toolsCalled: string[],
   responseText: string,
   rule: EscalationRule | undefined,
-  reason: string | undefined
+  reason: string | undefined,
+  /**
+   * Supresion de plantilla repetida (docs/TASKS.md Bloque 31). Los caminos
+   * que no producen una plantilla fija del catalogo no la pasan: `intentId`
+   * no estaria en el conjunto y la decision seria la misma.
+   */
+  plantilla: DecisionPlantilla = { suprimir: false }
 ): Promise<HandleMessageResult> {
+  // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
+  // separa "el agente se calla" de "el mensaje se pierde".
   await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
+
+  // La plantilla ya salio en esta conversacion y el broker todavia no
+  // contesto: se escalo igual, pero al cliente no le llega otra copia de la
+  // misma frase. `responseSent: undefined` a proposito — el audit log es el
+  // registro de que recibio cada persona y no puede decir que se envio algo
+  // que no se envio.
+  if (plantilla.suprimir && !deps.modoSilencioso) {
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, plantilla.motivo, undefined);
+    return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
+  }
+
   if (deps.modoSilencioso) {
     // Ya escalaba y ya notificaba al broker; lo único que cambia es que la
     // plantilla de espera tampoco sale.
