@@ -28,6 +28,10 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - **Bloques 31, 34 y 37 mergeados y desplegados el 19/09** (03:21, `aa2ad15`).
   Verificado despues del deploy: `/health` OK, los tres MCP corriendo, modo
   silencioso forzado, 57 contactos conocidos cargados, ninguna linea rota.
+- **Bloque 39 mergeado el 19/09, sin desplegar todavia**: no urge, y el
+  reinicio corta los mensajes en vuelo, asi que va en horario tranquilo.
+- **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
+  excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
   el bot le manda al broker es texto libre, y Meta solo lo entrega si el
   ...6699 le escribio a la linea del bot (...4543) en las ultimas 24 hs. Si
@@ -41,14 +45,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
-- [ ] **Proteger `main` en GitHub.** Verificado el 19/09: no tiene ninguna
-      regla, así que un push directo entra sin PR. Ahora que Claude mergea
-      solo, conviene una regla mínima: Settings → Branches → Add rule →
-      `main` → "Require a pull request before merging", con **0
-      aprobaciones** (si pide aprobaciones, Claude no puede mergear sus
-      propios PRs), y tildar "Do not allow bypassing the above settings":
-      Claude trabaja con tu cuenta, que es administradora, y sin ese tilde la
-      regla no le aplica. Es un cambio de un minuto, desde tu cuenta.
 - [ ] **Bloque 40 (propuesto): la retencion corre cada 5 minutos y su reporte
       dura una hora.** El reporte guarda 12 corridas, pensadas para comparar
       semana contra semana. Desde julio de 2027, cuando empiece a borrar, el

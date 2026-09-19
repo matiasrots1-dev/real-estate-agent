@@ -10,10 +10,11 @@ de negocio) y `docs/TASKS.md` (que tiene el backlog).
 **Nunca se commitea directo a `main`.** Todo cambio entra por una rama +
 Pull Request, revisado antes de mergear (paso 7).
 
-Ojo: **hoy `main` no tiene protección configurada en GitHub** (verificado
-el 2026-09-19: ni reglas de rama ni rulesets). Un push directo no falla: la
-regla se sostiene por disciplina hasta que el dueño del repo active una
-regla que exija PR para mergear.
+`main` está protegida en GitHub desde el 2026-09-19 (regla de rama
+clásica, Settings → Branches): exige PR para mergear, con **0 aprobaciones**
+(así Claude Code puede mergear sus propios PRs después de revisarlos), y
+**aplica también a los administradores**, así que un push directo falla
+para cualquiera. No se permiten force push ni borrar la rama.
 
 ## Paso a paso
 
