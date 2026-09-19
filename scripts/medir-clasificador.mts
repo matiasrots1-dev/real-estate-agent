@@ -23,6 +23,7 @@ import { config as loadDotenv } from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadCatalog } from "../apps/orchestrator/src/agent/intentCatalog.js";
 import { ClaudeIntentClassifier, type ContextoConversacion } from "../apps/orchestrator/src/agent/classifier.js";
+import { colapsarPorMensaje, esResuelta } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotenv({ path: path.join(REPO, ".env") });
@@ -32,13 +33,19 @@ interface Entrada {
   timestamp: string;
   incomingMessage?: string;
   matchedIntentId: string;
+  messageId?: string;
+  etapa?: string;
 }
 
-const entradas: Entrada[] = fs
+// Una entrada por mensaje (docs/TASKS.md Bloque 34). Las fallido y las recibido
+// sin resolver se quedan, porque B y C reclasifican el TEXTO y el contexto tiene
+// que ser el de produccion. Su intent es un centinela: A y la referencia lo
+// miran solo a traves de `detectadoEnProduccion`.
+const entradas: Entrada[] = colapsarPorMensaje(fs
   .readFileSync(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl"), "utf8")
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((l) => JSON.parse(l));
+  .map((l) => JSON.parse(l)));
 
 const etiquetas: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(REPO, "apps/orchestrator/data/etiquetas_conversaciones.json"), "utf8")
@@ -61,6 +68,9 @@ const clasificador = new ClaudeIntentClassifier(anthropic);
 
 /** "Lo detectó" = matcheó cualquier intent que no sea el catch-all. */
 const detectado = (intentId: string) => intentId !== "fallback_low_confidence";
+
+/** Lo que detectó producción: un mensaje que falló o no se resolvió no detectó nada. */
+const detectadoEnProduccion = (e: Entrada) => esResuelta(e) && detectado(e.matchedIntentId);
 
 interface Resultado {
   nombre: string;
@@ -100,13 +110,13 @@ function fila(r: Resultado): string {
 // de 69% a 38% por la métrica, no por el cambio. Las tres variantes tienen que
 // responder exactamente la misma pregunta.
 const A = new Map<string, boolean>();
-for (const [id, ms] of casos) A.set(id, detectado(ms[ms.length - 1].matchedIntentId));
+for (const [id, ms] of casos) A.set(id, detectadoEnProduccion(ms[ms.length - 1]));
 
 // Se conserva la vista "cualquier mensaje" sólo como referencia, claramente
 // separada, porque es la que describe lo que el sistema hace en la práctica:
 // clasifica cada mensaje a medida que llega, no sólo el último.
 const AcualquierMensaje = new Map<string, boolean>();
-for (const [id, ms] of casos) AcualquierMensaje.set(id, ms.some((m) => detectado(m.matchedIntentId)));
+for (const [id, ms] of casos) AcualquierMensaje.set(id, ms.some(detectadoEnProduccion));
 
 // ── B y C: se reclasifica el ÚLTIMO mensaje de cada conversación ──
 const B = new Map<string, boolean>();

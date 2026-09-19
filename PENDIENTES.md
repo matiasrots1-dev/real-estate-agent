@@ -6,7 +6,7 @@ en [docs/TASKS.md](docs/TASKS.md); esto solo ordena y apunta.
 **Se actualiza en el mismo PR que cierra un bloque o registra una decisión.**
 Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde quedó.
 
-Última actualización: 2026-09-18
+Última actualización: 2026-09-19
 
 ## Estado ahora
 
@@ -20,19 +20,18 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   DoubleTick, `status: CONNECTED`, y el `phone_number_id` no cambio. Prueba de
   punta a punta OK: `consulta_disponibilidad` con 0.98 y **sin respuesta al
   cliente**. Ver `docs/TASKS.md` Bloque 36.
-- **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`).
-  DoubleTick **ya cambio la URL** (15/9 20:09) y su evento de prueba llego:
-  200 en 762 ms, cruzado con los logs. No llega nada mas porque el numero
-  esta desconectado de la plataforma, no por el servidor.
+- **El bot corre en AWS desde el 15/9** (Lightsail, Ohio, `3.133.173.247`), y
+  recibe trafico real desde el 18/09. `infra/aws/` ya esta en `main`: los
+  deploys se hacen con `infra/aws/deploy.sh`, sin argumentos.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- En curso: **Bloque 36**, reconectar el numero. El Bloque 35 (servidor) esta
-  terminado y probado contra `https://3-133-173-247.sslip.io/webhook`; su PR
-  se abre cuando lleguen mensajes reales. Hasta mergearlo, `main` no tiene
-  `infra/aws/` y `deploy.sh` sin argumentos no funciona.
-- Al reconectar hay que verificar si cambian `phone_number_id`, `waba_id` y
-  el token: de eso dependen el envio, la deteccion del canal del broker y la
-  exclusion de numeros internos en el recontacto.
+- **Bloques 31 y 34 mergeados el 19/09.** Falta el deploy desde `main` para
+  que corran en el servidor.
+- **A verificar: ¿te llegan los borradores al ...6699?** Todo lo que el bot le
+  manda al broker es texto libre, y Meta solo lo entrega si el ...6699 le
+  escribio a la linea del bot (...4543) en las ultimas 24 hs. Si no, responde
+  200 y no entrega nada, sin error. Vale para los borradores y para el aviso
+  de fallos del Bloque 34. Ver `docs/TASKS.md` Bloque 34, riesgos abiertos.
 - **No levantar el bot en la laptop**: serían dos bots con las mismas
   credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
@@ -41,9 +40,6 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## Esperan una decisión tuya
 
-- [ ] **Rotar el token de Meta que entro por WhatsApp** el 18/09 (lo mando la
-      persona de DoubleTick, desde ...9954) y **borrar o redactar esa entrada**
-      del audit log: quedo en texto plano. No es el token que usa el bot.
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.
@@ -53,8 +49,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - [ ] **El repo de GitHub es público.** `.env` y `data/` nunca se commitearon,
       pero conviene revisar el historial por los incidentes de datos de los
       Bloques 10 y 12, y decidir si el repo debería ser privado.
-- [ ] **Bloque 34, avisos durante una caída de la API**: ¿agrupados cada N
-      minutos, o uno por mensaje?
+- [ ] **Mensajes que no son texto** (audios, fotos): hoy se cuentan pero no
+      quedan en el audit log ni te avisan. ¿Querés que queden registrados, y
+      que te avise uno por uno?
 - [ ] **Documentación desactualizada**: `CLAUDE.md` dice que Tokko corre contra
       el mock y que la retención no borra, y hoy las dos cosas son falsas.
       `docs/ONBOARDING.md` tiene unos 25 commits de atraso. ¿Se actualizan antes
@@ -62,18 +59,12 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 ## PRs esperando revisión
 
-- [ ] `bloque-35-deploy-aws`: el bot corriendo en AWS Lightsail, mas la
-      investigacion del Bloque 36 (el canal cortado) y su resolucion.
-- [ ] `bloque-31-plantilla-una-vez`: la plantilla fija sale una sola vez por
-      conversación.
+Ninguno. Desde el 19/09 los PRs los revisa y mergea Claude, salvo tres cosas
+que siguen necesitando tu OK: apagar el modo silencioso, cualquier cambio que
+haga que el bot le escriba a clientes, y borrar datos.
 
 ## Bloquea apagar el modo silencioso
 
-- [ ] **Bloque 34**: el audit log se escribe antes de clasificar, para que una
-      caída de la API no vuelva a perder mensajes. El pre-mortem está commiteado
-      en la rama `bloque-34-audit-antes-de-clasificar`, sin código. **En pausa**
-      mientras se sube el bot.
-- [ ] **Bloque 31**: mergear (ver arriba).
 - [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:
       `recontactoPolicy.ts` y `topeDiarioStore.ts` usan la hora local del
       proceso. En un servidor en UTC, la ventana de 9 a 20 queda corrida 3 horas

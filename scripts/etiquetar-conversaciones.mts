@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NumerosInternos } from "../apps/orchestrator/src/jobs/numerosInternos.js";
+import { colapsarPorMensaje, esResuelta } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AUDIT = path.join(REPO, "apps/orchestrator/data/audit_log.jsonl");
@@ -34,13 +35,17 @@ interface Entrada {
   timestamp: string;
   incomingMessage?: string;
   matchedIntentId: string;
+  messageId?: string;
+  etapa?: string;
 }
 
-const entradas: Entrada[] = fs
+// Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
+// recibido y la que lo resuelve, y sin colapsar se contaria dos veces.
+const entradas: Entrada[] = colapsarPorMensaje(fs
   .readFileSync(AUDIT, "utf8")
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((l) => JSON.parse(l) as Entrada);
+  .map((l) => JSON.parse(l) as Entrada));
 
 interface Conv {
   id: string;
@@ -56,7 +61,9 @@ for (const e of entradas) {
     porId.set(e.conversationId, c);
   }
   c.mensajes.push(e);
-  c.intents.push(e.matchedIntentId);
+  // Un centinela (fallido, recibido sin resolver) no es algo que decidió el
+  // clasificador: contarlo sesgaría "perdidos" por una caída, no por él.
+  if (esResuelta(e)) c.intents.push(e.matchedIntentId);
 }
 for (const c of porId.values()) c.mensajes.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 

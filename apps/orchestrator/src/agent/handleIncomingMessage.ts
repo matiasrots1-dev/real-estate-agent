@@ -18,6 +18,7 @@ import type { ResponseComposer } from "./composer.js";
 import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier } from "./brokerNotifier.js";
 import type { AuditLogStore } from "./auditLog.js";
+import { colapsarPorMensaje } from "./auditPorMensaje.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { ConversationStateStore } from "./conversationStateStore.js";
 import { idleState } from "./conversationStateStore.js";
@@ -77,12 +78,25 @@ async function leerHistorial(
 ): Promise<{ entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null> {
   try {
     const entradas: AuditLogEntry[] = [];
-    for (const entrada of await deps.auditLog.readAll()) {
+    // Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
+    // `recibido` y la que lo resuelve, y sin colapsar el clasificador vería
+    // cada mensaje anterior dos veces.
+    for (const entrada of colapsarPorMensaje(await deps.auditLog.readAll())) {
       // Igualdad EXACTA del conversationId, nunca comparacion canonica: un
       // match flojo mezclaria el hilo de dos personas distintas y el
       // clasificador leeria la conversacion de otro (docs/TASKS.md Bloque 17,
       // el leadId inconsistente).
       if (entrada.conversationId !== message.from) continue;
+      // El mensaje actual ya está en el audit log: su `recibido` se escribe
+      // antes de encolar. Sin este filtro el clasificador lo vería como si
+      // fuera un mensaje anterior de la misma persona.
+      if (entrada.messageId === message.messageId) continue;
+      // Un `recibido` sin resolver de esta conversación es, casi siempre, un
+      // mensaje POSTERIOR que espera en la cola detrás de este: la cola es
+      // serial por conversación, así que los anteriores ya se resolvieron.
+      // Si entrara, el clasificador leería el futuro como si fuera el mensaje
+      // más reciente. Los `fallido` sí entran: el cliente los escribió antes.
+      if (entrada.etapa === "recibido") continue;
       entradas.push(entrada);
     }
     const ultimoContacto = (await deps.ultimoContactoStore?.get(message.from)) ?? null;
@@ -530,6 +544,9 @@ async function appendAudit(
     escalationRule,
     escalationReason,
     responseSent: responseText,
+    // Vincula esta entrada con la `recibido` del mismo mensaje, que se escribió
+    // al llegar (docs/TASKS.md Bloque 34).
+    messageId: message.messageId,
   };
   await deps.auditLog.append(entry);
 }

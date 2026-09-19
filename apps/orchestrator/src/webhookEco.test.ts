@@ -341,4 +341,52 @@ describe("corpus de estilo del broker", () => {
 
     expect((await estilo.all())[0]?.intent).toBe("agendar_visita");
   });
+
+  // Bloque 34: un mensaje que falló, o que llegó y nunca se resolvió, lleva un
+  // intent centinela. No se sabe qué estaba respondiendo el broker, así que el
+  // ejemplo no se guarda: ni con el centinela, ni con el intent de un mensaje
+  // anterior, que puede ser de otro tema. Lo encontró el mutation testing.
+  it("si el último mensaje del cliente falló, no se guarda el ejemplo", async () => {
+    const { baseUrl, queue, estilo, auditLog } = await levantar([CLIENTE]);
+    await clienteEscribio(auditLog, CLIENTE, "agendar_visita", "2030-03-17T08:00:00.000Z");
+    await auditLog.append({
+      id: "audit-fallido",
+      conversationId: CLIENTE,
+      timestamp: ANTES_DEL_ECO,
+      incomingMessage: "otra cosa que pregunto",
+      matchedIntentId: "procesamiento_fallido",
+      confidence: null,
+      toolsCalled: [],
+      escalatedToBroker: true,
+      messageId: "wamid.FALLIDO",
+      etapa: "fallido",
+    });
+
+    await postear(baseUrl, ecoHacia(CLIENTE, 1900000000, "Perfecto, lo coordinamos para esta semana entonces"));
+    await queue.idle();
+
+    expect(await estilo.all()).toHaveLength(0);
+  });
+
+  it("si el último mensaje llegó y nunca se resolvió, tampoco", async () => {
+    const { baseUrl, queue, estilo, auditLog } = await levantar([CLIENTE]);
+    await clienteEscribio(auditLog, CLIENTE, "agendar_visita", "2030-03-17T08:00:00.000Z");
+    await auditLog.append({
+      id: "audit-recibido",
+      conversationId: CLIENTE,
+      timestamp: ANTES_DEL_ECO,
+      incomingMessage: "otra cosa que pregunto",
+      matchedIntentId: "sin_clasificar",
+      confidence: null,
+      toolsCalled: [],
+      escalatedToBroker: false,
+      messageId: "wamid.SIN_RESOLVER",
+      etapa: "recibido",
+    });
+
+    await postear(baseUrl, ecoHacia(CLIENTE, 1900000000, "Perfecto, lo coordinamos para esta semana entonces"));
+    await queue.idle();
+
+    expect(await estilo.all()).toHaveLength(0);
+  });
 });

@@ -19,6 +19,7 @@ import { createRequestListener } from "./app.js";
 import { SerialConversationQueue } from "./backgroundQueue.js";
 import { loadCatalog } from "./agent/intentCatalog.js";
 import { InMemoryAuditLogStore } from "./agent/auditLog.js";
+import { colapsarPorMensaje } from "./agent/auditPorMensaje.js";
 import { InMemoryAppointmentStore } from "./agent/appointmentStore.js";
 import { InMemoryConversationStateStore } from "./agent/conversationStateStore.js";
 import { InMemoryGlobalPauseStore } from "./agent/globalPauseStore.js";
@@ -234,7 +235,9 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
 
-    const entries = await auditLog.readAll();
+    // Una entrada por mensaje, como lo lee el producto: desde el Bloque 34 cada
+    // mensaje deja tambien una `recibido`, escrita antes de clasificar.
+    const entries = colapsarPorMensaje(await auditLog.readAll());
     const entry = entries.find((e) => e.conversationId === "5491100000001");
     expect(entry).toBeDefined();
     expect(entry).toMatchObject({
@@ -255,7 +258,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
     expect(res.status).toBe(200);
 
-    const entries = await auditLog.readAll();
+    const entries = colapsarPorMensaje(await auditLog.readAll());
     const entry = entries.find((e) => e.conversationId === "5491100000003");
     expect(entry).toMatchObject({
       matchedIntentId: "reclamo_queja",
@@ -276,7 +279,7 @@ describe("loop end-to-end: webhook -> consulta_disponibilidad -> mcp-tokko real 
 
     expect(res.status).toBe(200);
 
-    const entries = await auditLog.readAll();
+    const entries = colapsarPorMensaje(await auditLog.readAll());
     const entry = entries.find((e) => e.conversationId === "5491100000004");
     expect(entry).toMatchObject({
       matchedIntentId: "consulta_precio_condiciones",

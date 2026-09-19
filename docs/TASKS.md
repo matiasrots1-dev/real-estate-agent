@@ -1838,6 +1838,179 @@ de otra, el conjunto cambia en silencio y la supresion aplica donde no debe.
       el agente empieza a responderle al cliente. Hasta entonces el camino
       corre pero no cambia lo que recibe nadie.
 
+## Bloque 34 — El audit log se escribe SIEMPRE, antes de clasificar
+**Paso de verdad el 2026-08-28.** Se acabo el credito de la API de Anthropic y
+los mensajes entrantes se evaporaron: `/webhook` respondio 200, el proveedor
+los dio por entregados, el `.catch` de la cola lo escribio solo en consola, y
+no quedo entrada en `audit_log` ni notificacion al broker. `npm run pendientes`
+tampoco los muestra, porque lee el audit log.
+
+Decision del dueno del repo: **el registro de que alguien escribio no puede
+depender de que la API de Anthropic funcione.** El audit log se escribe con lo
+que llego —telefono, texto, timestamp— ANTES de intentar clasificar. Si la
+clasificacion falla, la entrada queda marcada como fallida y se escala con el
+texto crudo.
+
+### Lo que hizo falta medir antes de disenar
+- `AuditLogEntry` **no tiene `messageId`**. Sin eso no se puede vincular la
+  entrada de "llego" con la de "se resolvio", y todo consumidor que cuenta
+  entradas pasaria a contar doble.
+- **El camino de notificacion tambien usa el LLM.**
+  `notifyBrokerBestEffort` llama a `composeDraft` (Claude) dentro del mismo
+  `try`. El arreglo ingenuo — atrapar el error del clasificador y avisarle al
+  broker — habria fallado por la misma causa que el error original.
+- Nada en disco guarda lo que llego: `LruMessageDeduplicator` y
+  `ContactosConocidos` son en memoria, y del `rawBody` solo se loguea el
+  **largo**, nunca el contenido.
+
+### Pre-mortem
+**1. El aviso de que fallo tambien falla.** Si el clasificador murio porque la
+API esta caida, `composeDraft` esta igual de muerto y la notificacion se
+pierde en su propio `catch`. El broker sigue sin enterarse y el bloque no
+sirvio para nada.
+   *Mitigado*: el camino de fallo **no llama al LLM**. `AvisoDeFallos` arma el
+   texto crudo y lo manda directo por WhatsApp. Test con el clasificador y el
+   borrador caidos a la vez.
+
+**2. Doble contabilidad silenciosa.** Con dos entradas por mensaje, todo lo
+que lee el audit log cambia de numero sin que nadie lo toque: `medir:*`,
+`pendientes`, la purga por retencion, y sobre todo `leerHistorial`, que le
+pasaria al clasificador el mismo mensaje repetido como contexto previo.
+   *Mitigado*: `messageId` en cada entrada y `colapsarPorMensaje` en todos los
+   lectores: el contexto del clasificador, el corpus de estilo, `pendientes`,
+   `medir:*` y `etiquetar`. Test de que el contexto no duplica.
+
+**3. La escritura del audit log tumba el mensaje.** Si la entrada de "llego"
+se escribe antes que todo y esa escritura falla, se pierde el mensaje entero
+— peor que hoy, porque hoy al menos el camino feliz funciona.
+   *Mitigado*: `registrarRecibido` y `registrarFallido` nunca tiran. Test con
+   un audit log que falla en la primera escritura: el mensaje se procesa igual.
+
+**4. Inundacion de notificaciones.** Si la API se cae dos horas y entran 40
+mensajes, son 40 escalamientos al WhatsApp del broker. La proteccion contra
+perder mensajes se convierte en la razon por la que deja de mirar el telefono.
+   *Mitigado*, con la opcion B que eligio el dueno del repo (2026-09-19): los
+   primeros 5 fallos de una caida salen sueltos; desde el sexto, un resumen
+   cada 15 minutos; y un aviso cuando se recupera.
+
+### Un caso que no estaba en el pre-mortem
+Al escribir el `recibido` **antes** de encolar, el mensaje actual ya esta en
+el audit log cuando `leerHistorial` arma el contexto. El clasificador habria
+visto el mensaje que esta clasificando como si fuera un mensaje anterior de
+la misma persona. Se excluye por `messageId`, con su propio test. Salio al
+disenar, no en produccion.
+
+### Como quedo
+- [x] `registrarRecibido` en `app.ts`, despues del dedup: la escritura
+      arranca antes de encolar (queda aunque el proceso muera antes de
+      procesarlo) y la tarea la espera antes de clasificar. No se espera
+      antes de encolar: ver "Revision del PR" mas abajo.
+- [x] La captura del fallo envuelve **todo** `handleIncomingMessage`, no solo
+      el clasificador: una caida de Tokko o de Calendar tambien es un mensaje
+      que se perderia. El error se relanza para que la cola lo siga
+      logueando.
+- [x] `AuditLogEntry` suma `messageId` y `etapa` (`recibido` | `fallido`),
+      opcionales: las entradas viejas y las de los jobs no cambian.
+- [x] El colapso se hace **al leer** y no en `readAll()`: si lo hiciera
+      `readAll()`, la purga de retencion reescribiria el archivo ya colapsado
+      y borraria registros sin contarlos como borrados.
+- [x] `pendientes` pone primero los mensajes `fallido` y los `recibido` que
+      nunca se resolvieron: nadie les contesto.
+- [x] En modo silencioso el aviso llega igual: `SilentModeSender` solo deja
+      pasar envios al broker, y el aviso va al broker.
+- [x] El mutation testing destapo un **error de logica** en el corpus de
+      estilo: si el ultimo mensaje del cliente fallaba y el broker contestaba
+      a mano, el ejemplo se guardaba con el intent de un mensaje anterior,
+      posiblemente de otro tema. Ahora no se guarda: si no se sabe que
+      pregunto, no se sabe que estaba respondiendo. Con dos tests.
+- [x] 25 tests nuevos; suite completa 606/606.
+- [x] **Mutation testing** de las mitigaciones, una por vez:
+      - 1. no se escribe el recibido: 4 tests en rojo
+      - 2. no se escribe el fallido: 1 tests en rojo
+      - 3. el fallo no se le avisa al broker: 3 tests en rojo
+      - 4. escribir el recibido puede tirar (FM3): 1 tests en rojo
+      - 5. leerHistorial no colapsa (FM2): 1 tests en rojo
+      - 6. el contexto incluye el mensaje actual: 1 tests en rojo
+      - 7. appendAudit sin messageId: 5 tests en rojo
+      - 8. sin agrupar: todos sueltos (FM4): 4 tests en rojo
+      - 9. sin aviso de recuperacion: 2 tests en rojo
+      - 10. corpus de estilo con el intent centinela: 2 tests en rojo
+      - 11. corpus de estilo salteando el mensaje sin resolver (la logica vieja): 2 tests en rojo
+
+### Revision del PR (#30): lo que se arreglo antes de mergear
+El code review encontro 15 cosas. Siete eran del propio bloque (regresiones
+o promesas que el bloque hace y no cumplia) y se arreglaron aca:
+- [x] **El clasificador leia el futuro.** En una rafaga, los `recibido` de
+      los mensajes que esperan en la cola ya estan en el audit log, y
+      `leerHistorial` los pasaba como contexto del mensaje anterior: "hola"
+      se clasificaba leyendo "quiero agendar" que llego despues. Ahora el
+      contexto excluye los `recibido` sin resolver; como la cola es serial
+      por conversacion, los anteriores ya estan resueltos. Los `fallido` si
+      entran: el cliente los escribio.
+- [x] **El orden de llegada dependia del disco.** Con `await` de la escritura
+      antes de encolar, dos mensajes seguidos se encolaban en el orden en que
+      termino cada escritura, no en el que llegaron.
+- [x] **Las ordenes del broker disparaban el aviso** ("contestale vos" sobre
+      su propio mensaje) y contaban para agrupar los fallos de clientes.
+- [x] **Un reproceso fallido tapaba una respuesta real.** Tras un reinicio el
+      dedup se pierde y Meta puede reentregar un mensaje ya contestado; si el
+      reproceso fallaba, `colapsarPorMensaje` mostraba `fallido`. Ahora gana
+      la etapa mas avanzada: resuelta > `fallido` > `recibido`.
+- [x] **`pendientes` escondia los `fallido`** de conversaciones que el agente
+      habia contestado alguna vez: "respondida" era de toda la conversacion.
+      Ahora es del ultimo mensaje. (Script sin tests: se verifico leyendo.)
+- [x] La entrada `fallido` decia "se le aviso al broker", pero se escribe
+      antes del aviso y el aviso puede no salir. Ya no lo afirma.
+- [x] Las mediciones descartaban el TEXTO de los mensajes fallidos, y con eso
+      el contexto dejaba de ser el de produccion. Ahora se conserva el texto
+      y solo el intent centinela queda fuera (`medir:*`, `etiquetar`).
+- [x] Mutation testing de los arreglos, uno por vez:
+      - M1. el contexto incluye los recibido sin resolver: 1 test en rojo
+      - M2. `await` de la escritura antes de encolar: 1 test en rojo
+      - M3. las ordenes del broker disparan el aviso: 2 tests en rojo
+      - M4. colapsar deja ganar a la ultima escrita: 1 test en rojo
+      - M5. la tarea no espera el recibido: **sobrevivio** — ningun test
+        tenia un disco lento. Se agrego uno; ahora 1 test en rojo.
+
+### Riesgos abiertos
+- [ ] **Todo lo que le llega al broker es texto libre** (`sendText`), y la
+      ventana de servicio de 24 hs de Meta aplica tambien a el: si el numero
+      del broker no le escribio a la linea del bot en las ultimas 24 hs, Meta
+      responde 200 y no entrega (Bloque 10 ya lo vio con el numero de
+      prueba). Vale para el aviso de fallos **y para los borradores del modo
+      silencioso**. No es de este bloque — viene del Bloque 5 — pero este
+      bloque existe para que el broker se entere, y con la ventana cerrada no
+      se entera. Pasa al Bloque 38.
+- [ ] **Un exito cualquiera cierra la caida.** En una caida parcial (Tokko
+      caido, Claude andando; o Claude caido y un cliente pausado que no lo
+      necesita) cada fallo sale suelto y el exito siguiente manda "volvio a
+      procesar". Es ruido, no perdida: el aviso de cada fallo sale igual.
+- [ ] **Una llamada que se cuelga no es un fallo.** Si la API de Anthropic no
+      responde (en vez de tirar error), la cola descarta la tarea a los 60 s
+      y sigue, pero no se escribe `fallido` ni sale aviso hasta que la
+      llamada termine: el SDK espera 10 minutos por intento, con reintentos.
+      Arreglo: timeout explicito en el cliente de Anthropic. Pasa al Bloque 38.
+- [ ] **Un envio al cliente que falla no es un fallo.** La captura termina
+      antes de `sendText`. En modo silencioso no se le manda nada al cliente,
+      asi que hoy no aplica; bloquea apagarlo. Pasa al Bloque 38.
+- [ ] El `fallido` no guarda que tools ya se habian llamado: si Calendar creo
+      el evento y despues fallo el redactor, el audit log no lo muestra.
+- [ ] Un `recibido` que queda huerfano por un reinicio (deploy con mensajes en
+      la cola) no se le avisa a nadie: solo aparece en `pendientes`. Se cruza
+      con el drenado al apagar del Bloque 35.
+- [ ] El corpus de estilo puede guardar un ejemplo con el centinela
+      `agente_pausado` (no es de este bloque, ya pasaba). Inofensivo: ese
+      intent nunca se usa para redactar.
+- [ ] El aviso de fallos vive en memoria: si el proceso se reinicia en medio
+      de una caida, el resumen pendiente se pierde. El registro de verdad
+      sigue en el audit log, donde cada mensaje queda como `fallido`.
+- [ ] **Los mensajes que no son texto** (audios, fotos) se cuentan en
+      `/health` pero no quedan en el audit log ni avisan. El 18/09 entro un
+      audio y no dejo rastro. Decision pendiente: si se registran, y si avisan
+      uno por uno.
+- [ ] Un mensaje que llega con el servidor caido se pierde antes de llegar
+      aca: el proveedor no reintenta. Este bloque no lo cubre.
+
 ## Bloque 32 — Contexto de conversacion en el clasificador
 Cierra la parte grande del Bloque 28. Salio de etiquetar A MANO 43
 conversaciones reales (`npm run etiquetar`), porque medir el clasificador

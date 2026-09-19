@@ -18,6 +18,9 @@ import type { UltimoContactoStore } from "./agent/ultimoContactoStore.js";
 import type { ContactosConocidos } from "./agent/contactosConocidos.js";
 import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
 import type { AuditLogStore } from "./agent/auditLog.js";
+import { colapsarPorMensaje, esResuelta } from "./agent/auditPorMensaje.js";
+import { registrarFallido, registrarRecibido } from "./agent/registroDeLlegada.js";
+import type { AvisadorDeFallos } from "./agent/avisoDeFallos.js";
 import { anonimizar } from "shared-types";
 
 export interface AppDeps extends HandleMessageDeps {
@@ -74,6 +77,12 @@ export interface AppDeps extends HandleMessageDeps {
   estiloBrokerStore?: EstiloBrokerStore;
   /** Direcciones de la cartera, para redactarlas del corpus de estilo. */
   direccionesConocidas?: string[];
+  /**
+   * Avisa al broker, con el texto crudo y sin pasar por Claude, cuando un
+   * mensaje no se pudo procesar (docs/TASKS.md Bloque 34). Sin esto el fallo
+   * igual queda registrado en el audit log, pero nadie se entera.
+   */
+  avisoDeFallos?: AvisadorDeFallos;
 }
 
 /**
@@ -92,15 +101,22 @@ async function intentQueRespondia(
 ): Promise<string | null> {
   if (!auditLog) return null;
   const limite = cuando.toISOString();
-  let mejor: { timestamp: string; intent: string } | null = null;
-  for (const entrada of await auditLog.readAll()) {
+  let mejor: { timestamp: string; intent: string; resuelta: boolean } | null = null;
+  // Una entrada por mensaje (docs/TASKS.md Bloque 34).
+  for (const entrada of colapsarPorMensaje(await auditLog.readAll())) {
     if (entrada.conversationId !== telefono) continue;
     if (entrada.timestamp > limite) continue;
     if (!mejor || entrada.timestamp > mejor.timestamp) {
-      mejor = { timestamp: entrada.timestamp, intent: entrada.matchedIntentId };
+      mejor = { timestamp: entrada.timestamp, intent: entrada.matchedIntentId, resuelta: esResuelta(entrada) };
     }
   }
-  return mejor?.intent ?? null;
+  // Si el último mensaje del cliente no se resolvió —falló, o llegó y nunca se
+  // clasificó—, su intent es un centinela y no se sabe qué estaba respondiendo
+  // el broker. No se guarda el ejemplo: ni con el centinela, ni con el intent
+  // de un mensaje anterior, que puede ser de otro tema. Lo encontró el mutation
+  // testing del Bloque 34.
+  if (!mejor || !mejor.resuelta) return null;
+  return mejor.intent;
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -355,12 +371,41 @@ async function handleIncomingWebhook(
 
   metrics.registrar("procesado");
 
+  // Lo que llegó queda registrado ANTES de clasificar, siempre (docs/TASKS.md
+  // Bloque 34). El 2026-08-28 se acabó el crédito de la API de Anthropic y los
+  // mensajes se evaporaron: 200 al proveedor y nada en el audit log. La
+  // escritura arranca antes de encolar, para que quede aunque el proceso muera
+  // antes de procesarlo, y nunca tira: si falla, el mensaje se procesa igual.
+  //
+  // Se encola SIN esperarla, y la tarea la espera antes de clasificar. Con un
+  // `await` acá, dos mensajes seguidos del mismo teléfono se encolarían en el
+  // orden en que terminó cada escritura a disco, no en el que llegaron.
+  const recibidoRegistrado = registrarRecibido(deps.auditLog, message);
+
+  // Las órdenes del broker no cuentan para el aviso de fallos: es una alarma
+  // sobre clientes sin respuesta, y al broker le diría "contestale vos" sobre
+  // su propio mensaje. Él ya se entera: le falta la confirmación de la orden.
+  const avisoDeFallos = message.from === deps.brokerWhatsappNumber ? undefined : deps.avisoDeFallos;
+
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la
   // serialización que antes daba de casualidad la lentitud del handler, y los
   // stores JSON (leer-entero → mutar → escribir-entero, sin lock) se pisan.
   queue.enqueue(message.from, async () => {
-    const result = await handleIncomingMessage(message, deps);
+    await recibidoRegistrado;
+    let result: Awaited<ReturnType<typeof handleIncomingMessage>>;
+    try {
+      result = await handleIncomingMessage(message, deps);
+    } catch (error) {
+      // Cualquier fallo del procesamiento, no solo del clasificador: una caída
+      // de Tokko o de Calendar también es un mensaje que se perdería. Queda
+      // como `fallido` y el broker recibe el texto crudo por un camino que no
+      // pasa por Claude. Se relanza para que la cola lo siga logueando.
+      await registrarFallido(deps.auditLog, message, error);
+      await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
+      throw error;
+    }
+    await avisoDeFallos?.registrarExito();
     // responseText es null cuando el agente está pausado para este
     // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
     // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
