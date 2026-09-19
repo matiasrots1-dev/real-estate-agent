@@ -221,6 +221,112 @@ describe("handleIncomingMessage — intents que siempre escalan (Bloque 4)", () 
   });
 });
 
+// docs/TASKS.md Bloque 38a. Antes el borrador y el aviso iban en el mismo
+// `try`: si fallaba el borrador, el broker no recibía nada.
+describe("handleIncomingMessage — el aviso al broker no depende del borrador (Bloque 38a)", () => {
+  function borradorQueFalla(): DraftReplyComposer {
+    return {
+      composeDraft: vi.fn(async () => {
+        throw new Error("529 Overloaded");
+      }),
+    };
+  }
+
+  it("si el borrador falla, el aviso sale igual, sin borrador y con el motivo", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    const result = await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        auditLog,
+      })
+    );
+
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(brokerNotifier.notifications[0]).toMatchObject({ matchedIntentId: "reclamo_queja", draftReply: null });
+    expect(brokerNotifier.notifications[0].motivoSinBorrador).toContain("529 Overloaded");
+    // Lo que recibe el cliente no cambia.
+    const reclamoQueja = catalog.intents.find((i) => i.id === "reclamo_queja");
+    expect(result.responseText).toBe(reclamoQueja?.response.template);
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_borrador");
+  });
+
+  // En modo silencioso el aviso es lo único que produce el bot.
+  it("en modo silencioso también", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        draftComposer: borradorQueFalla(),
+        brokerNotifier,
+        auditLog,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(brokerNotifier.notifications[0].draftReply).toBeNull();
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("sin_borrador");
+  });
+
+  it("si el aviso no se puede mandar, el mensaje no falla y el audit log lo dice", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const brokerNotifier: BrokerNotifier = {
+      notify: vi.fn(async () => {
+        throw new Error("WhatsApp Cloud API caída");
+      }),
+    };
+
+    await expect(
+      handleIncomingMessage(
+        incoming("esto es un desastre"),
+        baseDeps({ classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }), brokerNotifier, auditLog })
+      )
+    ).resolves.toBeDefined();
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.escalatedToBroker).toBe(true);
+    expect(entry.avisoAlBroker).toBe("fallo");
+  });
+
+  it("con borrador, el audit log registra el aviso como enviado", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        brokerNotifier: recordingBrokerNotifier(),
+        auditLog,
+      })
+    );
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBe("enviado");
+  });
+
+  it("sin a quién avisar, el audit log no inventa un aviso", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+
+    await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({ classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }), auditLog })
+    );
+
+    const [entry] = await auditLog.readAll();
+    expect(entry.avisoAlBroker).toBeUndefined();
+  });
+});
+
 describe("handleIncomingMessage — intents reactivos de un solo turno", () => {
   it("consulta_disponibilidad: ejecuta el handler, no escala, no notifica al broker", async () => {
     const brokerNotifier = recordingBrokerNotifier();

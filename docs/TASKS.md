@@ -2521,7 +2521,9 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       cierre (un fin de semana sin escribirle al bot). Opciones: una
       plantilla aprobada para avisos al broker, o que el broker mantenga la
       ventana abierta escribiendole al bot.
-- [ ] **Si falla la notificacion al broker, nadie se entera.** Si falla el
+- [x] *(38a: si falla el borrador, el aviso sale igual; si falla el envio,
+      queda en el audit log como `avisoAlBroker: fallo`.)*
+      **Si falla la notificacion al broker, nadie se entera.** Si falla el
       borrador (Claude) o el envio, el escalamiento se pierde en su propio
       `catch`. Viene del Bloque 5. El aviso de fallos del Bloque 34 no lo
       cubre: ese salta cuando falla el procesamiento, no la notificacion.
@@ -2530,6 +2532,60 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       La cola descarta la tarea a los 60 s, pero no se escribe `fallido` ni
       sale aviso hasta que la llamada termine. Arreglo: timeout explicito en
       el cliente de Anthropic.
+
+### Orden de trabajo (decidido al arrancar, 19/09)
+Un PR por camino de codigo, para poder atribuir un fallo a un cambio:
+38a aviso al broker sin borrador → 38b timeout de Anthropic → 38c plantillas
+crudas → 38d envios al cliente → 38e supresion de la plantilla → 38f
+deteccion de la respuesta del broker. La ventana de 24 hs espera una
+decision del dueno del repo (plantilla aprobada o no).
+
+### 38a — Si el borrador falla, el aviso al broker sale igual
+Hoy `notifyBrokerBestEffort` redacta el borrador con Claude y manda el aviso
+dentro del mismo `try`: si el borrador falla, **no sale nada** y el error
+queda solo en consola. El clasificador y el borrador son llamadas distintas:
+una puede andar y la otra no (un 529 de sobrecarga, un rate limit, un
+timeout en la llamada mas larga). En modo silencioso el aviso es lo unico que
+produce el bot, asi que ahi se pierde el mensaje entero para el broker.
+
+**Pre-mortem**
+
+**1. El aviso sin borrador sale, pero no se entiende.** Si el texto dice
+`null` o deja el bloque del borrador vacio, el broker no sabe si falta el
+borrador o si el bot no tenia nada que sugerir, y puede no contestar.
+   *Mitigacion*: el aviso dice explicitamente que no hay borrador, por que, y
+   que conteste el. Test del texto.
+
+**2. El aviso tambien falla y el audit log dice que se escalo como siempre.**
+Si lo que falla es el envio (WhatsApp caido, token vencido), no hay forma de
+avisarle por el mismo canal. Si el audit log no lo registra, nadie puede
+saber despues que ese escalamiento nunca le llego.
+   *Mitigacion*: campo nuevo `avisoAlBroker` en la entrada del audit log
+   (`enviado` / `sin_borrador` / `fallo`). Test de cada caso. Un fallo del
+   aviso no hace fallar el mensaje: si tirara, el mensaje pasaria a
+   `fallido` y el aviso de fallos del Bloque 34 mandaria otro aviso por el
+   mismo canal que acaba de fallar.
+
+**3. El borrador no falla: se cuelga.** Sin timeout, la llamada espera hasta
+10 minutos por intento, con reintentos, y el aviso sin borrador no sale
+hasta que se rinda.
+   *No se mitiga aca*: es 38b. Hasta entonces, riesgo asumido.
+
+**Como quedo**
+- [x] `notifyBrokerBestEffort` separa el borrador del aviso y nunca tira. Si
+      el borrador falla, el aviso sale con "Sin borrador: no se pudo redactar
+      (motivo). Contestale vos."
+- [x] Campo `avisoAlBroker` en el audit log: `enviado`, `sin_borrador` o
+      `fallo`. `enviado` significa que WhatsApp lo acepto, no que llego (la
+      ventana de 24 hs sigue abierta como riesgo).
+- [x] 6 tests nuevos. Mutation testing, una por vez:
+      - D1. si falla el borrador no sale el aviso (lo de antes): 2 tests en rojo
+      - D2. un aviso que falla hace fallar el mensaje: 2 tests en rojo
+      - D3. el audit log siempre dice `enviado`: 2 tests en rojo
+      - D4. el audit log no registra el aviso: 4 tests en rojo
+      - D5. el texto sin borrador muestra un borrador vacio: 1 test en rojo
+      - D6. el modo silencioso no registra el aviso: 1 test en rojo
+      - D7. el aviso sin el motivo: 1 test en rojo
 
 ### Muerde al apagar el modo silencioso
 - [ ] **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja

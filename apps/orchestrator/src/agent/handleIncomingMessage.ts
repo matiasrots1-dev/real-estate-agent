@@ -19,6 +19,7 @@ import type { DraftReplyComposer } from "./draftComposer.js";
 import type { BrokerNotifier } from "./brokerNotifier.js";
 import type { AuditLogStore } from "./auditLog.js";
 import { colapsarPorMensaje } from "./auditPorMensaje.js";
+import { describirError } from "./registroDeLlegada.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { ConversationStateStore } from "./conversationStateStore.js";
 import { idleState } from "./conversationStateStore.js";
@@ -469,11 +470,22 @@ async function finalizeNonEscalating(
   // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
   // que el problema que el modo silencioso vino a resolver.
   if (deps.modoSilencioso) {
-    await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO);
+    const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO);
     // `responseSent: undefined` a propósito: no se envió nada, y el audit log
     // no puede decir lo contrario. Es el registro que se usa para reconstruir
     // qué recibió cada persona.
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, undefined, MOTIVO_SILENCIOSO, undefined);
+    await appendAudit(
+      deps,
+      message,
+      intent.id,
+      confidence,
+      toolsCalled,
+      false,
+      undefined,
+      MOTIVO_SILENCIOSO,
+      undefined,
+      aviso
+    );
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: false };
   }
 
@@ -499,7 +511,7 @@ async function finalizeEscalation(
 ): Promise<HandleMessageResult> {
   // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
   // separa "el agente se calla" de "el mensaje se pierde".
-  await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
+  const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
 
   // La plantilla ya salio en esta conversacion y el broker todavia no
   // contesto: se escalo igual, pero al cliente no le llega otra copia de la
@@ -507,17 +519,17 @@ async function finalizeEscalation(
   // registro de que recibio cada persona y no puede decir que se envio algo
   // que no se envio.
   if (plantilla.suprimir && !deps.modoSilencioso) {
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, plantilla.motivo, undefined);
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, plantilla.motivo, undefined, aviso);
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
 
   if (deps.modoSilencioso) {
     // Ya escalaba y ya notificaba al broker; lo único que cambia es que la
     // plantilla de espera tampoco sale.
-    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, undefined);
+    await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, undefined, aviso);
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
-  await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, responseText);
+  await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, rule, reason, responseText, aviso);
   return { responseText, intentId: intent.id, confidence, escalatedToBroker: true };
 }
 
@@ -530,7 +542,8 @@ async function appendAudit(
   escalatedToBroker: boolean,
   escalationRule: EscalationRule | undefined,
   escalationReason: string | undefined,
-  responseText: string | undefined
+  responseText: string | undefined,
+  avisoAlBroker?: AvisoAlBroker
 ): Promise<void> {
   const entry: AuditLogEntry = {
     id: randomUUID(),
@@ -547,20 +560,44 @@ async function appendAudit(
     // Vincula esta entrada con la `recibido` del mismo mensaje, que se escribió
     // al llegar (docs/TASKS.md Bloque 34).
     messageId: message.messageId,
+    avisoAlBroker,
   };
   await deps.auditLog.append(entry);
 }
 
+type AvisoAlBroker = NonNullable<AuditLogEntry["avisoAlBroker"]>;
+
+/**
+ * Avisa al broker con un borrador. **Nunca tira**: un fallo del aviso no
+ * puede hacer fallar el mensaje (docs/TASKS.md Bloque 38a). Si tirara, el
+ * mensaje pasaría a `fallido` y el aviso de fallos del Bloque 34 mandaría otro
+ * aviso por el mismo canal que acaba de fallar.
+ *
+ * El borrador y el aviso van separados: el borrador es una llamada a Claude
+ * distinta del clasificador y puede fallar sola (sobrecarga, rate limit).
+ * Antes iban en el mismo `try`, y si fallaba el borrador no salía nada.
+ *
+ * Devuelve qué pasó, para el audit log; `undefined` si no hay a quién avisar.
+ */
 async function notifyBrokerBestEffort(
   deps: HandleMessageDeps,
   message: IncomingWhatsAppMessage,
   intent: Intent,
   confidence: number | null,
   escalationReason: string | undefined
-): Promise<void> {
-  if (!deps.brokerNotifier) return;
+): Promise<AvisoAlBroker | undefined> {
+  if (!deps.brokerNotifier) return undefined;
+
+  let draftReply: string | null = null;
+  let motivoSinBorrador: string | undefined;
   try {
-    const draftReply = await deps.draftComposer.composeDraft(message.text, intent.description);
+    draftReply = await deps.draftComposer.composeDraft(message.text, intent.description);
+  } catch (error) {
+    motivoSinBorrador = describirError(error);
+    console.error("No se pudo redactar el borrador; el aviso al broker sale sin él:", error);
+  }
+
+  try {
     await deps.brokerNotifier.notify({
       conversationId: message.from,
       incomingMessage: message.text,
@@ -568,8 +605,11 @@ async function notifyBrokerBestEffort(
       confidence,
       escalationReason,
       draftReply,
+      motivoSinBorrador,
     });
   } catch (error) {
     console.error("No se pudo notificar al broker (el cliente igual recibe su respuesta):", error);
+    return "fallo";
   }
+  return draftReply === null ? "sin_borrador" : "enviado";
 }

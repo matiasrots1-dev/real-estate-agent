@@ -22,6 +22,22 @@ describe("formatBrokerNotificationText", () => {
     expect(text).toContain(notification.draftReply);
   });
 
+  // docs/TASKS.md Bloque 38a: sin borrador, el aviso lo dice explícitamente.
+  it("sin borrador, lo dice, con el motivo, y no muestra un bloque de borrador vacío", () => {
+    const text = formatBrokerNotificationText({
+      ...notification,
+      draftReply: null,
+      motivoSinBorrador: "529 Overloaded",
+    });
+    expect(text).toContain("Sin borrador");
+    expect(text).toContain("529 Overloaded");
+    expect(text).toContain("Contestale vos");
+    expect(text).not.toContain("Borrador sugerido");
+    expect(text).not.toContain("null");
+    // El resto del aviso sigue igual.
+    expect(text).toContain(notification.incomingMessage);
+  });
+
   it("omite la línea de motivo si no hay escalationReason", () => {
     const text = formatBrokerNotificationText({ ...notification, escalationReason: undefined });
     expect(text).not.toContain("Motivo:");

@@ -28,4 +28,15 @@ export interface AuditLogEntry {
    * Ausente: entrada resuelta, como todas las anteriores al Bloque 34.
    */
   etapa?: "recibido" | "fallido";
+  /**
+   * Qué pasó con el aviso al broker, en las entradas que lo intentaron
+   * (docs/TASKS.md Bloque 38a):
+   * - `enviado`: con borrador. WhatsApp lo aceptó, lo que no garantiza que
+   *   llegue (ventana de 24 hs, Bloque 38).
+   * - `sin_borrador`: el borrador falló y el aviso salió sin él.
+   * - `fallo`: el aviso no se pudo mandar. El broker no se enteró por
+   *   WhatsApp.
+   * Ausente: no hubo aviso, o la entrada es anterior al Bloque 38a.
+   */
+  avisoAlBroker?: "enviado" | "sin_borrador" | "fallo";
 }

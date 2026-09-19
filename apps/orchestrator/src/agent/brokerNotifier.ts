@@ -7,7 +7,14 @@ export interface BrokerNotification {
   /** `null` cuando el escalamiento surge de una continuación multi-turno (agendar/reprogramar visita), sin clasificación este turno. */
   confidence: number | null;
   escalationReason?: string;
-  draftReply: string;
+  /**
+   * `null` cuando el borrador no se pudo redactar (docs/TASKS.md Bloque 38a):
+   * el aviso sale igual, sin borrador. Antes, si fallaba el borrador, no
+   * salía nada.
+   */
+  draftReply: string | null;
+  /** Por qué no hay borrador, en una línea. Solo con `draftReply: null`. */
+  motivoSinBorrador?: string;
 }
 
 export interface BrokerNotifier {
@@ -23,7 +30,13 @@ export function formatBrokerNotificationText(n: BrokerNotification): string {
   ];
   if (n.escalationReason) lines.push(`Motivo: ${n.escalationReason}`);
   lines.push("", `Mensaje del cliente:`, `"${n.incomingMessage}"`);
-  lines.push("", `Borrador sugerido (revisar antes de mandar):`, n.draftReply);
+  if (n.draftReply === null) {
+    // Explícito, para que no se lea como "el bot no tenía nada que sugerir".
+    const motivo = n.motivoSinBorrador ? ` (${n.motivoSinBorrador})` : "";
+    lines.push("", `⚠️ Sin borrador: no se pudo redactar${motivo}. Contestale vos.`);
+  } else {
+    lines.push("", `Borrador sugerido (revisar antes de mandar):`, n.draftReply);
+  }
   return lines.join("\n");
 }
 
