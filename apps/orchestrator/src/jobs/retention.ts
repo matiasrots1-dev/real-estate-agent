@@ -126,7 +126,15 @@ export async function ejecutarRetencion(deps: RetentionJobDeps): Promise<Retenti
     muestra: total.muestra,
   };
 
-  await deps.reportStore.append(report);
+  // El purgado ya pasó: si guardar el reporte falla (disco lleno, una línea
+  // rota que no se pudo tolerar), la corrida no puede morir acá. Si muriera,
+  // `createRetentionJob` no llegaría a loguear el resumen, y esa línea del
+  // journal es el rastro que queda de un borrado (docs/TASKS.md Bloque 39).
+  try {
+    await deps.reportStore.append(report);
+  } catch (error) {
+    console.error(`jobs/retention: no se pudo guardar el reporte ${report.id}:`, error);
+  }
   return report;
 }
 

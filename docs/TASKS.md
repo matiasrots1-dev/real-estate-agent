@@ -2470,7 +2470,7 @@ cuando la escritura misma se corta.
       plantilla fija, esa conversacion pierde el registro y la plantilla
       puede volver a salir una vez (Bloque 31). Antes, la misma linea tumbaba
       el bot entero.
-- [ ] **El reporte de retencion** (`retentionReportStore.ts`) tambien es JSONL
+- [x] *(Resuelto en el Bloque 39.)* **El reporte de retencion** (`retentionReportStore.ts`) tambien es JSONL
       con `JSON.parse` sin `try`. Con una linea rota, la corrida siguiente
       tira al guardar el reporte, **despues** de haber purgado: con el borrado
       prendido, se borran datos y no queda reporte. El lector de este bloque
@@ -2516,10 +2516,11 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       modo silencioso, los escalamientos, el aviso de fallos del Bloque 34.
       Si el ...6699 no le escribio a la linea del bot (...4543) en las
       ultimas 24 hs, Meta responde 200 y **no entrega**, sin error (Bloque
-      10 ya lo vio con el numero de prueba). Primero hay que confirmar con el
-      dueno del repo si hoy le estan llegando. Opciones: una plantilla
-      aprobada para avisos al broker, o que el broker mantenga la ventana
-      abierta escribiendole al bot.
+      10 ya lo vio con el numero de prueba). **El dueno del repo confirmo el
+      19/09 que hoy le llegan**: el riesgo queda para cuando la ventana se
+      cierre (un fin de semana sin escribirle al bot). Opciones: una
+      plantilla aprobada para avisos al broker, o que el broker mantenga la
+      ventana abierta escribiendole al bot.
 - [ ] **Si falla la notificacion al broker, nadie se entera.** Si falla el
       borrador (Claude) o el envio, el escalamiento se pierde en su propio
       `catch`. Viene del Bloque 5. El aviso de fallos del Bloque 34 no lo
@@ -2560,6 +2561,149 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       darlo por bueno.
 - [ ] Fallar cerrado ante un error de lectura **persistente** suprime la
       plantilla para todos, indefinidamente (Bloque 31).
+
+## Bloque 39 — Una linea rota del reporte de retencion
+Mismo problema que el Bloque 37, en el otro JSONL que importa: el reporte de
+cada corrida de la retencion (`retentionReportStore.ts`). Salio de la
+revision del #31.
+
+### Lo que se midio antes de disenar (servidor, 19/09)
+- **Todavia no se borro nada**: 1132 corridas desde el 15/09, todas con 0
+  registros. La entrada mas vieja del audit log es del 26/07/2026, asi que el
+  primer borrado real sera a fines de julio de 2027. **No es urgente**: tiene
+  una mecha de unos 10 meses. Cuando lo propuse lo presente como "lo mas
+  urgente del backlog", y no lo era.
+- El scheduler aisla los jobs: si la retencion tira, los demas siguen.
+- `append` escribe el reporte y **despues** lee el archivo entero para
+  recortarlo a las ultimas 12 corridas. Con una linea rota:
+  - el reporte nuevo ya esta escrito, pero `readAll` tira;
+  - el recorte no se hace nunca mas y el archivo crece (288 lineas por dia);
+  - el job tira **antes** del `console.log` del resumen, asi que tambien se
+    pierde la linea del journal, que hoy es el unico rastro de un borrado con
+    mas de una hora (ver Bloque 40).
+
+### Pre-mortem
+**1. El reporte que se pega a la media linea se pierde.** Un corte a mitad de
+un `appendFile` deja media linea; el reporte siguiente se escribe detras y
+los dos quedan como una linea ilegible. Si ese reporte era el de una corrida
+que borro datos, no queda registro de que se borraron.
+   *Mitigacion*: antes de escribir se mira si el archivo termina en media
+   linea y se antepone el salto, en la misma escritura. Test con un archivo
+   que termina cortado.
+
+**2. Una linea rota frena el recorte para siempre y calla el resumen.** Ver
+arriba.
+   *Mitigacion*: lectura tolerante; las lineas rotas se avisan en el log (sin
+   repetir el aviso en cada corrida). Test de que `append` no tira y recorta
+   aunque haya una linea rota.
+
+**3. El recorte descarta lineas rotas recientes.** Si el recorte reescribiera
+solo los reportes legibles, una linea rota de la ultima hora desapareceria
+sin que nadie la pudiera revisar: el mismo borrado silencioso del modo de
+fallo 1 del Bloque 37.
+   *Mitigacion*: el recorte es **por posicion**, como la rotacion misma. Se
+   conserva todo desde el primer reporte que queda, lineas rotas incluidas;
+   las rotas anteriores a ese punto son mas viejas que lo que se conserva y
+   caen con la rotacion, igual que caeria un reporte legible. Test de las dos
+   mitades.
+
+### Decisiones
+- El lector tolerante y la reparacion del final viven en un modulo nuevo,
+  `agent/jsonl.ts`, que por ahora usa solo este store. **No se migra el
+  audit log** a ese modulo en este bloque: es otro camino, recien
+  desplegado, y mezclarlo impediria atribuir un fallo a un cambio
+  concreto. El corpus de estilo, cuando
+  se arregle, deberia usar el mismo modulo.
+
+### Como quedo
+- [x] `agent/jsonl.ts`: lectura tolerante con un validador por store
+      (`leerLineasJsonl`, `leerArchivoJsonl`), el aviso sin contenido
+      (`AvisoDeIlegibles`) y `saltoQueFalta`, que se mira en cada escritura
+      y nunca tira.
+- [x] `FileRetentionReportStore`:
+      - un reporte legible necesita `id`, una `corridaAt` fechable,
+        `totalBorrados`, `borradosPorStore` y `muestra`;
+      - las escrituras van en cola, de a una;
+      - el recorte corre recien al pasar el doble de `maxCorridas`, es por
+        posicion y, si falla, no hace fallar la corrida;
+      - el aviso sale con los numeros del archivo ya recortado.
+- [x] `jobs/retention.ts`: si guardar el reporte falla por cualquier causa,
+      se loguea el error y el resumen sale igual.
+- [x] 17 tests nuevos contra un archivo real, dos del job completo. Mutation
+      testing, una por vez:
+      - C1. sin reparar la linea cortada: 2 tests en rojo
+      - C2. reparar una vez por proceso: 1 test en rojo
+      - C3. lectura no tolerante (lo de antes): 8 tests en rojo
+      - C4. el recorte descarta las ilegibles: 2 tests en rojo
+      - C5. el recorte conserva todas las ilegibles (no rota): 1 test en rojo
+      - C6. sin aviso: 2 tests en rojo
+      - C7. aviso en cada lectura: 2 tests en rojo
+      - C8a. acepta una fecha vacia: **sobrevivio**, porque la linea del test
+        tambien fallaba por otros campos. Se corrigio el test: 1 en rojo
+      - C8b. acepta un reporte sin muestra: 1 test en rojo
+      - C9. recorte en cada corrida: 2 tests en rojo
+      - C10. aviso con los numeros de antes del recorte: **sobrevivio**,
+        porque el append siguiente disparaba el aviso correcto y lo tapaba.
+        Se corrigio el test: 1 en rojo
+      - C11. un recorte que falla hace fallar el append: 1 test en rojo
+      - C12. sin cola: 1 test en rojo
+      - C13. un fallo corta la cola: 1 test en rojo
+      - C14. el resumen depende de guardar el reporte: 1 test en rojo
+
+### Revision del PR (#33)
+La primera version arreglaba la linea rota y nada mas. La revision encontro
+que el objetivo del bloque, que el resumen del journal sobreviva, seguia
+dependiendo de que guardar el reporte no fallara **por ninguna otra causa**
+(disco lleno). Tambien encontro:
+- el recorte rompia la corrida si fallaba, aunque el reporte ya estuviera
+  escrito;
+- dos corridas superpuestas chocaban en el temporal: el scheduler no espera
+  a que termine la vuelta anterior. En Windows, ademas, `rename` falla si
+  otra operacion tiene el archivo abierto; se vio al probarlo. La solucion
+  de fondo fue la cola, no el nombre del temporal;
+- el recorte reescribia el archivo entero cada 5 minutos para agregar una
+  linea, y con eso los numeros de linea del aviso se corrian en cada corrida;
+- un error al cerrar el archivo en `saltoQueFalta` reemplazaba el valor de
+  retorno y hacia tirar la funcion.
+
+**Pregunta que lo habria agarrado antes** (la misma del Bloque 37, que no se
+aplico a los otros stores al cerrarlo): *"¿donde mas se escribe con
+`appendFile` y se lee con `JSON.parse`?"*. Un arreglo de una clase de bug
+no esta cerrado hasta buscar las otras instancias; el Bloque 37 las anoto
+como riesgo, y dejo el corpus de estilo todavia abierto.
+
+### Riesgos abiertos
+- [ ] El corpus de estilo (`estiloBrokerStore.ts`) sigue sin arreglar: con una
+      linea rota, `all()` devuelve vacio y `estilo:reanonimizar` lo borraria
+      entero. Deberia usar `jsonl.ts`.
+- [ ] El audit log tiene su propia copia de la misma logica (Bloque 37), con
+      el bug del `close()` que aca se arreglo: si cerrar el archivo falla, su
+      `saltoQueFalta` tira y la escritura no se hace. Se arregla al migrarlo
+      a `jsonl.ts`, en un cambio aparte.
+- [ ] **El scheduler no espera a que termine la vuelta anterior**
+      (`setInterval` + `void tick()`). Una vuelta de mas de 5 minutos
+      superpone todos los jobs, no solo la retencion: dos purgas del audit log
+      a la vez, dos corridas de recontacto. La cola de este bloque cubre solo
+      el reporte. Va con el Bloque 40.
+
+## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora (PROPUESTO)
+Encontrado al disenar el Bloque 39; **no se toca en ese bloque** porque es el
+mismo camino. Espera la decision del dueno del repo.
+
+- La retencion esta registrada en el scheduler, que corre cada 5 minutos
+  (`SCHEDULER_INTERVAL_MS`). El reporte conserva las ultimas 12 corridas:
+  **una hora**. El diseno del Bloque 15 decia "comparar la corrida de esta
+  semana con la de la anterior", pensando en corridas espaciadas.
+- Consecuencia desde julio de 2027: el reporte de una corrida que borro algo
+  desaparece en una hora, reemplazado por corridas nuevas. El unico rastro
+  que queda es una linea de resumen en el journal del servidor, sin muestra.
+- Consecuencia aparte: cada corrida que borra algo reescribe el audit log
+  entero. Cada 5 minutos, eso multiplica la ventana de la carrera entre la
+  purga y un `append` (riesgo abierto del Bloque 37).
+- Propuesta: la retencion corre **una vez por dia**, en horario tranquilo; y
+  el reporte se conserva por tiempo (por ejemplo 90 dias), no por cantidad.
+  Correr una vez por dia borra lo mismo, con hasta un dia de demora sobre los
+  12 meses.
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

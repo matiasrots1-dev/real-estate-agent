@@ -28,11 +28,11 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 - **Bloques 31, 34 y 37 mergeados y desplegados el 19/09** (03:21, `aa2ad15`).
   Verificado despues del deploy: `/health` OK, los tres MCP corriendo, modo
   silencioso forzado, 57 contactos conocidos cargados, ninguna linea rota.
-- **A verificar: ¿te llegan los borradores al ...6699?** Todo lo que el bot le
-  manda al broker es texto libre, y Meta solo lo entrega si el ...6699 le
-  escribio a la linea del bot (...4543) en las ultimas 24 hs. Si no, responde
-  200 y no entrega nada, sin error. Vale para los borradores y para el aviso
-  de fallos del Bloque 34. Ver `docs/TASKS.md` Bloque 38.
+- **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
+  el bot le manda al broker es texto libre, y Meta solo lo entrega si el
+  ...6699 le escribio a la linea del bot (...4543) en las ultimas 24 hs. Si
+  pasas un dia sin escribirle, Meta responde 200 y no entrega nada, sin
+  error. Ver `docs/TASKS.md` Bloque 38.
 - **No levantar el bot en la laptop**: serían dos bots con las mismas
   credenciales.
 - **Después de migrar, los datos de verdad quedan en el servidor.**
@@ -49,6 +49,15 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
       propios PRs), y tildar "Do not allow bypassing the above settings":
       Claude trabaja con tu cuenta, que es administradora, y sin ese tilde la
       regla no le aplica. Es un cambio de un minuto, desde tu cuenta.
+- [ ] **Bloque 40 (propuesto): la retencion corre cada 5 minutos y su reporte
+      dura una hora.** El reporte guarda 12 corridas, pensadas para comparar
+      semana contra semana. Desde julio de 2027, cuando empiece a borrar, el
+      reporte de un borrado desaparece en una hora. Propuesta: correrla una
+      vez por dia, en horario tranquilo, y conservar el reporte por tiempo
+      (por ejemplo 90 dias). Va junto con otro problema del mismo camino: el
+      scheduler no espera a que termine la vuelta anterior, asi que una vuelta
+      lenta superpone todos los jobs. No urge: hasta julio de 2027 no se borra
+      nada. ¿Lo hago?
 - [ ] **Activar el MFA del usuario raíz de AWS.** Verificado por CLI el 15/9:
       no está activo (`AccountMFAEnabled = 0`). El plan pago y la alarma de
       gasto sí quedaron bien.
@@ -116,12 +125,11 @@ haga que el bot le escriba a clientes, y borrar datos.
 - [ ] **Riesgos abiertos del Bloque 35**: una guarda en el código contra dos
       schedulers (laptop y servidor), drenar la cola al apagar, y una copia de
       los datos fuera de AWS.
-- [ ] **Riesgos abiertos del Bloque 37**: el reporte de retención tiene el
-      mismo problema de línea rota que tenía el audit log, y con el borrado
-      prendido es el más serio: la corrida tiraría **después** de purgar, y
-      quedarían datos borrados sin reporte. El corpus de estilo, igual (y
-      `estilo:reanonimizar` lo borraría entero). Los stores JSON enteros se
-      escriben sin temporal y rename.
+- [ ] **Riesgos abiertos de los Bloques 37 y 39**: el corpus de estilo tiene el
+      mismo problema de línea rota que tenían el audit log y el reporte de
+      retención (y `estilo:reanonimizar` lo borraría entero); ya está el
+      módulo `jsonl.ts` para arreglarlo. Los stores JSON enteros se escriben
+      sin temporal y rename.
 
 ## Riesgos asumidos (no son trabajo pendiente)
 
