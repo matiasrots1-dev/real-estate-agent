@@ -73,8 +73,19 @@ describe("parseIntentCatalog — la plantilla de espera", () => {
     esperaDesde = "fallback_low_confidence",
     plantillaFallback = "Dejame confirmarlo con el asesor y te respondo enseguida.",
     plantillaReclamo = "Te contacto con el asesor.",
-  }: { esperaDesde?: string; plantillaFallback?: string | null; plantillaReclamo?: string } = {}): string {
-    const templateFallback = plantillaFallback === null ? "" : `\n      template: "${plantillaFallback}"`;
+    marcarEspera = true,
+  }: {
+    esperaDesde?: string;
+    plantillaFallback?: string | null;
+    plantillaReclamo?: string;
+    marcarEspera?: boolean;
+  } = {}): string {
+    // `espera: true` lo exige el schema para la plantilla de espera genérica
+    // (docs/TASKS.md Bloque 38e).
+    const templateFallback =
+      plantillaFallback === null
+        ? ""
+        : `\n      template: "${plantillaFallback}"${marcarEspera ? "\n      espera: true" : ""}`;
     return `
 version: 1
 meta:
@@ -140,6 +151,12 @@ intents:
 
   it("falla si el intent de espera no existe", () => {
     expect(problemas(catalogo({ esperaDesde: "no_existe" })).join("\n")).toContain('no existe ningún intent "no_existe"');
+  });
+
+  // docs/TASKS.md Bloque 38e, modo de fallo 2: sin la marca, la frase de
+  // espera se repetiría como antes del Bloque 31 y nada lo mostraría.
+  it("falla si la plantilla de espera genérica no está marcada como frase de espera", () => {
+    expect(problemas(catalogo({ marcarEspera: false })).join("\n")).toContain('"espera: true"');
   });
 
   it("falla si el intent de espera no tiene plantilla", () => {

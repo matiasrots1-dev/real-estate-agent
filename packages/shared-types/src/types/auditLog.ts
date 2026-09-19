@@ -55,4 +55,10 @@ export interface AuditLogEntry {
   envio?: "fallo" | "parcial";
   /** Por qué falló el envío, en una línea. */
   envioMotivo?: string;
+  /**
+   * Por qué no salió la frase de espera, si se suprimió (docs/TASKS.md
+   * Bloques 31 y 38e). Va aparte de `escalationReason`, que conserva el motivo
+   * real del escalamiento.
+   */
+  supresion?: string;
 }

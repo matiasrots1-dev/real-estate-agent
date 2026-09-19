@@ -192,6 +192,9 @@ intents:
     response:
       style: template
       template: "Dejame confirmar esa condición con el asesor y te respondo a la brevedad."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: reclamo_queja
     description: "Cualquier mensaje con tono de disconformidad, enojo o reclamo."
@@ -211,6 +214,9 @@ intents:
     response:
       style: template
       template: "Entiendo, te voy a poner en contacto directo con el asesor para resolverlo cuanto antes."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: consulta_legal_contractual
     description: "Preguntas sobre rescisión, cláusulas contractuales, plazos legales."
@@ -229,6 +235,9 @@ intents:
     response:
       style: template
       template: "Es un tema para consultarlo puntualmente, te contacto con el asesor."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: hablar_con_persona
     description: "Pedido explícito de hablar con un humano."
@@ -247,6 +256,9 @@ intents:
     response:
       style: template
       template: "Por supuesto, te contacto con el asesor en breve."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   # Agregado tras etiquetar a mano 43 conversaciones reales (docs/TASKS.md
   # Bloque 32). Dos de los cinco leads que el clasificador perdía enteros eran
@@ -305,6 +317,9 @@ intents:
     response:
       style: template
       template: "¡Hola! Te paso con el asesor para coordinar, en breve te escribe."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: fallback_low_confidence
     description: "Intent no matcheado con confianza suficiente contra ningún otro intent."
@@ -320,6 +335,9 @@ intents:
     response:
       style: template
       template: "Dejame confirmarlo con el asesor y te respondo enseguida."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   # -------------------------------------------------------------------------
   # INTENTS PROACTIVOS (disparados por reglas temporales, no por mensaje entrante)

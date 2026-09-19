@@ -43,6 +43,13 @@ export const IntentResponseSchema = z.object({
   grounding_fields: z.array(z.string()).optional(),
   fallback_if_not_found: z.string().optional(),
   fallback_if_missing_field: z.string().optional(),
+  /**
+   * La plantilla es una frase de espera ("te paso con el asesor"): sale una
+   * sola vez por conversación mientras el broker no responda (docs/TASKS.md
+   * Bloques 31 y 38e). Una despedida o una confirmación NO son frases de
+   * espera, aunque también sean texto fijo.
+   */
+  espera: z.boolean().optional(),
   whatsapp_template_name: z.string().optional(),
   requires_preview_if_bulk: z.boolean().optional(),
 });
@@ -119,9 +126,17 @@ export const IntentCatalogSchema = z
       });
     }
 
+    if (espera && espera.response.espera !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["meta", "escalation_waiting_template_from"],
+        message: `el intent "${idEspera}" es la plantilla de espera genérica, así que su respuesta tiene que estar marcada "espera: true"`,
+      });
+    }
+
     catalogo.intents.forEach((intent, i) => {
       const plantilla = intent.response.template;
-      const debeSerDeEspera = intent.requires_broker === true || intent.id === idEspera;
+      const debeSerDeEspera = intent.requires_broker === true || intent.id === idEspera || intent.response.espera === true;
       if (debeSerDeEspera && plantilla && HUECO_DE_PLANTILLA.test(plantilla)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
