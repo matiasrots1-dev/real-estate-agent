@@ -34,6 +34,7 @@ function agendarDeps(overrides: Partial<AgendarVisitaDeps> = {}): AgendarVisitaD
     composer: { compose: vi.fn(async () => "respuesta") },
     slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
     language: "es-AR",
+    plantillaDeEspera: "Dejame confirmarlo con el asesor y te respondo enseguida.",
     ...overrides,
   };
 }
@@ -53,6 +54,7 @@ function reprogramarDeps(overrides: Partial<ReprogramarCancelarVisitaDeps> = {})
     appointmentStore: new InMemoryAppointmentStore(),
     slotConfirmationClassifier: { matchSlot: vi.fn(async () => ({ chosenIndex: 0 })) },
     reprogramActionClassifier: { extractAction: vi.fn(async () => ({ accion: "reprogramar" as const })) },
+    plantillaDeEspera: "Dejame confirmarlo con el asesor y te respondo enseguida.",
     ...overrides,
   };
 }

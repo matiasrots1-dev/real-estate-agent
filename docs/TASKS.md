@@ -2710,6 +2710,87 @@ llamadas), la guarda con alias, y la config sin el SDK. Quedan anotados:
 - [ ] Despues del deploy, mirar si aparecen `fallido` con "timed out" en el
       audit log (modo de fallo 1).
 
+### 38c — Ningun escalamiento le manda al cliente una plantilla con huecos
+Cuando algo escala por **baja confianza**, `handleIncomingMessage` responde
+con la plantilla **del propio intent**. Para los intents que escalan siempre
+es una plantilla de espera, y esta bien. Para los demas es la plantilla del
+caso exitoso, con huecos y afirmando algo que no paso: "Listo, {accion} tu
+visita de {direccion_corta}...", "Te paso el material de {direccion_corta}:",
+"Listo, {accion} para {alcance}.". Pasa desde el Bloque 5.
+
+**Lo que se encontro al medir**, ademas de lo que decia el Bloque 38:
+- El flujo de reprogramar manda la misma plantilla cruda en **dos
+  escalamientos mas**: cuando no hay horarios libres, y cuando el cliente no
+  elige ninguno de los que se le ofrecieron.
+- El texto de espera para los intents sin plantilla ("Dejame confirmarlo con
+  el asesor y te respondo enseguida.") esta escrito a mano en TypeScript en
+  tres archivos, contra la regla de CLAUDE.md. Es el mismo texto que la
+  plantilla de `fallback_low_confidence`.
+- En el catalogo, los intents que escalan siempre tienen plantillas de espera
+  sin huecos. Las plantillas con huecos son de intents que no escalan solos:
+  `pedido_ficha_multimedia`, `reprogramar_cancelar_visita`,
+  `recordatorio_visita`, `seguimiento_post_visita`, `broker_pausar_agente`.
+
+**Pre-mortem**
+
+**1. La plantilla de espera deja de existir o se rompe en el catalogo.** Si
+alguien renombra `fallback_low_confidence`, le saca la plantilla o le agrega
+un hueco, todo escalamiento responde con algo roto, y los tests del handler,
+que stubbean el catalogo, no lo verian.
+   *Mitigacion*: el catalogo dice cual es la plantilla de espera
+   (`meta.escalation_waiting_template_from`) y la validacion del schema
+   exige que el intent exista, tenga plantilla y no tenga huecos. Lo mismo
+   para toda plantilla de un intent que escala siempre. Tests contra el
+   catalogo real y contra catalogos rotos a proposito.
+
+**2. Queda otro camino que manda una plantilla cruda.** Este bloque cierra
+los que se encontraron; el proximo intent con plantilla, o el proximo flujo,
+puede abrir otro sin que nadie lo note.
+   *Mitigacion*: una red de ultima linea en el handler. Si la respuesta que
+   va a salir tiene un hueco sin llenar (`{palabra}`), no sale: al cliente
+   le va la plantilla de espera, y queda un error en el log. Test.
+
+**3. La red salta con una respuesta legitima.** Si una respuesta generada
+trae llaves por otra razon, el cliente recibiria la plantilla de espera en
+vez de la respuesta.
+   *Mitigacion*: el patron es estrecho, solo `{palabra_en_minusculas}`, que
+   es la forma de los huecos del catalogo. Un texto generado que repite un
+   hueco tal cual es, de todas formas, un error que conviene cortar. Test de
+   que llaves con otro contenido pasan.
+
+**Como quedo**
+- [x] `meta.escalation_waiting_template_from: fallback_low_confidence` en el
+      catalogo. La validacion del schema exige que ese intent exista, tenga
+      plantilla y no tenga huecos, y que ninguna plantilla de un intent que
+      escala siempre tenga huecos. Si no, el catalogo no carga.
+- [x] `respuestaDeEspera`: un intent que escala siempre responde con su
+      propia plantilla de espera; cualquier otro, con la de espera del
+      catalogo. La usan el handler y los flujos de agendar y reprogramar, que
+      ya no tienen el texto escrito en TypeScript.
+- [x] Red de ultima linea en el handler: una respuesta con un hueco sin
+      llenar no sale. Al cliente le va la plantilla de espera; al broker, un
+      aviso de que no asuma que su orden se hizo. Queda un error en el log con
+      el intent.
+- [x] Tests nuevos: un recorrido por **todos** los intents del catalogo real
+      con confianza baja, que ademas verifica que la red no tuvo que actuar
+      (si actuara, estaria tapando una regresion del camino principal); los
+      escalamientos de agendar y reprogramar, mirando el texto que recibe el
+      cliente (ningun test lo miraba: se vio al agregar la dependencia nueva y
+      no fallar nada); y catalogos rotos a proposito. Mutation testing, una
+      por vez:
+      - J1. la baja confianza usa la plantilla del intent (lo de antes): 5 tests en rojo
+      - J2. `respuestaDeEspera` usa siempre la propia: 5 tests en rojo
+      - J3. sin red de ultima linea: 2 tests en rojo
+      - J4. la red le manda al broker la plantilla de espera: 1 test en rojo
+      - J5. reprogramar sin horarios manda la plantilla cruda: 1 test en rojo
+      - J6. reprogramar sin eleccion manda la plantilla cruda: 1 test en rojo
+      - J7. el schema no exige que exista el intent de espera: 1 test en rojo
+      - J8. el schema acepta huecos en los que escalan siempre: 1 test en rojo
+      - J9. el patron de hueco es demasiado amplio: 3 tests en rojo
+- [ ] Sigue igual, a proposito: la segunda reprogramacion responde "Listo, no
+      pudimos reprogramar tu visita de ...". Esta completa, no tiene huecos,
+      pero el "Listo," suena raro.
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -2823,7 +2904,9 @@ arreglaron 8 (arriba). Quedan anotados:
 
 
 ### Muerde al apagar el modo silencioso
-- [ ] **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja
+- [x] *(Resuelto en 38c, junto con dos escalamientos mas del flujo de
+      reprogramar que hacian lo mismo.)*
+      **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja
       confianza de un intent cuya plantilla tiene variables manda la
       plantilla sin llenar: *"Listo, {accion} tu visita de
       {direccion_corta}"*, que ademas le dice al cliente que el cambio se

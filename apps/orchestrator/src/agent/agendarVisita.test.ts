@@ -66,8 +66,12 @@ function makeTokko(overrides: Partial<TokkoQueries> = {}): TokkoQueries {
   };
 }
 
+/** La plantilla de espera del catálogo (docs/TASKS.md Bloque 38c). */
+const ESPERA = "Dejame confirmarlo con el asesor y te respondo enseguida.";
+
 function makeDeps(overrides: Partial<AgendarVisitaDeps> = {}): AgendarVisitaDeps {
   return {
+    plantillaDeEspera: ESPERA,
     tokko: makeTokko(),
     gcal: makeGcal(),
     conversationStateStore: new InMemoryConversationStateStore(),
@@ -132,6 +136,8 @@ describe("startAgendarVisita", () => {
 
     expect(result.escalate).toBe(true);
     expect(result.escalationReason).toBe(intent.escalation_reason);
+    // docs/TASKS.md Bloque 38c: la plantilla de espera del catálogo, no un texto escrito en el código.
+    expect(result.responseText).toBe(ESPERA);
     // no debería quedar esperando confirmación de algo que nunca se propuso
     expect(await deps.conversationStateStore.get("5491100000001")).toBeNull();
   });
