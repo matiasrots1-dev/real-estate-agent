@@ -2357,6 +2357,148 @@ cuando nadie esta mirando?"*. El canal murio el 8/09, el bot estaba apagado
 desde el 30/08, y se descubrio el 15/09 por un comentario del proveedor. Nada
 en el sistema avisa que dejaron de llegar mensajes.
 
+## Bloque 37 — Una linea rota del audit log no puede tumbar el bot
+Salio de la revision del PR #29 (2026-09-19), verificado en el codigo:
+`FileAuditLogStore.readAll()` hace `JSON.parse(line)` sin `try`, y el
+arranque (`server.ts`) llama a `contactosConocidos.cargarDesde(auditLog)`. Una
+sola linea ilegible hace que el proceso muera al arrancar, y systemd lo
+reinicia en loop: **el bot queda caido hasta que alguien edite el archivo a
+mano en el servidor**. Hoy el archivo del servidor esta sano (329 lineas, 0
+rotas), pero una linea rota es exactamente lo que deja un corte a mitad de un
+`appendFile`: el proceso muere, queda media linea sin salto, y la siguiente
+entrada se pega detras.
+
+No es solo el arranque. `leerHistorial` atrapa el error y sigue sin historial,
+y con eso el Bloque 31 **falla cerrado para siempre**: sin historial se
+suprime toda plantilla fija, en todas las conversaciones, hasta que alguien
+arregle el archivo. `pendientes` y las mediciones tambien mueren.
+
+### Pre-mortem
+**1. Leer tolerante convierte la purga en un borrado silencioso.**
+`purgeOlderThan` reescribe el archivo con lo que devolvio `readAll()`. Si
+`readAll()` saltea las lineas rotas, la primera purga que borre algo las
+elimina del disco sin contarlas, y nadie puede revisarlas despues. Borrar
+datos es decision del dueno del repo, no un efecto secundario de leer.
+   *Mitigacion*: la purga no descarta las lineas ilegibles; las fecha por
+   posicion y aplica la retencion como a cualquier entrada (ver "Revision del
+   PR"). Test contra un archivo real, no contra el store en memoria.
+
+**2. Tolerar en silencio esconde el problema.** Si algo empieza a escribir
+basura, `readAll()` devuelve menos entradas y todo parece andar: el contexto
+del clasificador se achica, `pendientes` muestra menos, la plantilla del
+Bloque 31 se repite. Es el mismo silencio del Bloque 34 con otra causa.
+   *Mitigacion*: un aviso en el log con la cantidad y el numero de linea (sin
+   el contenido: son mensajes de clientes), cuando cambian las lineas rotas y
+   no en cada mensaje. Test del aviso. Solo en el log: ver riesgos.
+
+**3. La entrada que se pega a la media linea se pierde.** Despues de un corte,
+la primera entrada nueva se escribe detras de la media linea, sin salto, y
+las dos juntas son una sola linea ilegible. Tolerar la lectura no la
+recupera: la entrada buena se pierde igual, y es la primera despues de un
+reinicio, justo la que mas importa.
+   *Mitigacion*: cada escritura mira si el archivo termina en salto de linea
+   y, si no, lo antepone. Test con un archivo que termina en media linea.
+
+### Descartado a proposito
+- Intentar reparar las lineas rotas (separar `}{`, etc.): adivina, y una
+  reparacion equivocada es peor que una linea marcada como ilegible.
+- Los otros stores quedan fuera, pero **no porque esten a salvo** (lo crei al
+  escribir este pre-mortem y lo verifique antes de dejarlo: era falso).
+  Quedan como riesgo abierto, abajo.
+
+### Como quedo
+- [x] `parsearAuditLog` separa las entradas de las lineas ilegibles: JSON
+      roto, o JSON valido que no es una entrada (sin `conversationId`, o sin
+      un `timestamp` que se pueda fechar). `FileAuditLogStore.readAll()` la
+      usa y ya no tira.
+- [x] **La purga fecha las lineas rotas por posicion.** El archivo se escribe
+      en orden, asi que una linea rota es anterior a la proxima entrada
+      legible. Si esa entrada vencio, la rota tambien: se borra y se cuenta
+      en el reporte (`linea ilegible N`, con la fecha que motivo borrarla).
+      Si no vencio, o si no hay nada despues, se conserva **en su lugar**,
+      para que la fecha por posicion siga valiendo en la purga siguiente.
+      Verificado sobre los datos locales: 313 entradas, 0 fuera de orden.
+- [x] Aviso en el log con la cantidad y los numeros de linea, sin el
+      contenido, cada vez que cambian las lineas rotas (no la cantidad: tras
+      una purga los numeros se corren).
+- [x] **Cada escritura** mira si el archivo termina en media linea y, si
+      hace falta, antepone el salto en la misma escritura. No una vez por
+      proceso: el corte puede pasar con el proceso vivo (disco lleno) o por
+      una edicion a mano.
+- [x] `pendientes`, `medir:*` y `etiquetar` leen con `leerAuditLogExistente`:
+      tolerante con las lineas rotas, pero un archivo que no existe es un
+      error. Con `readAll()`, un symlink roto en el servidor hacia que
+      `pendientes` dijera "nadie espera respuesta". `pendientes` da la misma
+      salida que antes sobre los datos locales (mismo hash).
+- [x] 15 tests nuevos, contra un archivo real; suite 629/629. Mutation testing, una por vez:
+      - B1. la purga descarta las ilegibles: 2 tests en rojo
+      - B2. la purga nunca borra ilegibles (retencion incumplida): 2 tests en rojo
+      - B3. sin aviso: 3 tests en rojo
+      - B4. aviso en cada lectura: 1 test en rojo
+      - B5. aviso solo si cambia la cantidad: 1 test en rojo
+      - B6. sin reparar la linea cortada: 3 tests en rojo
+      - B7. reparar una vez por proceso: 1 test en rojo
+      - B8. lectura no tolerante (lo de antes): 12 tests en rojo
+      - B9. acepta JSON sin fecha ni telefono: 1 test en rojo
+      - B10. los scripts toman un archivo inexistente como vacio: 1 test en rojo
+
+### Revision del PR (#31)
+La primera version tenia tres errores que la revision agarro:
+- **Conservaba las lineas rotas para siempre.** Evitaba el borrado silencioso
+  del modo de fallo 1, pero las lineas rotas son mensajes de clientes y la
+  politica publicada promete borrarlos a los 12 meses. La retencion habria
+  quedado incumplida con apariencia de cumplida, que es justo lo que
+  `purge.ts` advierte. Ahora se fechan por posicion (arriba).
+- **Reparaba el final del archivo una sola vez por proceso.** Un corte con el
+  proceso vivo, por disco lleno, quedaba sin reparar.
+- **`server.ts` arrancaba sin contactos conocidos** si la carga fallaba por un
+  error de disco. Eso cambiaba un loop de reinicios, visible y que se
+  reintenta solo, por un filtro del eco que descartaba a todos los clientes
+  en silencio durante todo el proceso. Se saco: una linea rota ya no tira, y
+  un error de disco tiene que verse.
+
+**Pregunta que lo habria agarrado antes**: *"¿que pasa si el proceso muere a
+mitad de esta escritura, y que lee el que arranca despues?"*. El audit log se
+diseno para que nunca se pierda nada, y nadie se pregunto que queda en disco
+cuando la escritura misma se corta.
+
+### Riesgos abiertos
+- [ ] **El aviso de lineas rotas va solo al log del servidor**, que nadie lee.
+      Es la leccion del Bloque 36 ("¿que te avisa cuando nadie esta
+      mirando?") otra vez: este bloque no la resuelve.
+- [ ] Si la linea que se corta es justo la entrada que registro una
+      plantilla fija, esa conversacion pierde el registro y la plantilla
+      puede volver a salir una vez (Bloque 31). Antes, la misma linea tumbaba
+      el bot entero.
+- [ ] **El reporte de retencion** (`retentionReportStore.ts`) tambien es JSONL
+      con `JSON.parse` sin `try`. Con una linea rota, la corrida siguiente
+      tira al guardar el reporte, **despues** de haber purgado: con el borrado
+      prendido, se borran datos y no queda reporte. El lector de este bloque
+      se puede generalizar a los tres JSONL (audit log, reporte, corpus de
+      estilo).
+- [ ] Una linea rota se reescribe desde el texto ya decodificado: si el corte
+      partio un caracter con tilde o un emoji, al reescribirla ese byte queda
+      como U+FFFD. Solo afecta a lineas que ya estaban rotas.
+- [ ] Los scripts leen `apps/orchestrator/data/audit_log.jsonl` fijo e ignoran
+      `AUDIT_LOG_PATH`. Hoy da igual, porque en el servidor `data` es un
+      symlink al directorio real, pero si alguien configura la variable, los
+      scripts leerian otro archivo sin avisar.
+- [ ] La purga lee, filtra y reescribe sin lock: una entrada que se agrega
+      entre la lectura y el rename se pierde. Ya pasaba antes de este bloque;
+      la purga corre una vez por dia, y la ventana es de milisegundos.
+- [ ] **Los stores JSON enteros** (turnos, estado de conversacion, ultima
+      interaccion: `jsonFileStore.ts`) se escriben con `writeFile` directo,
+      sin temporal y rename. Un corte a mitad de la escritura deja el archivo
+      truncado, y ese store entero queda ilegible hasta arreglarlo a mano.
+      Es peor que una linea rota, y hoy no tiene mitigacion. Los de la
+      purga del audit log y del reporte de retencion si usan temporal y
+      rename.
+- [ ] **El corpus de estilo** (`estiloBrokerStore.ts`) es JSONL con
+      `appendFile`, igual que el audit log, y una linea rota hace que
+      `all()` devuelva **vacio**: los borradores pierden el estilo sin
+      aviso. Y `npm run estilo:reanonimizar` reescribe el archivo con lo que
+      leyo, asi que con una linea rota **borra el corpus entero**.
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase

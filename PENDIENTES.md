@@ -25,8 +25,10 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   deploys se hacen con `infra/aws/deploy.sh`, sin argumentos.
 - Modo silencioso: **prendido y forzado por systemd**. No le responde a
   clientes; apagarlo exige un PR.
-- **Bloques 31 y 34 mergeados el 19/09.** Falta el deploy desde `main` para
-  que corran en el servidor.
+- **Bloques 31, 34 y 37 mergeados el 19/09.** Falta el deploy desde `main`
+  para que corran en el servidor. El 37 es el que mas urge: hoy una sola
+  linea rota del audit log deja al bot caido en loop hasta que alguien edite
+  el archivo a mano.
 - **A verificar: ¿te llegan los borradores al ...6699?** Todo lo que el bot le
   manda al broker es texto libre, y Meta solo lo entrega si el ...6699 le
   escribio a la linea del bot (...4543) en las ultimas 24 hs. Si no, responde

@@ -175,6 +175,10 @@ async function main() {
   // coexistencia: solo se registra un contacto saliente del broker si el
   // destinatario ya es un contacto del negocio.
   const contactosConocidos = new ContactosConocidos();
+  // Una línea rota ya no tira acá (docs/TASKS.md Bloque 37). Un error de
+  // disco sí, a propósito: arrancar sin contactos conocidos dejaría el filtro
+  // del eco descartando a todos los clientes durante todo el proceso, en
+  // silencio. Que muera y systemd lo reintente es más visible.
   await contactosConocidos.cargarDesde(auditLog);
   const ultimoContactoStore = new FileUltimoContactoStore(config.ultimoContactoStorePath);
   const estiloBrokerStore = new FileEstiloBrokerStore(config.estiloBrokerStorePath);
