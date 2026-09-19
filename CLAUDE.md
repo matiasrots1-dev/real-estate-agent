@@ -182,9 +182,10 @@ usuario en vez de agregarlo por tu cuenta.
 ## 7. Convenciones de trabajo
 
 - **Flujo de git: rama por bloque + Pull Request, nunca commit directo a
-  `main`.** Ojo: `main` **no** tiene protección configurada en GitHub
-  (verificado el 2026-09-19), así que un push directo no falla: la regla es
-  tuya, no de GitHub. Al arrancar un bloque de `docs/TASKS.md`, creá una
+  `main`.** `main` está protegida en GitHub desde el 2026-09-19: exige PR
+  para mergear, con 0 aprobaciones, y la regla aplica también a los
+  administradores (tu cuenta de trabajo lo es), así que un push directo
+  falla. Al arrancar un bloque de `docs/TASKS.md`, creá una
   rama (`bloque-N-slug-corto`); al cerrarlo con tests en verde, actualizá
   `docs/TASKS.md` y abrí un PR contra `main` con `gh pr create`.
   **Desde el 2026-09-19 el PR lo revisás y lo mergeás vos** (decisión del
