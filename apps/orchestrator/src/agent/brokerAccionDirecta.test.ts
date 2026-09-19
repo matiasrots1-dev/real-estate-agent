@@ -121,6 +121,44 @@ describe("runBrokerAccionDirecta — el gate bulk nunca ejecuta sin confirmació
     expect(result.toolsCalled).toEqual([]);
   });
 
+  // docs/TASKS.md Bloque 38g, hallazgo de la revisión del PR #37: en modo
+  // silencioso el preview decía "Esto le va a llegar a N contactos" y los
+  // mensajes no iban a salir.
+  it("plan bulk en modo silencioso: el preview avisa que los mensajes a clientes no van a salir", async () => {
+    const deps = baseDeps({
+      planner: stubPlanner({ actions: bulkActions(3), previewSummary: "Bajamos el precio." }),
+      modoSilencioso: true,
+    });
+
+    const result = await runBrokerAccionDirecta(incoming("avisale a todos los leads fríos"), deps);
+
+    expect(result.responseText).toMatch(/confirmás/i);
+    expect(result.responseText).toContain("Modo silencioso");
+    expect(result.responseText).toContain("NO se van a mandar");
+  });
+
+  it("sin modo silencioso, el preview no lleva el aviso", async () => {
+    const deps = baseDeps({ planner: stubPlanner({ actions: bulkActions(3), previewSummary: "Bajamos el precio." }) });
+
+    const result = await runBrokerAccionDirecta(incoming("avisale a todos los leads fríos"), deps);
+
+    expect(result.responseText).not.toContain("Modo silencioso");
+  });
+
+  it("en modo silencioso, un plan bulk solo de calendario no lleva el aviso", async () => {
+    const actions: PlannedAction[] = ["lead-1", "lead-2"].map((leadId) => ({
+      type: "gcal_patch_event" as const,
+      leadId,
+      gcalEventId: `evt-${leadId}`,
+      startDateTime: "2026-08-02T14:00:00.000Z",
+    }));
+    const deps = baseDeps({ planner: stubPlanner({ actions, previewSummary: "Movemos las visitas." }), modoSilencioso: true });
+
+    const result = await runBrokerAccionDirecta(incoming("pasá las visitas de mañana a las 11"), deps);
+
+    expect(result.responseText).not.toContain("Modo silencioso");
+  });
+
   it("plan bulk: cuenta CONTACTOS distintos, no acciones — 2 acciones sobre el mismo lead no cuentan como bulk", async () => {
     const gcal = stubGcal();
     const actions: PlannedAction[] = [

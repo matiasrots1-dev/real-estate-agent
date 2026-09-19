@@ -20,6 +20,20 @@ export interface BrokerAccionDirectaDeps {
   conversationStateStore: ConversationStateStore;
   /** Sin sender configurado, las acciones de whatsapp del plan fallan (best-effort). */
   sender?: WhatsAppSender;
+  /**
+   * Con el modo silencioso prendido, los mensajes a clientes del plan no van
+   * a salir (los bloquea `SilentModeSender`), pero las acciones de calendario
+   * sí se ejecutan. El preview lo tiene que decir antes de pedir la
+   * confirmación (docs/TASKS.md Bloque 38g).
+   */
+  modoSilencioso?: boolean;
+}
+
+const AVISO_SILENCIOSO =
+  "⚠️ Modo silencioso: los mensajes a clientes NO se van a mandar. Solo se ejecutan las acciones de calendario.";
+
+function esEnvioAlCliente(action: PlannedAction): boolean {
+  return action.type === "whatsapp_send_message" || action.type === "whatsapp_send_template";
 }
 
 export interface BrokerAccionDirectaStepResult {
@@ -69,8 +83,9 @@ export async function runBrokerAccionDirecta(
       step: "esperando_ok_broker",
       context: context as unknown as Record<string, unknown>,
     });
+    const aviso = deps.modoSilencioso && plan.actions.some(esEnvioAlCliente) ? `\n\n${AVISO_SILENCIOSO}` : "";
     return {
-      responseText: `${plan.previewSummary} Esto le va a llegar a ${distinctContacts} contactos. ¿Confirmás?`,
+      responseText: `${plan.previewSummary} Esto le va a llegar a ${distinctContacts} contactos. ¿Confirmás?${aviso}`,
       toolsCalled: [],
     };
   }

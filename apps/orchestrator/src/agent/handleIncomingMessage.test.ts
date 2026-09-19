@@ -589,6 +589,123 @@ describe("handleIncomingMessage — canal broker (Bloque 8)", () => {
     expect(result.intentId).toBe("broker_resumen_agenda");
   });
 
+  // docs/TASKS.md Bloque 38g. Antes, en modo silencioso, el broker pedía un
+  // resumen y recibía un "Escalamiento" con un borrador sobre su propio mensaje.
+  it("en modo silencioso, la orden del broker recibe su respuesta y no un escalamiento", async () => {
+    const gcal = stubGcal();
+    gcal.listEvents = vi.fn(async () => []);
+    const brokerNotifier = recordingBrokerNotifier();
+    const auditLog = new InMemoryAuditLogStore();
+
+    const result = await handleIncomingMessage(
+      incoming("¿cómo viene la agenda?", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        gcal,
+        composer: stubComposer("No tenés visitas esta semana."),
+        brokerNotifier,
+        auditLog,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.responseText).toBe("No tenés visitas esta semana.");
+    expect(brokerNotifier.notify).not.toHaveBeenCalled();
+    const [entry] = await auditLog.readAll();
+    // Se le mandó de verdad: el audit log lo registra como enviado.
+    expect(entry.responseSent).toBe("No tenés visitas esta semana.");
+  });
+
+  // Hallazgo de la revisión del PR #37: la excepción para el broker también se
+  // aplicaba a los escalamientos, y una orden del broker que no se entendió le
+  // devolvía la plantilla del intent, por ejemplo "Listo, {accion} para
+  // {alcance}.", que se lee como que la orden se ejecutó.
+  it("en modo silencioso, una orden del broker que escala no le devuelve la plantilla", async () => {
+    const brokerNotifier = recordingBrokerNotifier();
+
+    const result = await handleIncomingMessage(
+      incoming("reactivá el agente", BROKER_NUMBER),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "broker_pausar_agente", confidence: 0.3 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        brokerNotifier,
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.escalatedToBroker).toBe(true);
+    expect(result.responseText).toBeNull();
+    // Se entera por el aviso del escalamiento, con la confianza.
+    expect(brokerNotifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  // Hallazgo de la revisión del PR #37: el ruteo comparaba el texto exacto y el
+  // modo silencioso solo los dígitos. Con "+54 9 ..." en la configuración,
+  // las órdenes del broker se ruteaban como de un cliente.
+  it("el número del broker configurado con + y espacios igual se reconoce", async () => {
+    const classifier = capturingClassifier({ intentId: "broker_resumen_agenda", confidence: 0.9 });
+    const gcal = stubGcal();
+    gcal.listEvents = vi.fn(async () => []);
+
+    await handleIncomingMessage(
+      incoming("¿cómo viene la agenda?", BROKER_NUMBER),
+      baseDeps({ classifier, gcal, brokerWhatsappNumber: "+54 9 11 9999-9999" })
+    );
+
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(true);
+  });
+
+  it("con el número del broker vacío en la configuración, nadie es el broker", async () => {
+    const classifier = capturingClassifier({ intentId: "consulta_disponibilidad", confidence: 0.9, searchQuery: "x" });
+
+    await handleIncomingMessage(incoming("hola", ""), baseDeps({ classifier, brokerWhatsappNumber: "" }));
+
+    expect(classifier.seenCatalog!.intents.some((i) => i.channel === "broker")).toBe(false);
+  });
+
+  // Modo de fallo 3 del pre-mortem: la excepción no puede alcanzar a un cliente.
+  it("en modo silencioso, un cliente sigue sin recibir respuesta, con número de broker configurado", async () => {
+    const result = await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        brokerNotifier: recordingBrokerNotifier(),
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.responseText).toBeNull();
+  });
+
+  it("en modo silencioso, un cliente sigue sin recibir respuesta, sin número de broker configurado", async () => {
+    const result = await handleIncomingMessage(
+      incoming("¿el depto de Palermo sigue disponible?"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "consulta_disponibilidad", confidence: 0.95, searchQuery: "Palermo" }),
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.responseText).toBeNull();
+  });
+
+  it("en modo silencioso, un escalamiento del cliente sigue sin plantilla", async () => {
+    const result = await handleIncomingMessage(
+      incoming("esto es un desastre"),
+      baseDeps({
+        classifier: stubClassifier({ intentId: "reclamo_queja", confidence: 0.9 }),
+        brokerWhatsappNumber: BROKER_NUMBER,
+        brokerNotifier: recordingBrokerNotifier(),
+        modoSilencioso: true,
+      })
+    );
+
+    expect(result.responseText).toBeNull();
+    expect(result.escalatedToBroker).toBe(true);
+  });
+
   it("broker_resumen_leads: ejecuta el handler real (tokko.search_leads), no escala", async () => {
     const tokko = stubTokko();
     tokko.searchLeads = vi.fn(async () => []);

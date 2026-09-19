@@ -5,6 +5,7 @@ import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
 import { executeActionPlan, summarizeExecution, toolsCalledForPlan } from "./brokerAccionDirectaExecutor.js";
+import { SilentModeSender } from "../channels/whatsapp/silentModeSender.js";
 
 function stubGcal(): GcalQueries {
   return {
@@ -148,6 +149,124 @@ describe("executeActionPlan", () => {
 
     expect(results[0]).toMatchObject({ ok: false, error: "Calendar caído" });
     expect(results[1]).toMatchObject({ ok: true });
+  });
+});
+
+// docs/TASKS.md Bloque 38g. El modo silencioso bloquea los envíos a clientes
+// devolviendo un resultado en vez de tirar; el resumen decía "✓ Mensaje
+// enviado" igual. Con el SilentModeSender real, no con un stub: el problema
+// es la combinación de los dos.
+describe("executeActionPlan — en modo silencioso", () => {
+  const BROKER = "5491199999999";
+
+  function silencioso() {
+    const interno = stubSender();
+    return { interno, sender: new SilentModeSender(interno, BROKER, () => {}) };
+  }
+
+  it("un mensaje a un cliente que el modo silencioso bloqueó no cuenta como enviado", async () => {
+    const { interno, sender } = silencioso();
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola {nombre}!" };
+
+    const results = await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender,
+    });
+
+    expect(interno.sendText).not.toHaveBeenCalled();
+    expect(results[0]).toMatchObject({ ok: false });
+    expect(results[0].error).toContain("modo silencioso");
+    const resumen = summarizeExecution(results);
+    expect(resumen).not.toContain("✓");
+    expect(resumen).not.toContain("enviado a");
+    // Hallazgo de la revisión del PR: el teléfono ya estaba resuelto; sin él,
+    // el broker no sabe a quién mandárselo a mano.
+    expect(resumen).toContain("✗ Enviar mensaje a 5491100000001");
+    expect(results[0].telefono).toBe("5491100000001");
+  });
+
+  it("una plantilla a un cliente, tampoco", async () => {
+    const { sender } = silencioso();
+    const action: PlannedAction = {
+      type: "whatsapp_send_template",
+      leadId: "lead-1",
+      templateName: "recontacto",
+      languageCode: "es_AR",
+      bodyParams: ["{nombre}"],
+    };
+
+    const results = await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender,
+    });
+
+    expect(results[0]).toMatchObject({ ok: false });
+    expect(summarizeExecution(results)).toContain('✗ Enviar la plantilla "recontacto" a 5491100000001');
+  });
+
+  it("las acciones de calendario se ejecutan igual: el calendario es del broker", async () => {
+    const { sender } = silencioso();
+    const gcal = stubGcal();
+    const action: PlannedAction = {
+      type: "gcal_create_event",
+      leadId: "lead-1",
+      propertyId: "prop-1",
+      startDateTime: "2026-08-02T15:00:00.000Z",
+      endDateTime: "2026-08-02T15:30:00.000Z",
+      summary: "Visita - Depto Palermo",
+    };
+
+    const results = await executeActionPlan([action], {
+      gcal,
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender,
+    });
+
+    expect(gcal.createEvent).toHaveBeenCalledTimes(1);
+    expect(results[0]).toMatchObject({ ok: true });
+  });
+});
+
+// Hallazgos de la revisión del PR #37.
+describe("summarizeExecution — lo que falló no se describe como hecho ni como no hecho", () => {
+  it("si el evento se creó y falló guardarlo, no dice que la visita quedó sin agendar", async () => {
+    const appointmentStore = new InMemoryAppointmentStore();
+    appointmentStore.save = vi.fn(async () => {
+      throw new Error("disco lleno");
+    });
+    const action: PlannedAction = {
+      type: "gcal_create_event",
+      leadId: "lead-1",
+      propertyId: "prop-1",
+      startDateTime: "2026-08-02T15:00:00.000Z",
+      endDateTime: "2026-08-02T15:30:00.000Z",
+      summary: "Visita - Depto Palermo",
+    };
+
+    const results = await executeActionPlan([action], { gcal: stubGcal(), appointmentStore });
+
+    const resumen = summarizeExecution(results);
+    expect(resumen).toBe("✗ Agendar visita para lead-1 (Visita - Depto Palermo) (disco lleno)");
+  });
+
+  it("un sender que no devuelve nada no convierte un envío en fallo", async () => {
+    const sender = stubSender();
+    sender.sendText = vi.fn(async () => undefined as never);
+    const action: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola" };
+
+    const results = await executeActionPlan([action], {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender,
+    });
+
+    expect(results[0]).toMatchObject({ ok: true });
   });
 });
 

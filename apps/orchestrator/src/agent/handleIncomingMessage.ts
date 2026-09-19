@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AuditLogEntry, ConversationState, Intent, IntentCatalog } from "shared-types";
 import type { IncomingWhatsAppMessage } from "../channels/whatsapp/webhookPayload.js";
+import { esElNumeroDelBroker } from "../channels/whatsapp/numeroDelBroker.js";
 import type { WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { GcalQueries } from "../mcp/gcalMcpClient.js";
@@ -172,6 +173,30 @@ function decidirEnvioDePlantilla(
   });
 }
 
+/**
+ * El mensaje viene del broker. **Una sola definición** para el ruteo por canal
+ * y para el modo silencioso (docs/TASKS.md Bloque 38g): si las dos decidieran
+ * por separado, una orden del broker podría rutearse como del broker y
+ * silenciarse como de un cliente.
+ */
+function esDelBroker(deps: HandleMessageDeps, message: IncomingWhatsAppMessage): boolean {
+  return esElNumeroDelBroker(message.from, deps.brokerWhatsappNumber);
+}
+
+/**
+ * El modo silencioso calla lo que va a los **clientes**. Las respuestas a las
+ * órdenes del broker salen igual (docs/TASKS.md Bloque 38g): antes, en modo
+ * silencioso, el broker pedía un resumen y recibía un "Escalamiento" con un
+ * borrador sobre su propio mensaje. `SilentModeSender` deja pasar los envíos
+ * al broker, así que la respuesta llega.
+ *
+ * Vale para las respuestas, no para los escalamientos: ver
+ * `finalizeEscalation`.
+ */
+function silenciarPara(deps: HandleMessageDeps, message: IncomingWhatsAppMessage): boolean {
+  return deps.modoSilencioso === true && !esDelBroker(deps, message);
+}
+
 /** Motivo que se registra en el audit log y se le manda al broker en modo silencioso. */
 const MOTIVO_SILENCIOSO =
   "Modo silencioso activo: el cliente NO recibió respuesta. Respondele vos a mano.";
@@ -205,8 +230,9 @@ export interface HandleMessageDeps {
   sender?: WhatsAppSender;
   /**
    * Modo silencioso (docs/TASKS.md Bloque 21): se recibe, se clasifica y se le
-   * manda **siempre** el borrador al broker, pero al cliente **no se le
-   * responde nada**. Prendido por default.
+   * manda el borrador al broker, pero al cliente **no se le responde nada**.
+   * Prendido por default. Las órdenes del propio broker sí reciben su
+   * respuesta, y no generan un borrador sobre su propio mensaje (Bloque 38g).
    *
    * No es lo mismo que la pausa del Bloque 9: la pausa corta antes de
    * clasificar y no notifica a nadie. Acá el trabajo se hace completo, lo
@@ -242,7 +268,7 @@ export async function handleIncomingMessage(
   // normaliza números argentinos de forma inconsistente (ver Bloque 4/6),
   // así que un desfasaje de formato haría que el broker sea tratado como
   // cliente en vez de fallar ruidosamente — a revisar con uso real.
-  const channel = message.from === deps.brokerWhatsappNumber ? "broker" : "cliente";
+  const channel = esDelBroker(deps, message) ? "broker" : "cliente";
 
   // Un mensaje entrante del cliente es una interacción suya, y eso define
   // cuánto se retienen sus datos de gestión comercial (docs/TASKS.md Bloque
@@ -431,6 +457,7 @@ function brokerAccionDirectaDeps(deps: HandleMessageDeps): BrokerAccionDirectaDe
     appointmentStore: deps.appointmentStore,
     conversationStateStore: deps.conversationStateStore,
     sender: deps.sender,
+    modoSilencioso: deps.modoSilencioso,
   };
 }
 
@@ -469,7 +496,7 @@ async function finalizeNonEscalating(
   // Modo silencioso: el cliente no recibe nada, pero el broker sí tiene que
   // enterarse. Sin esto el mensaje se perdería en silencio para todos — peor
   // que el problema que el modo silencioso vino a resolver.
-  if (deps.modoSilencioso) {
+  if (silenciarPara(deps, message)) {
     // La respuesta que el bot habría mandado va como respaldo del borrador:
     // si Claude no puede redactarlo, el broker recibe esa en vez de nada.
     const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, MOTIVO_SILENCIOSO, responseText);
@@ -512,7 +539,14 @@ async function finalizeEscalation(
   // misma frase. `responseSent` sin cargar a proposito — el audit log es el
   // registro de que recibio cada persona y no puede decir que se envio algo
   // que no se envio.
-  if (plantilla.suprimir && !deps.modoSilencioso) {
+  // Acá NO se usa `silenciarPara`: un escalamiento se calla también para el
+  // broker. Lo que saldría es la plantilla de espera del intent, y para una
+  // orden del broker que no se entendió eso puede ser "Listo, {accion} para
+  // {alcance}." con los huecos sin llenar (Bloque 38c): el broker leería que
+  // su orden se ejecutó. Le llega el aviso del escalamiento, que dice la
+  // confianza y el motivo (hallazgo de la revisión del PR #37).
+  const silencio = deps.modoSilencioso === true;
+  if (plantilla.suprimir && !silencio) {
     await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
       escalationRule: rule,
       escalationReason: plantilla.motivo,
@@ -521,7 +555,7 @@ async function finalizeEscalation(
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
 
-  if (deps.modoSilencioso) {
+  if (silencio) {
     // Ya escalaba y ya notificaba al broker; lo único que cambia es que la
     // plantilla de espera tampoco sale.
     await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {

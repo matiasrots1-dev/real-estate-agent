@@ -70,10 +70,11 @@ haga que el bot le escriba a clientes, y borrar datos.
 
 - [ ] **Bloque 38**: escalamientos y avisos al broker. Lo que dejaron abierto
       las revisiones del 31 y del 34. Hecho: 38a (si falla el borrador, el
-      aviso te llega igual). Lo que **afecta hoy**, con el modo silencioso
-      prendido: tus ordenes al bot no reciben respuesta (38g, lo proximo), una
-      llamada colgada a Anthropic no cuenta como fallo (38b), y la ventana de
-      24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
+      aviso te llega igual) y 38g (tus ordenes al bot reciben respuesta en
+      modo silencioso; falta desplegarlo y probarlo en vivo: mandale "resumen
+      de agenda" al bot desde el ...6699). Lo que **afecta hoy**: una llamada
+      colgada a Anthropic no cuenta como fallo (38b, lo proximo), y la
+      ventana de 24 hs (arriba). El resto muerde al apagarlo; lo mas grave es que una
       escalada por baja confianza le manda al cliente la plantilla con los
       `{huecos}` sin llenar (pasa desde el Bloque 5).
 - [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:
