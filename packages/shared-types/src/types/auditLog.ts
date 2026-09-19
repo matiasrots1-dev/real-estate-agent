@@ -25,12 +25,9 @@ export interface AuditLogEntry {
   /**
    * `recibido`: escrita al llegar el mensaje, antes de clasificar.
    * `fallido`: el procesamiento tiró; al cliente no se le respondió nada.
-   * `envio_fallido`: se procesó, pero mandar la respuesta falló (docs/TASKS.md
-   *   Bloque 38d). Reemplaza a la entrada resuelta, que se escribe antes del
-   *   envío. `responseSent` dice lo que sí salió, si salió algo.
    * Ausente: entrada resuelta, como todas las anteriores al Bloque 34.
    */
-  etapa?: "recibido" | "fallido" | "envio_fallido";
+  etapa?: "recibido" | "fallido";
   /**
    * Qué pasó con el aviso al broker, en las entradas que lo intentaron
    * (docs/TASKS.md Bloque 38a):
@@ -48,4 +45,14 @@ export interface AuditLogEntry {
   avisoAlBroker?: "enviado" | "respaldo" | "sin_borrador" | "fallo" | "sin_destinatario";
   /** Por qué falló el borrador o el aviso, en una línea. Solo cuando algo falló. */
   avisoAlBrokerMotivo?: string;
+  /**
+   * Qué pasó al mandarle la respuesta al destinatario (docs/TASKS.md Bloque
+   * 38d). Ausente: salió todo, o no había nada que mandar — mirar
+   * `responseSent`.
+   * - `fallo`: no salió nada. `responseSent` queda vacío.
+   * - `parcial`: salió el texto pero no todas las fotos.
+   */
+  envio?: "fallo" | "parcial";
+  /** Por qué falló el envío, en una línea. */
+  envioMotivo?: string;
 }

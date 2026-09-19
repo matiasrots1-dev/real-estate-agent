@@ -20,12 +20,7 @@ import type { ContactosConocidos } from "./agent/contactosConocidos.js";
 import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
 import type { AuditLogStore } from "./agent/auditLog.js";
 import { colapsarPorMensaje, esResuelta } from "./agent/auditPorMensaje.js";
-import {
-  describirError,
-  registrarEnvioFallido,
-  registrarFallido,
-  registrarRecibido,
-} from "./agent/registroDeLlegada.js";
+import { describirError, registrarFallido, registrarRecibido } from "./agent/registroDeLlegada.js";
 import type { AvisadorDeFallos } from "./agent/avisoDeFallos.js";
 import { anonimizar } from "shared-types";
 
@@ -393,6 +388,40 @@ async function handleIncomingWebhook(
   // su propio mensaje. Él ya se entera: le falta la confirmación de la orden.
   const avisoDeFallos = esElNumeroDelBroker(message.from, deps.brokerWhatsappNumber) ? undefined : deps.avisoDeFallos;
 
+  // El envío pasa por acá para que el handler pueda registrar lo que salió de
+  // verdad (docs/TASKS.md Bloque 38d). Un resultado `bloqueado` del modo
+  // silencioso tampoco es un envío: el sender no tira, devuelve la marca.
+  const enviarRespuesta = async (texto: string, mediaUrls: readonly string[]) => {
+    if (!deps.sender) return { textoEnviado: texto };
+    try {
+      const resultado = await deps.sender.sendText(message.from, texto);
+      if (resultado?.bloqueado === "modo_silencioso") {
+        return { estado: "fallo" as const, motivo: "el modo silencioso bloqueó el envío" };
+      }
+    } catch (error) {
+      return { estado: "fallo" as const, motivo: describirError(error) };
+    }
+
+    const motivos: string[] = [];
+    for (const mediaUrl of mediaUrls) {
+      try {
+        const resultado = await deps.sender.sendImage(message.from, mediaUrl);
+        if (resultado?.bloqueado === "modo_silencioso") motivos.push("el modo silencioso bloqueó la foto");
+      } catch (error) {
+        motivos.push(describirError(error));
+      }
+    }
+    if (motivos.length === 0) return { textoEnviado: texto };
+    // Se guardan los motivos distintos: si la primera foto falla por el token
+    // y las demás por otra cosa, quedarse con el último pierde el diagnóstico.
+    const distintos = [...new Set(motivos)];
+    return {
+      textoEnviado: texto,
+      estado: "parcial" as const,
+      motivo: `no salieron ${motivos.length} de ${mediaUrls.length} fotos: ${distintos.join("; ")}`,
+    };
+  };
+
   // Encolado por conversación: dos mensajes seguidos del mismo teléfono se
   // procesan uno después del otro. Sin esto, al contestar rápido se pierde la
   // serialización que antes daba de casualidad la lentitud del handler, y los
@@ -401,7 +430,7 @@ async function handleIncomingWebhook(
     await recibidoRegistrado;
     let result: Awaited<ReturnType<typeof handleIncomingMessage>>;
     try {
-      result = await handleIncomingMessage(message, deps);
+      result = await handleIncomingMessage(message, { ...deps, enviarRespuesta });
     } catch (error) {
       // Cualquier fallo del procesamiento, no solo del clasificador: una caída
       // de Tokko o de Calendar también es un mensaje que se perdería. Queda
@@ -411,48 +440,27 @@ async function handleIncomingWebhook(
       await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
       throw error;
     }
-    // responseText es null cuando el agente está pausado para este
-    // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
-    // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
-    if (deps.sender && result.responseText !== null) {
-      // Un envío que falla es un fallo (docs/TASKS.md Bloque 38d). Antes la
-      // tarea tiraba y la cola solo lo escribía en consola, con el audit log
-      // diciendo que la respuesta había salido.
-      try {
-        await deps.sender.sendText(message.from, result.responseText);
-      } catch (error) {
-        await registrarEnvioFallido(
-          deps.auditLog,
-          message,
-          result,
-          `No se pudo mandar la respuesta: ${describirError(error)}. No le llegó nada.`
-        );
-        await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
-        throw error;
-      }
-      // El texto ya salió: si falla una foto, no se avisa "no se le respondió
-      // nada" (sería falso). Queda en el audit log, y `pendientes` la muestra.
-      const fotos = result.mediaUrls ?? [];
-      let fotosQueFallaron = 0;
-      let ultimoError: unknown;
-      for (const mediaUrl of fotos) {
-        try {
-          await deps.sender.sendImage(message.from, mediaUrl);
-        } catch (error) {
-          fotosQueFallaron += 1;
-          ultimoError = error;
-        }
-      }
-      if (fotosQueFallaron > 0) {
-        await registrarEnvioFallido(
-          deps.auditLog,
-          message,
-          result,
-          `Se mandó el texto, pero no ${fotosQueFallaron} de ${fotos.length} fotos: ${describirError(ultimoError)}.`,
-          result.responseText
-        );
-        console.error(`[envío] fallaron ${fotosQueFallaron} de ${fotos.length} fotos:`, ultimoError);
-      }
+    // Qué pasó al mandar la respuesta lo decide el handler, que registra
+    // DESPUÉS de mandar (docs/TASKS.md Bloque 38d). Acá solo queda avisarle al
+    // broker.
+    if (result.envio?.estado === "fallo") {
+      await avisoDeFallos?.registrarFallo({
+        telefono: message.from,
+        texto: message.text,
+        detalle: `⚠️ Procesé un mensaje pero NO pude mandarle la respuesta: ${result.envio.motivo}`,
+      });
+      // Se relanza para que la cola lo loguee, igual que un fallo de procesamiento.
+      throw new Error(`No se pudo mandar la respuesta: ${result.envio.motivo}`);
+    }
+    if (result.envio?.estado === "parcial") {
+      // El texto salió: decir "no se le respondió nada" sería falso. Tampoco
+      // se registra el éxito: no salió todo.
+      await avisoDeFallos?.registrarFallo({
+        telefono: message.from,
+        texto: message.text,
+        detalle: `⚠️ Le llegó el texto, pero no todo: ${result.envio.motivo}`,
+      });
+      return;
     }
     // Recién acá: "volvió a procesar" con un envío que falló sería falso.
     await avisoDeFallos?.registrarExito();

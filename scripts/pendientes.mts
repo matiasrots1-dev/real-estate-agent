@@ -16,7 +16,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizarTelefono } from "shared-types";
 import { FileUltimoContactoStore } from "../apps/orchestrator/src/agent/ultimoContactoStore.js";
-import { colapsarPorMensaje, INTENT_PROCESAMIENTO_FALLIDO, INTENT_SIN_CLASIFICAR } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
+import {
+  colapsarPorMensaje,
+  fueRespondida,
+  INTENT_PROCESAMIENTO_FALLIDO,
+  INTENT_SIN_CLASIFICAR,
+} from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 import { leerAuditLogExistente } from "../apps/orchestrator/src/agent/auditLog.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,6 +67,8 @@ interface Entrada {
   escalatedToBroker?: boolean;
   responseSent?: string;
   avisoAlBroker?: string;
+  envio?: string;
+  envioMotivo?: string;
   messageId?: string;
   etapa?: string;
 }
@@ -78,17 +85,6 @@ const entradas: Entrada[] = colapsarPorMensaje(
 // escribe "quiero ver el depto" y después "hola?". Se guarda el ÚLTIMO mensaje
 // (que es al que hay que contestar) pero la MEJOR prioridad de toda la
 // conversación — si en algún momento quiso agendar, eso manda.
-/**
- * El agente le contesto al cliente y el broker se entero. Si el aviso al broker
- * fallo (docs/TASKS.md Bloque 38a), el cliente recibio solo la plantilla de
- * espera y el broker no sabe nada: esa conversacion sigue pendiente.
- */
-function fueRespondida(e: Entrada): boolean {
-  // Un envío que falló (docs/TASKS.md Bloque 38d) queda pendiente aunque el
-  // texto haya salido: si fallaron las fotos, al cliente le falta algo.
-  return e.responseSent !== undefined && e.avisoAlBroker !== "fallo" && e.etapa !== "envio_fallido";
-}
-
 interface Conversacion {
   id: string;
   mensajes: number;
@@ -243,7 +239,8 @@ for (const c of lista) {
     `    ${haceCuanto(c.ultimo.timestamp)} · ${c.mejorIntent} · ${c.mensajes} ${c.mensajes === 1 ? "mensaje" : "mensajes"}` +
       `${c.respondida ? " · respondida por el agente" : ""}${respondioElBroker(c) ? " · YA LE CONTESTASTE VOS" : ""}` +
       `${c.ultimo.avisoAlBroker === "fallo" ? " · EL AVISO NO TE LLEGÓ" : ""}` +
-      `${c.ultimo.etapa === "envio_fallido" ? " · NO SE PUDO MANDAR LA RESPUESTA" : ""}`
+      `${c.ultimo.envio === "fallo" ? " · NO SE PUDO MANDAR LA RESPUESTA" : ""}` +
+      `${c.ultimo.envio === "parcial" ? " · LE FALTAN LAS FOTOS" : ""}`
   );
   console.log("");
 }

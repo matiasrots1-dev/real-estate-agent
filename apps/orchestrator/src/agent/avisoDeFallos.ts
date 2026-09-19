@@ -25,6 +25,12 @@ export interface CanalAlBroker {
 export interface FalloDeProcesamiento {
   telefono: string;
   texto: string;
+  /**
+   * Qué pasó, si no fue "no pude procesarlo". Un envío que falla (docs/TASKS.md
+   * Bloque 38d) sí se procesó: decirle al broker que no se procesó sería falso,
+   * y contradiría el aviso de escalamiento que quizá ya recibió.
+   */
+  detalle?: string;
 }
 
 /** Lo que el webhook necesita. Interfaz aparte para poder reemplazarla en los tests. */
@@ -133,10 +139,10 @@ function recortar(texto: string, max: number): string {
 
 function textoSuelto(fallo: FalloDeProcesamiento, minutosSiSeAgrupa: number | null): string {
   const lineas = [
-    "⚠️ No pude procesar un mensaje. Al cliente NO se le respondió nada.",
+    fallo.detalle ?? "⚠️ No pude procesar un mensaje. Al cliente NO se le respondió nada.",
     `De: ${fallo.telefono}`,
     `Mensaje: "${recortar(fallo.texto, 500)}"`,
-    "Contestale vos. Quedó registrado como fallido.",
+    fallo.detalle ? "Quedó registrado en el audit log." : "Contestale vos. Quedó registrado como fallido.",
   ];
   if (minutosSiSeAgrupa !== null) {
     lineas.push(

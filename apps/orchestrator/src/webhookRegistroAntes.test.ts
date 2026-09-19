@@ -451,7 +451,9 @@ describe("si mandar la respuesta falla", () => {
           return { messageId: "wamid.salida" };
         },
         sendImage: async (_to: string, url: string) => {
-          if (falla.fotos) throw new Error("500 de Meta");
+          // Motivos distintos a propósito: el primero es el que explica el
+          // problema y no puede perderse detrás del último.
+          if (falla.fotos) throw new Error(url.endsWith("1.jpg") ? "401 el token venció" : "404 media vencida");
           enviados.push(url);
           return { messageId: "wamid.salida" };
         },
@@ -467,12 +469,49 @@ describe("si mandar la respuesta falla", () => {
     await postear(banco.baseUrl, "Hola, ¿sigue disponible?", "wamid.UNO");
     await banco.queue.idle();
 
+    // Una sola entrada resuelta, escrita DESPUÉS del envío: dice que no salió.
     const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
-    expect(vista.etapa).toBe("envio_fallido");
     expect(vista.responseSent).toBeUndefined();
-    expect(vista.escalationReason).toContain("token venció");
+    expect(vista.envio).toBe("fallo");
+    expect(vista.envioMotivo).toContain("token venció");
     expect(banco.avisos).toHaveLength(1);
     expect(banco.avisos[0]).toContain("Hola, ¿sigue disponible?");
+    // El mensaje sí se procesó: decirle "no pude procesarlo" sería falso.
+    expect(banco.avisos[0]).toContain("NO pude mandarle la respuesta");
+    expect(banco.avisos[0]).not.toContain("No pude procesar");
+  });
+
+  // Hallazgo de la revisión del PR #41: el cliente no vio la respuesta, así que
+  // un "ok" suyo no puede confirmar lo que el handler dejó armado.
+  it("si el envío falla, la conversación no queda esperando confirmación", async () => {
+    const { sender } = senderQueFalla({ texto: true });
+    const conversationStateStore = new InMemoryConversationStateStore();
+    const propiedad = {
+      id: "prop-1",
+      tokkoId: "tokko-1",
+      direccion: "Av. Santa Fe 3253",
+      direccionCorta: "Depto Palermo",
+      tipo: "departamento",
+      estado: "disponible",
+      precio: 350000,
+      fotos: [],
+    };
+    const banco = await levantar(
+      async () => ({ intentId: "agendar_visita", confidence: 0.95, searchQuery: "Palermo" }),
+      {
+        sender,
+        conversationStateStore,
+        tokko: { searchProperties: async () => [propiedad], getProperty: async () => propiedad },
+        gcal: { freebusy: async () => [], createEvent: async () => ({ id: "evt-1" }) },
+        composer: { compose: async () => "Tengo estos horarios: jueves 10, viernes 11." },
+      } as unknown as Partial<AppDeps>
+    );
+
+    await postear(banco.baseUrl, "quiero ir a verlo", "wamid.UNO");
+    await banco.queue.idle();
+
+    const estado = await conversationStateStore.get(TELEFONO);
+    expect(estado?.step ?? "idle").toBe("idle");
   });
 
   it("después de una caída, un envío que falla no dispara el aviso de que volvió", async () => {
@@ -538,11 +577,38 @@ describe("si mandar la respuesta falla", () => {
     await banco.queue.idle();
 
     expect(enviados).toEqual(["Te paso el material de Depto Palermo:"]);
-    expect(banco.avisos).toEqual([]);
     const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
-    expect(vista.etapa).toBe("envio_fallido");
+    expect(vista.envio).toBe("parcial");
     expect(vista.responseSent).toBe("Te paso el material de Depto Palermo:");
-    expect(vista.escalationReason).toContain("2 de 2 fotos");
+    expect(vista.envioMotivo).toContain("2 de 2 fotos");
+    // Los dos motivos, no solo el último.
+    expect(vista.envioMotivo).toContain("401 el token venció");
+    expect(vista.envioMotivo).toContain("404 media vencida");
+    // El aviso lo dice como es: el texto salió.
+    expect(banco.avisos).toHaveLength(1);
+    expect(banco.avisos[0]).toContain("Le llegó el texto, pero no todo");
+    expect(banco.avisos[0]).not.toContain("NO se le respondió nada");
+    // Y no se da por recuperado: no salió todo.
+    expect(banco.avisos.some((aviso) => aviso.includes("volvió a procesar"))).toBe(false);
+  });
+
+  // El SilentModeSender no tira: devuelve la marca. Sin mirarla, el audit log
+  // diría que la respuesta salió (hallazgo de la revisión del PR #41).
+  it("un envío que el modo silencioso bloquea cuenta como fallo, aunque no tire", async () => {
+    const banco = await levantar(async () => ANDA, {
+      sender: {
+        sendText: async () => ({ raw: { messaging_product: "whatsapp" }, bloqueado: "modo_silencioso" }),
+        sendImage: async () => ({ raw: { messaging_product: "whatsapp" }, bloqueado: "modo_silencioso" }),
+      },
+    } as unknown as Partial<AppDeps>);
+
+    await postear(banco.baseUrl, "Hola", "wamid.UNO");
+    await banco.queue.idle();
+
+    const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
+    expect(vista.responseSent).toBeUndefined();
+    expect(vista.envio).toBe("fallo");
+    expect(vista.envioMotivo).toContain("modo silencioso");
   });
 
   // Modo de fallo 3 del pre-mortem.
@@ -558,7 +624,8 @@ describe("si mandar la respuesta falla", () => {
 
     expect(banco.avisos).toEqual([]);
     const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
-    expect(vista.etapa).toBe("envio_fallido");
+    expect(vista.envio).toBe("fallo");
+    expect(vista.responseSent).toBeUndefined();
   });
 
   // Modo de fallo 1 del pre-mortem, visto desde el Bloque 31: una plantilla

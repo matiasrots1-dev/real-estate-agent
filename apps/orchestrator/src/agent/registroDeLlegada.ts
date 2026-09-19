@@ -57,34 +57,6 @@ export async function registrarFallido(
   });
 }
 
-/**
- * Se escribe cuando el mensaje se procesó pero mandar la respuesta falló
- * (docs/TASKS.md Bloque 38d). La entrada resuelta ya está escrita y dice que
- * la respuesta salió; esta la reemplaza al colapsar.
- *
- * `textoEnviado`: lo que sí salió. Si el texto salió y fallaron las fotos, va
- * el texto; si falló el texto, no salió nada.
- */
-export async function registrarEnvioFallido(
-  auditLog: AuditLogStore | undefined,
-  message: IncomingWhatsAppMessage,
-  resultado: { intentId: string; confidence: number | null },
-  motivo: string,
-  textoEnviado?: string,
-  ahora: Date = new Date()
-): Promise<boolean> {
-  return escribir(auditLog, {
-    ...base(message, ahora),
-    matchedIntentId: resultado.intentId,
-    confidence: resultado.confidence,
-    // Del broker se espera una respuesta humana: el cliente no la tuvo.
-    escalatedToBroker: true,
-    escalationReason: motivo,
-    responseSent: textoEnviado,
-    etapa: "envio_fallido",
-  });
-}
-
 /** Una línea legible del error, recortada: va al audit log, no un stack entero. */
 export function describirError(error: unknown): string {
   const texto = error instanceof Error ? error.message : String(error);

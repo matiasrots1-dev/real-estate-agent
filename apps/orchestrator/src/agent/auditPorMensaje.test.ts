@@ -3,12 +3,9 @@
 // resuelve, todo lo que cuenta mensajes pasaría a contar el doble.
 
 import { describe, expect, it } from "vitest";
-import { colapsarPorMensaje, esResuelta } from "./auditPorMensaje.js";
+import { colapsarPorMensaje, esResuelta, fueRespondida } from "./auditPorMensaje.js";
 
-const entrada = (
-  id: string,
-  extra: { messageId?: string; etapa?: "recibido" | "fallido" | "envio_fallido" } = {}
-) => ({
+const entrada = (id: string, extra: { messageId?: string; etapa?: "recibido" | "fallido" } = {}) => ({
   id,
   ...extra,
 });
@@ -72,27 +69,6 @@ describe("colapsarPorMensaje", () => {
     expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["resuelto-de-nuevo"]);
   });
 
-  // docs/TASKS.md Bloque 38d: la resuelta se escribe antes del envío; si el
-  // envío falla, la entrada del fallo tiene que ganarle.
-  it("un envío fallido reemplaza a la resuelta que decía que la respuesta salió", () => {
-    const entradas = [
-      entrada("llego", { messageId: "m1", etapa: "recibido" }),
-      entrada("resuelto", { messageId: "m1" }),
-      entrada("no-salio", { messageId: "m1", etapa: "envio_fallido" }),
-    ];
-
-    expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["no-salio"]);
-  });
-
-  it("un reproceso cuyo envío sí sale le gana al envío fallido anterior", () => {
-    const entradas = [
-      entrada("no-salio", { messageId: "m1", etapa: "envio_fallido" }),
-      entrada("resuelto-de-nuevo", { messageId: "m1" }),
-    ];
-
-    expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["resuelto-de-nuevo"]);
-  });
-
   it("las entradas sin messageId pasan sin tocar: las viejas y las de los jobs", () => {
     const entradas = [
       entrada("vieja-1"),
@@ -105,12 +81,32 @@ describe("colapsarPorMensaje", () => {
   });
 });
 
+// docs/TASKS.md Bloques 38a y 38d. Lo usa `pendientes`, que no tiene tests
+// propios: acá se prueba la regla, no el script.
+describe("fueRespondida", () => {
+  it("con la respuesta enviada y el aviso al broker OK, está respondida", () => {
+    expect(fueRespondida({ responseSent: "listo", avisoAlBroker: "enviado" })).toBe(true);
+    expect(fueRespondida({ responseSent: "listo" })).toBe(true);
+  });
+
+  it("sin respuesta enviada, no", () => {
+    expect(fueRespondida({})).toBe(false);
+  });
+
+  it("si el aviso al broker falló, no: el cliente tiene la plantilla de espera y el broker no sabe nada", () => {
+    expect(fueRespondida({ responseSent: "Dejame confirmarlo...", avisoAlBroker: "fallo" })).toBe(false);
+  });
+
+  it("si el envío falló o salió a medias, no", () => {
+    expect(fueRespondida({ responseSent: undefined, envio: "fallo" })).toBe(false);
+    expect(fueRespondida({ responseSent: "Te paso el material:", envio: "parcial" })).toBe(false);
+  });
+});
+
 describe("esResuelta", () => {
   it("solo las entradas sin etapa tienen un intent real", () => {
     expect(esResuelta(entrada("x"))).toBe(true);
     expect(esResuelta(entrada("x", { etapa: "recibido" }))).toBe(false);
     expect(esResuelta(entrada("x", { etapa: "fallido" }))).toBe(false);
-    // El intent de un envío fallido es real: lo que falló fue mandar.
-    expect(esResuelta(entrada("x", { etapa: "envio_fallido" }))).toBe(true);
   });
 });
