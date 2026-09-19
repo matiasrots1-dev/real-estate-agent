@@ -20,7 +20,12 @@ import type { ContactosConocidos } from "./agent/contactosConocidos.js";
 import { sirveComoEjemplo, type EstiloBrokerStore } from "./agent/estiloBrokerStore.js";
 import type { AuditLogStore } from "./agent/auditLog.js";
 import { colapsarPorMensaje, esResuelta } from "./agent/auditPorMensaje.js";
-import { registrarFallido, registrarRecibido } from "./agent/registroDeLlegada.js";
+import {
+  describirError,
+  registrarEnvioFallido,
+  registrarFallido,
+  registrarRecibido,
+} from "./agent/registroDeLlegada.js";
 import type { AvisadorDeFallos } from "./agent/avisoDeFallos.js";
 import { anonimizar } from "shared-types";
 
@@ -406,15 +411,50 @@ async function handleIncomingWebhook(
       await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
       throw error;
     }
-    await avisoDeFallos?.registrarExito();
     // responseText es null cuando el agente está pausado para este
     // cliente (docs/TASKS.md Bloque 9) — el mensaje ya quedó auditado
     // adentro de handleIncomingMessage, acá simplemente no hay nada que mandar.
     if (deps.sender && result.responseText !== null) {
-      await deps.sender.sendText(message.from, result.responseText);
-      for (const mediaUrl of result.mediaUrls ?? []) {
-        await deps.sender.sendImage(message.from, mediaUrl);
+      // Un envío que falla es un fallo (docs/TASKS.md Bloque 38d). Antes la
+      // tarea tiraba y la cola solo lo escribía en consola, con el audit log
+      // diciendo que la respuesta había salido.
+      try {
+        await deps.sender.sendText(message.from, result.responseText);
+      } catch (error) {
+        await registrarEnvioFallido(
+          deps.auditLog,
+          message,
+          result,
+          `No se pudo mandar la respuesta: ${describirError(error)}. No le llegó nada.`
+        );
+        await avisoDeFallos?.registrarFallo({ telefono: message.from, texto: message.text });
+        throw error;
+      }
+      // El texto ya salió: si falla una foto, no se avisa "no se le respondió
+      // nada" (sería falso). Queda en el audit log, y `pendientes` la muestra.
+      const fotos = result.mediaUrls ?? [];
+      let fotosQueFallaron = 0;
+      let ultimoError: unknown;
+      for (const mediaUrl of fotos) {
+        try {
+          await deps.sender.sendImage(message.from, mediaUrl);
+        } catch (error) {
+          fotosQueFallaron += 1;
+          ultimoError = error;
+        }
+      }
+      if (fotosQueFallaron > 0) {
+        await registrarEnvioFallido(
+          deps.auditLog,
+          message,
+          result,
+          `Se mandó el texto, pero no ${fotosQueFallaron} de ${fotos.length} fotos: ${describirError(ultimoError)}.`,
+          result.responseText
+        );
+        console.error(`[envío] fallaron ${fotosQueFallaron} de ${fotos.length} fotos:`, ultimoError);
       }
     }
+    // Recién acá: "volvió a procesar" con un envío que falló sería falso.
+    await avisoDeFallos?.registrarExito();
   });
 }

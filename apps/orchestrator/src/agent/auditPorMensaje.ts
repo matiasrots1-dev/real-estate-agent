@@ -62,17 +62,26 @@ export function colapsarPorMensaje<T extends ConEtapa>(entradas: readonly T[]): 
   return salida;
 }
 
+/**
+ * `envio_fallido` (docs/TASKS.md Bloque 38d) tiene el mismo rango que una
+ * resuelta, y entre iguales gana la última escrita. Así reemplaza a la
+ * resuelta, que se escribe antes del envío y dice que la respuesta salió; y
+ * un reproceso posterior cuyo envío sí sale vuelve a ganarle.
+ */
 function rango(entrada: ConEtapa): number {
   if (entrada.etapa === "recibido") return 0;
   if (entrada.etapa === "fallido") return 1;
+  if (entrada.etapa === "envio_fallido") return 2;
   return 2;
 }
 
 /**
  * Una entrada resuelta tiene un intent real. Una `recibido` que quedó sola y
  * una `fallido` llevan un intent centinela, que no sirve para nada que razone
- * sobre el intent: el corpus de estilo, las mediciones del clasificador.
+ * sobre el intent: el corpus de estilo, las mediciones del clasificador. Una
+ * `envio_fallido` sí tiene el intent real: el mensaje se clasificó, lo que
+ * falló fue mandar la respuesta.
  */
 export function esResuelta(entrada: ConEtapa): boolean {
-  return entrada.etapa === undefined;
+  return entrada.etapa === undefined || entrada.etapa === "envio_fallido";
 }

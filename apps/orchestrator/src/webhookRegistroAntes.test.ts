@@ -432,3 +432,158 @@ describe("los mensajes del broker", () => {
     expect(banco.avisos[0]).not.toContain("resumen");
   });
 });
+
+// docs/TASKS.md Bloque 38d. El handler registra la respuesta antes de que
+// app.ts la mande. Si el envío fallaba, la tarea tiraba y la cola solo lo
+// escribía en consola: el audit log decía que había salido, no había aviso, y
+// pendientes la daba por respondida.
+describe("si mandar la respuesta falla", () => {
+  const BROKER = "5491100000000";
+
+  function senderQueFalla(falla: { texto?: boolean; fotos?: boolean }) {
+    const enviados: string[] = [];
+    return {
+      enviados,
+      sender: {
+        sendText: async (_to: string, body: string) => {
+          if (falla.texto) throw new Error("401 el token venció");
+          enviados.push(body);
+          return { messageId: "wamid.salida" };
+        },
+        sendImage: async (_to: string, url: string) => {
+          if (falla.fotos) throw new Error("500 de Meta");
+          enviados.push(url);
+          return { messageId: "wamid.salida" };
+        },
+        sendTemplate: async () => ({ messageId: "wamid.salida" }),
+      },
+    };
+  }
+
+  it("el mensaje queda como envío fallido, no como respondido, y te llega el aviso", async () => {
+    const { sender } = senderQueFalla({ texto: true });
+    const banco = await levantar(async () => ANDA, { sender } as unknown as Partial<AppDeps>);
+
+    await postear(banco.baseUrl, "Hola, ¿sigue disponible?", "wamid.UNO");
+    await banco.queue.idle();
+
+    const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
+    expect(vista.etapa).toBe("envio_fallido");
+    expect(vista.responseSent).toBeUndefined();
+    expect(vista.escalationReason).toContain("token venció");
+    expect(banco.avisos).toHaveLength(1);
+    expect(banco.avisos[0]).toContain("Hola, ¿sigue disponible?");
+  });
+
+  it("después de una caída, un envío que falla no dispara el aviso de que volvió", async () => {
+    let caido = true;
+    const { sender } = senderQueFalla({ texto: true });
+    const banco = await levantar(async () => (caido ? sinCredito() : ANDA), { sender } as unknown as Partial<AppDeps>);
+
+    await postear(banco.baseUrl, "primero", "wamid.UNO");
+    await banco.queue.idle();
+    caido = false;
+    await postear(banco.baseUrl, "segundo", "wamid.DOS");
+    await banco.queue.idle();
+
+    expect(banco.avisos).toHaveLength(2);
+    expect(banco.avisos.some((aviso) => aviso.includes("volvió a procesar"))).toBe(false);
+    expect(banco.avisos[1]).toContain("segundo");
+  });
+
+  it("cuando el envío vuelve a andar, recién ahí avisa que volvió", async () => {
+    let falla = true;
+    const banco = await levantar(async () => ANDA, {
+      sender: {
+        sendText: async () => {
+          if (falla) throw new Error("401 el token venció");
+          return { messageId: "wamid.salida" };
+        },
+        sendImage: async () => ({ messageId: "wamid.salida" }),
+      },
+    } as unknown as Partial<AppDeps>);
+
+    await postear(banco.baseUrl, "primero", "wamid.UNO");
+    await banco.queue.idle();
+    falla = false;
+    await postear(banco.baseUrl, "segundo", "wamid.DOS");
+    await banco.queue.idle();
+
+    expect(banco.avisos).toHaveLength(2);
+    expect(banco.avisos[1]).toContain("volvió a procesar");
+  });
+
+  // Modo de fallo 2 del pre-mortem.
+  it("si fallan las fotos pero el texto salió, no se avisa que no se le respondió nada", async () => {
+    const { sender, enviados } = senderQueFalla({ fotos: true });
+    const propiedad = {
+      id: "prop-1",
+      tokkoId: "tokko-1",
+      direccion: "Av. Santa Fe 3253",
+      direccionCorta: "Depto Palermo",
+      tipo: "departamento",
+      estado: "disponible",
+      precio: 350000,
+      fotos: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+    };
+    const banco = await levantar(
+      async () => ({ intentId: "pedido_ficha_multimedia", confidence: 0.95, searchQuery: "Palermo" }),
+      {
+        sender,
+        tokko: { searchProperties: async () => [propiedad], getProperty: async () => propiedad },
+      } as unknown as Partial<AppDeps>
+    );
+
+    await postear(banco.baseUrl, "¿me pasás fotos del de Palermo?", "wamid.UNO");
+    await banco.queue.idle();
+
+    expect(enviados).toEqual(["Te paso el material de Depto Palermo:"]);
+    expect(banco.avisos).toEqual([]);
+    const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
+    expect(vista.etapa).toBe("envio_fallido");
+    expect(vista.responseSent).toBe("Te paso el material de Depto Palermo:");
+    expect(vista.escalationReason).toContain("2 de 2 fotos");
+  });
+
+  // Modo de fallo 3 del pre-mortem.
+  it("una respuesta al broker que no se pudo mandar queda registrada, sin aviso", async () => {
+    const { sender } = senderQueFalla({ texto: true });
+    const banco = await levantar(async () => ANDA, {
+      sender,
+      brokerWhatsappNumber: BROKER,
+    } as unknown as Partial<AppDeps>);
+
+    await postear(banco.baseUrl, "¿cómo viene la agenda?", "wamid.UNO", BROKER);
+    await banco.queue.idle();
+
+    expect(banco.avisos).toEqual([]);
+    const [vista] = colapsarPorMensaje(await banco.auditLog.readAll());
+    expect(vista.etapa).toBe("envio_fallido");
+  });
+
+  // Modo de fallo 1 del pre-mortem, visto desde el Bloque 31: una plantilla
+  // fija que no salió no puede gastar el único envío por conversación.
+  it("un envío fallido no gasta el único envío de la plantilla fija", async () => {
+    let falla = true;
+    const enviados: string[] = [];
+    const banco = await levantar(async () => ({ intentId: "reclamo_queja", confidence: 0.9 }), {
+      sender: {
+        sendText: async (_to: string, body: string) => {
+          if (falla) throw new Error("401 el token venció");
+          enviados.push(body);
+          return { messageId: "wamid.salida" };
+        },
+        sendImage: async () => ({ messageId: "wamid.salida" }),
+      },
+    } as unknown as Partial<AppDeps>);
+    const plantilla = catalog.intents.find((i) => i.id === "reclamo_queja")!.response.template!;
+
+    await postear(banco.baseUrl, "esto es un desastre", "wamid.UNO");
+    await banco.queue.idle();
+    falla = false;
+    await postear(banco.baseUrl, "sigo esperando", "wamid.DOS");
+    await banco.queue.idle();
+
+    expect(enviados).toEqual([plantilla]);
+  });
+});

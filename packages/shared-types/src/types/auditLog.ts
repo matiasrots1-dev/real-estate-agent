@@ -25,9 +25,12 @@ export interface AuditLogEntry {
   /**
    * `recibido`: escrita al llegar el mensaje, antes de clasificar.
    * `fallido`: el procesamiento tiró; al cliente no se le respondió nada.
+   * `envio_fallido`: se procesó, pero mandar la respuesta falló (docs/TASKS.md
+   *   Bloque 38d). Reemplaza a la entrada resuelta, que se escribe antes del
+   *   envío. `responseSent` dice lo que sí salió, si salió algo.
    * Ausente: entrada resuelta, como todas las anteriores al Bloque 34.
    */
-  etapa?: "recibido" | "fallido";
+  etapa?: "recibido" | "fallido" | "envio_fallido";
   /**
    * Qué pasó con el aviso al broker, en las entradas que lo intentaron
    * (docs/TASKS.md Bloque 38a):

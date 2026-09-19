@@ -84,7 +84,9 @@ const entradas: Entrada[] = colapsarPorMensaje(
  * espera y el broker no sabe nada: esa conversacion sigue pendiente.
  */
 function fueRespondida(e: Entrada): boolean {
-  return e.responseSent !== undefined && e.avisoAlBroker !== "fallo";
+  // Un envío que falló (docs/TASKS.md Bloque 38d) queda pendiente aunque el
+  // texto haya salido: si fallaron las fotos, al cliente le falta algo.
+  return e.responseSent !== undefined && e.avisoAlBroker !== "fallo" && e.etapa !== "envio_fallido";
 }
 
 interface Conversacion {
@@ -240,7 +242,8 @@ for (const c of lista) {
   console.log(
     `    ${haceCuanto(c.ultimo.timestamp)} · ${c.mejorIntent} · ${c.mensajes} ${c.mensajes === 1 ? "mensaje" : "mensajes"}` +
       `${c.respondida ? " · respondida por el agente" : ""}${respondioElBroker(c) ? " · YA LE CONTESTASTE VOS" : ""}` +
-      `${c.ultimo.avisoAlBroker === "fallo" ? " · EL AVISO NO TE LLEGÓ" : ""}`
+      `${c.ultimo.avisoAlBroker === "fallo" ? " · EL AVISO NO TE LLEGÓ" : ""}` +
+      `${c.ultimo.etapa === "envio_fallido" ? " · NO SE PUDO MANDAR LA RESPUESTA" : ""}`
   );
   console.log("");
 }

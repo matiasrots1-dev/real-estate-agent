@@ -1990,7 +1990,7 @@ o promesas que el bloque hace y no cumplia) y se arreglaron aca:
       y sigue, pero no se escribe `fallido` ni sale aviso hasta que la
       llamada termine: el SDK espera 10 minutos por intento, con reintentos.
       Arreglo: timeout explicito en el cliente de Anthropic. Pasa al Bloque 38.
-- [ ] **Un envio al cliente que falla no es un fallo.** La captura termina
+- [x] *(Resuelto en 38d.)* **Un envio al cliente que falla no es un fallo.** La captura termina
       antes de `sendText`. En modo silencioso no se le manda nada al cliente,
       asi que hoy no aplica; bloquea apagarlo. Pasa al Bloque 38.
 - [ ] El `fallido` no guarda que tools ya se habian llamado: si Calendar creo
@@ -2834,6 +2834,76 @@ escalamientos tiene que tener un test del mensaje que recibe el cliente.
       pudimos reprogramar tu visita de ...". Esta completa, no tiene huecos,
       pero el "Listo," suena raro.
 
+### 38d — Un envio al cliente que falla es un fallo
+El handler registra la entrada del mensaje con `responseSent` **antes** de que
+`app.ts` mande la respuesta. Si `sendText` falla (token vencido, un 5xx de
+Meta), la tarea tira y la cola solo lo escribe en consola:
+- el audit log dice que la respuesta salio;
+- no hay `fallido` ni aviso al broker (la captura del Bloque 34 termina antes
+  del envio);
+- `pendientes` la marca como respondida;
+- si era una plantilla fija, gasta el unico envio por conversacion del
+  Bloque 31 sin que haya salido.
+Ademas, el aviso "volvio a procesar" del Bloque 34 sale **antes** del envio: un
+envio que falla despues de una caida igual lo dispara.
+
+En modo silencioso hoy no pasa con clientes (no se les manda nada), pero si con
+las respuestas a las ordenes del broker (38g).
+
+**Diseno**: despues de un envio que falla, una entrada nueva del mismo mensaje
+con `etapa: "envio_fallido"`, sin `responseSent`, con el motivo. Al colapsar
+reemplaza a la que decia "enviado", asi que todos los lectores (el contexto
+del clasificador, `pendientes`, la supresion del Bloque 31) ven que no salio.
+
+**Pre-mortem**
+
+**1. La entrada del fallo pierde contra la que dice "enviado".** El colapso del
+Bloque 34 deja ganar a la etapa mas avanzada; si `envio_fallido` quedara por
+debajo de la resuelta, todo seguiria viendo el mensaje como respondido.
+   *Mitigacion*: `envio_fallido` tiene el mismo rango que una resuelta, y entre
+   iguales gana la ultima escrita (un reproceso posterior que si sale vuelve a
+   ganar). Tests de `pendientes` y de la supresion del Bloque 31 sobre la vista
+   colapsada.
+
+**2. El aviso le dice al broker que al cliente no le llego nada cuando si le
+llego el texto.** Si falla una de las fotos de `pedido_ficha_multimedia`, el
+texto ya salio. El aviso del Bloque 34 dice "NO se le respondio nada".
+   *Mitigacion*: si el texto salio y fallan las fotos, no hay aviso: la entrada
+   conserva el texto enviado, dice cuantas fotos no salieron, y `pendientes` la
+   muestra como pendiente. Test.
+
+**3. Un envio al broker que falla le genera un aviso sobre su propio mensaje,
+o se pierde.** Las respuestas a sus ordenes (38g) salen por el mismo camino.
+   *Mitigacion*: queda la entrada `envio_fallido`, sin aviso: el canal al
+   broker es justo el que fallo. Test.
+
+**Como quedo**
+- [x] `app.ts`: si falla el texto, entrada `envio_fallido` sin `responseSent`,
+      aviso de fallos (si es un cliente) y se relanza para que la cola lo
+      loguee. Si el texto sale y fallan fotos, entrada `envio_fallido` con el
+      texto enviado y cuantas fotos no salieron, sin aviso.
+- [x] El aviso "volvio a procesar" del Bloque 34 se registra recien despues
+      de un envio que salio.
+- [x] Colapso: `envio_fallido` con el mismo rango que una resuelta, gana la
+      ultima escrita. Cuenta como entrada con intent real (`esResuelta`).
+- [x] `pendientes`: un `envio_fallido` queda pendiente aunque el texto haya
+      salido, marcado "NO SE PUDO MANDAR LA RESPUESTA".
+- [x] 9 tests nuevos, a traves del webhook real, incluido el cupo del Bloque
+      31 despues de un envio que fallo. Mutation testing, una por vez:
+      - K1. el envio fallido no queda en el audit log: 3 tests en rojo
+      - K2. el envio fallido no avisa: 3 tests en rojo
+      - K3. el exito se registra antes del envio (lo de antes): 1 test en rojo
+      - K4. el envio fallido pierde contra la resuelta: 5 tests en rojo
+      - K5. una foto que falla avisa que no se respondio nada: 1 test en rojo
+      - K6. las fotos que fallan no quedan registradas: 1 test en rojo
+      - K7. el texto que no salio queda como enviado: 2 tests en rojo
+      - K8. `esResuelta` excluye el envio fallido: 1 test en rojo
+- [ ] Sigue sin cubrirse: un envio que WhatsApp acepta (200) pero no entrega
+      (ventana de 24 hs, numero invalido) no es un fallo aca. Se veria recien
+      en los statuses del webhook, que hoy no se leen.
+- [ ] La entrada `envio_fallido` no guarda las tools que se llamaron (mismo
+      riesgo que el `fallido` del Bloque 34).
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -2962,10 +3032,11 @@ arreglaron 8 (arriba). Quedan anotados:
       manda la plantilla de espera del catalogo, y ninguno cuenta para el
       cupo, que se decide por id de intent. Deberia decidirse por el texto
       que efectivamente sale.
-- [ ] **Un envio al cliente que falla no es un fallo.** La captura del Bloque
+- [x] *(Resuelto en el Bloque 38d.)* **Un envio al cliente que falla no es un fallo.** La captura del Bloque
       34 termina antes de `sendText`: si el envio falla, no hay `fallido` ni
       aviso, y `pendientes` la marca como respondida.
-- [ ] `responseSent` se registra antes de enviar: si el envio falla, igual se
+- [x] *(Resuelto en 38d: si el envio falla, la entrada `envio_fallido` la
+      reemplaza y no gasta el cupo.)* `responseSent` se registra antes de enviar: si el envio falla, igual se
       gasta el unico envio de plantilla permitido (Bloque 31).
 - [ ] La deteccion de "el broker respondio" no ve los envios de
       `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
