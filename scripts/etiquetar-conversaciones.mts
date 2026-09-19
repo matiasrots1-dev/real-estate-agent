@@ -23,7 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NumerosInternos } from "../apps/orchestrator/src/jobs/numerosInternos.js";
 import { colapsarPorMensaje, esResuelta } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
-import { FileAuditLogStore } from "../apps/orchestrator/src/agent/auditLog.js";
+import { leerAuditLogExistente } from "../apps/orchestrator/src/agent/auditLog.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AUDIT = path.join(REPO, "apps/orchestrator/data/audit_log.jsonl");
@@ -42,7 +42,7 @@ interface Entrada {
 
 // Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
 // recibido y la que lo resuelve, y sin colapsar se contaria dos veces.
-const entradas: Entrada[] = colapsarPorMensaje(await new FileAuditLogStore(AUDIT).readAll());
+const entradas: Entrada[] = colapsarPorMensaje(await leerAuditLogExistente(AUDIT));
 
 interface Conv {
   id: string;

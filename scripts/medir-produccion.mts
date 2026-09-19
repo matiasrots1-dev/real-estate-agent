@@ -21,7 +21,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { loadCatalog } from "../apps/orchestrator/src/agent/intentCatalog.js";
 import { ClaudeIntentClassifier, type ContextoConversacion } from "../apps/orchestrator/src/agent/classifier.js";
 import { colapsarPorMensaje } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
-import { FileAuditLogStore } from "../apps/orchestrator/src/agent/auditLog.js";
+import { leerAuditLogExistente } from "../apps/orchestrator/src/agent/auditLog.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotenv({ path: path.join(REPO, ".env") });
@@ -39,7 +39,7 @@ interface Entrada {
 // sin resolver se quedan: aca se reclasifica el TEXTO, y en produccion esos
 // mensajes forman parte del contexto de los que vienen despues.
 const entradas: Entrada[] = colapsarPorMensaje(
-  await new FileAuditLogStore(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl")).readAll()
+  await leerAuditLogExistente(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl"))
 );
 
 const etiquetas: Record<string, string> = JSON.parse(

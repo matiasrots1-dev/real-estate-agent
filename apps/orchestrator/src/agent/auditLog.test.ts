@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuditLogEntry } from "shared-types";
-import { FileAuditLogStore, InMemoryAuditLogStore, parsearAuditLog } from "./auditLog.js";
+import { FileAuditLogStore, InMemoryAuditLogStore, leerAuditLogExistente, parsearAuditLog } from "./auditLog.js";
 import { ContactosConocidos } from "./contactosConocidos.js";
 
 function sampleEntry(overrides: Partial<AuditLogEntry> = {}): AuditLogEntry {
@@ -94,11 +94,26 @@ describe("FileAuditLogStore con una línea rota", () => {
     expect(entradas.map((e) => e.id)).toEqual(["a", "b"]);
   });
 
-  it("un JSON válido que no es un objeto también es ilegible", () => {
-    const { entradas, ilegibles } = parsearAuditLog('null\n42\n[1]\n"texto"\n{"id":"a"}\n');
+  it("un JSON válido que no es una entrada también es ilegible", () => {
+    const buena = JSON.stringify(sampleEntry({ id: "a" }));
+    const { entradas, ilegibles } = parsearAuditLog(
+      [
+        "null",
+        "42",
+        "[1]",
+        '"texto"',
+        '{"id":"sin-fecha-ni-telefono"}',
+        '{"id":"x","conversationId":"5491100000001","timestamp":"no es una fecha"}',
+        buena,
+      ].join("\n")
+    );
 
     expect(entradas.map((e) => e.id)).toEqual(["a"]);
-    expect(ilegibles.map((l) => l.numero)).toEqual([1, 2, 3, 4]);
+    expect(ilegibles.map((l) => l.numero)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("para los scripts, un archivo que no existe es un error y no una lista vacía", async () => {
+    await expect(leerAuditLogExistente(path.join(dir, "no-existe.jsonl"))).rejects.toThrow(/ENOENT/);
   });
 
   // Lo que tumbaba el arranque: server.ts carga los contactos conocidos del
@@ -137,7 +152,7 @@ describe("FileAuditLogStore con una línea rota", () => {
   });
 
   // Modo de fallo 1: leer tolerante convertía la purga en un borrado silencioso.
-  it("la purga borra lo viejo pero conserva la línea rota tal cual", async () => {
+  it("la purga conserva, en su lugar, una línea rota que no venció", async () => {
     const viejo = sampleEntry({ id: "viejo", timestamp: "2025-01-01T00:00:00.000Z" });
     const nuevo = sampleEntry({ id: "nuevo", timestamp: "2026-09-01T00:00:00.000Z" });
     await writeFile(archivo, linea(viejo) + "{rota\n" + linea(nuevo));
@@ -146,10 +161,63 @@ describe("FileAuditLogStore con una línea rota", () => {
     const resultado = await store.purgeOlderThan(new Date("2026-01-01T00:00:00.000Z"), false);
 
     expect(resultado.borrados).toBe(1);
-    const enDisco = await readFile(archivo, "utf-8");
-    expect(enDisco).toContain("{rota");
-    expect(enDisco).not.toContain('"viejo"');
-    expect((await store.readAll()).map((e) => e.id)).toEqual(["nuevo"]);
+    // La línea rota es anterior a "nuevo", que no venció: se queda, antes que él.
+    expect(await readFile(archivo, "utf-8")).toBe("{rota\n" + linea(nuevo));
+  });
+
+  // Hallazgo de la revisión del PR: conservarlas para siempre incumplía la
+  // retención publicada de 12 meses, con apariencia de cumplida.
+  it("la purga borra y cuenta una línea rota que venció: la fecha es la de la entrada siguiente", async () => {
+    const viejo1 = sampleEntry({ id: "viejo1", timestamp: "2024-06-01T00:00:00.000Z" });
+    const viejo2 = sampleEntry({ id: "viejo2", timestamp: "2025-01-01T00:00:00.000Z" });
+    const nuevo = sampleEntry({ id: "nuevo", timestamp: "2026-09-01T00:00:00.000Z" });
+    await writeFile(archivo, linea(viejo1) + "{rota-vieja\n" + linea(viejo2) + linea(nuevo));
+    const store = new FileAuditLogStore(archivo);
+
+    const resultado = await store.purgeOlderThan(new Date("2026-01-01T00:00:00.000Z"), false);
+
+    expect(resultado.borrados).toBe(3);
+    expect(resultado.muestra).toContainEqual({
+      store: "audit_log",
+      id: "línea ilegible 2",
+      fecha: viejo2.timestamp,
+    });
+    expect(await readFile(archivo, "utf-8")).toBe(linea(nuevo));
+  });
+
+  it("una línea rota al final no se borra: es de las más nuevas", async () => {
+    const viejo = sampleEntry({ id: "viejo", timestamp: "2025-01-01T00:00:00.000Z" });
+    await writeFile(archivo, linea(viejo) + "{rota-al-final\n");
+    const store = new FileAuditLogStore(archivo);
+
+    const resultado = await store.purgeOlderThan(new Date("2026-01-01T00:00:00.000Z"), false);
+
+    expect(resultado.borrados).toBe(1);
+    expect(await readFile(archivo, "utf-8")).toBe("{rota-al-final\n");
+  });
+
+  it("el simulacro cuenta las líneas rotas vencidas pero no toca el archivo", async () => {
+    const viejo = sampleEntry({ id: "viejo", timestamp: "2025-01-01T00:00:00.000Z" });
+    const contenido = "{rota-vieja\n" + linea(viejo);
+    await writeFile(archivo, contenido);
+
+    const resultado = await new FileAuditLogStore(archivo).purgeOlderThan(new Date("2026-01-01T00:00:00.000Z"), true);
+
+    expect(resultado.borrados).toBe(2);
+    expect(await readFile(archivo, "utf-8")).toBe(contenido);
+  });
+
+  // Hallazgo de la revisión del PR: avisar solo al cambiar la cantidad dejaba
+  // el aviso apuntando a líneas que ya no eran las rotas.
+  it("vuelve a avisar si cambian las líneas rotas, aunque sean la misma cantidad", async () => {
+    const store = new FileAuditLogStore(archivo);
+    await writeFile(archivo, "{rota\n" + linea(sampleEntry({ id: "a" })));
+    await store.readAll();
+    await writeFile(archivo, linea(sampleEntry({ id: "a" })) + "{rota\n");
+    await store.readAll();
+
+    expect(console.warn).toHaveBeenCalledTimes(2);
+    expect(String(vi.mocked(console.warn).mock.calls[1][0])).toContain("línea 2");
   });
 
   // Modo de fallo 3: la primera entrada después de un corte se pegaba detrás
@@ -167,7 +235,19 @@ describe("FileAuditLogStore con una línea rota", () => {
     expect(ilegibles.map((l) => l.texto)).toEqual([MEDIA_LINEA]);
   });
 
-  it("con escrituras simultáneas después de un corte, ninguna se adelanta a la reparación", async () => {
+  // Hallazgo de la revisión del PR: el corte puede pasar con el proceso vivo
+  // (disco lleno) o por una edición a mano. Mirar una vez por proceso no alcanza.
+  it("si el final se corta con el proceso andando, la escritura siguiente también lo repara", async () => {
+    const store = new FileAuditLogStore(archivo);
+    await store.append(sampleEntry({ id: "a" }));
+    await appendFile(archivo, MEDIA_LINEA);
+
+    await store.append(sampleEntry({ id: "b" }));
+
+    expect((await store.readAll()).map((e) => e.id)).toEqual(["a", "b"]);
+  });
+
+  it("con escrituras simultáneas después de un corte, ninguna queda pegada a la media línea", async () => {
     await writeFile(archivo, MEDIA_LINEA);
     const store = new FileAuditLogStore(archivo);
 

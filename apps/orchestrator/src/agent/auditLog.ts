@@ -8,7 +8,7 @@
 // interfaz que ambas implementaciones cumplen, así el resto del código no
 // depende de cuál esté activa.
 
-import { appendFile, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AuditLogEntry } from "shared-types";
 import { enmascararTelefono, MUESTRA_MAX, type PurgeResult, type PurgeableStore } from "./purge.js";
@@ -20,11 +20,44 @@ export interface AuditLogStore extends PurgeableStore {
 
 const STORE_NAME = "audit_log";
 
-/** Una línea que no se pudo leer. Se conserva tal cual (ver `purgeOlderThan`). */
+/** Una línea que no se pudo leer (ver `parsearAuditLog` y `purgeOlderThan`). */
 export interface LineaIlegible {
   /** Número de línea en el archivo, desde 1. */
   numero: number;
   texto: string;
+}
+
+/** Cada línea no vacía del archivo, en orden: la purga necesita el orden. */
+type Linea = { entrada: AuditLogEntry; ilegible?: undefined } | { entrada?: undefined; ilegible: LineaIlegible };
+
+function leerLineas(contenido: string): Linea[] {
+  const lineas: Linea[] = [];
+  contenido.split("\n").forEach((texto, i) => {
+    if (texto.trim() === "") return;
+    const entrada = comoEntrada(texto);
+    lineas.push(entrada ? { entrada } : { ilegible: { numero: i + 1, texto } });
+  });
+  return lineas;
+}
+
+/**
+ * Una entrada es un objeto con `conversationId` y un `timestamp` que se
+ * pueda fechar. Un JSON válido que no cumple eso (`null`, `{"id":"x"}`)
+ * también es ilegible: los lectores harían `entrada.timestamp.localeCompare`
+ * sobre él, y sin fecha la retención no lo borraría nunca.
+ */
+function comoEntrada(texto: string): AuditLogEntry | null {
+  let valor: unknown;
+  try {
+    valor = JSON.parse(texto);
+  } catch {
+    return null;
+  }
+  if (typeof valor !== "object" || valor === null || Array.isArray(valor)) return null;
+  const { conversationId, timestamp } = valor as Record<string, unknown>;
+  if (typeof conversationId !== "string") return null;
+  if (typeof timestamp !== "string" || Number.isNaN(Date.parse(timestamp))) return null;
+  return valor as AuditLogEntry;
 }
 
 /**
@@ -35,30 +68,26 @@ export interface LineaIlegible {
  * sin `try`, esa sola línea tumbaba el arranque del bot, y systemd lo
  * reiniciaba en loop. Las líneas ilegibles se devuelven aparte, sin adivinar
  * una reparación: una reparación equivocada es peor que una línea marcada.
- *
- * Una línea que es JSON válido pero no un objeto (`null`, un número) también
- * es ilegible: los lectores harían `entrada.conversationId` sobre ella.
- *
- * La usan el store y los scripts que leen el archivo directo (`pendientes`,
- * `medir:*`, `etiquetar`).
  */
 export function parsearAuditLog(contenido: string): { entradas: AuditLogEntry[]; ilegibles: LineaIlegible[] } {
   const entradas: AuditLogEntry[] = [];
   const ilegibles: LineaIlegible[] = [];
-  contenido.split("\n").forEach((linea, i) => {
-    if (linea.trim() === "") return;
-    try {
-      const valor: unknown = JSON.parse(linea);
-      if (typeof valor === "object" && valor !== null && !Array.isArray(valor)) {
-        entradas.push(valor as AuditLogEntry);
-        return;
-      }
-    } catch {
-      // Cae abajo: se marca como ilegible.
-    }
-    ilegibles.push({ numero: i + 1, texto: linea });
-  });
+  for (const linea of leerLineas(contenido)) {
+    if (linea.entrada) entradas.push(linea.entrada);
+    else ilegibles.push(linea.ilegible);
+  }
   return { entradas, ilegibles };
+}
+
+/**
+ * Para los scripts (`pendientes`, `medir:*`, `etiquetar`). A diferencia de
+ * `readAll()`, un archivo que no existe es un error y no una lista vacía: con
+ * un symlink roto en el servidor, `pendientes` diría "nadie espera respuesta"
+ * en vez de avisar que no encontró el archivo.
+ */
+export async function leerAuditLogExistente(filePath: string): Promise<AuditLogEntry[]> {
+  await access(filePath);
+  return new FileAuditLogStore(filePath).readAll();
 }
 
 /**
@@ -70,7 +99,7 @@ export function describirIlegibles(archivo: string, ilegibles: readonly LineaIle
   const resto = ilegibles.length > 10 ? ` y ${ilegibles.length - 10} más` : "";
   return (
     `[audit] ${ilegibles.length} línea(s) ilegible(s) en ${archivo} (línea ${numeros}${resto}). ` +
-    `Se ignoran al leer y se conservan en el archivo: revisarlas a mano.`
+    `Se ignoran al leer y se conservan en el archivo hasta que la retención las alcance: revisarlas a mano.`
   );
 }
 
@@ -122,22 +151,21 @@ export class InMemoryAuditLogStore implements AuditLogStore {
 }
 
 export class FileAuditLogStore implements AuditLogStore {
-  /** Cuántas ilegibles se avisaron la última vez: se avisa al cambiar, no en cada lectura. */
-  private ilegiblesAvisadas = 0;
-  /** La reparación del final del archivo, una vez por proceso (ver `terminarLineaCortada`). */
-  private listoParaEscribir: Promise<void> | null = null;
+  /** Las líneas ilegibles del último aviso: se avisa cuando cambian, no en cada lectura. */
+  private ultimoAviso = "";
 
   constructor(private readonly filePath: string) {}
 
   async append(entry: AuditLogEntry): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    this.listoParaEscribir ??= this.terminarLineaCortada();
-    await this.listoParaEscribir;
-    await appendFile(this.filePath, `${JSON.stringify(entry)}\n`, "utf-8");
+    // El salto que falta va en la misma escritura que la entrada: así, con
+    // escrituras simultáneas, ninguna queda pegada a la media línea.
+    const prefijo = await this.saltoQueFalta();
+    await appendFile(this.filePath, `${prefijo}${JSON.stringify(entry)}\n`, "utf-8");
   }
 
   async readAll(): Promise<AuditLogEntry[]> {
-    return (await this.leer()).entradas;
+    return (await this.leer()).filter((l) => l.entrada).map((l) => l.entrada as AuditLogEntry);
   }
 
   /**
@@ -147,72 +175,123 @@ export class FileAuditLogStore implements AuditLogStore {
    * que un corte de luz a mitad de la escritura no deje el log truncado o
    * vacío — es irreversible y no hay backup.
    *
-   * Las líneas ilegibles se reescriben tal cual, al final (docs/TASKS.md
-   * Bloque 37, modo de fallo 1). Sin eso, la primera purga que borrara algo
-   * las eliminaría sin contarlas, y borrar datos es decisión del dueño del
-   * repo, no un efecto secundario de leer. No tienen fecha legible, así que la
-   * retención no puede decidir sobre ellas: quedan para revisar a mano.
+   * **Las líneas ilegibles (docs/TASKS.md Bloque 37).** No se pueden descartar
+   * al reescribir: la primera purga las borraría sin contarlas (modo de fallo
+   * 1). Tampoco se pueden conservar para siempre: son mensajes de clientes, y
+   * la política publicada promete borrarlos a los 12 meses. Se fechan por
+   * posición: el archivo se escribe en orden, así que una línea rota es
+   * anterior a la próxima entrada legible. Si esa entrada ya venció, la línea
+   * rota también, y se borra y se cuenta como cualquier otra. Si no hay
+   * ninguna entrada después, es de las más nuevas y se queda. Se conservan en
+   * su lugar, para que la fecha por posición siga valiendo en la próxima purga.
    */
   async purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
-    const { entradas, ilegibles } = await this.leer();
-    const { result, sobreviven } = particionar(entradas, cutoff);
-    if (!dryRun && result.borrados > 0) {
+    const lineas = await this.leer();
+    const corte = cutoff.getTime();
+
+    // La fecha de cada línea: la suya, o la de la próxima entrada legible.
+    const fechas: Array<string | undefined> = new Array(lineas.length);
+    let siguiente: string | undefined;
+    for (let i = lineas.length - 1; i >= 0; i--) {
+      const { entrada } = lineas[i];
+      if (entrada) siguiente = entrada.timestamp;
+      fechas[i] = siguiente;
+    }
+
+    const sobreviven: string[] = [];
+    const muestra: PurgeResult["muestra"] = [];
+    let borrados = 0;
+    lineas.forEach((linea, i) => {
+      const fecha = fechas[i];
+      // Instantes, no strings (ver el bug corregido en el Bloque 14).
+      const vencida = fecha !== undefined && new Date(fecha).getTime() < corte;
+      if (!vencida) {
+        sobreviven.push(linea.entrada ? JSON.stringify(linea.entrada) : linea.ilegible.texto);
+        return;
+      }
+      borrados++;
+      if (muestra.length < MUESTRA_MAX) {
+        muestra.push(
+          linea.entrada
+            ? {
+                store: STORE_NAME,
+                id: linea.entrada.id,
+                fecha: linea.entrada.timestamp,
+                lead: enmascararTelefono(linea.entrada.conversationId),
+              }
+            : // Sin id ni teléfono: la línea no se pudo leer. La fecha es la
+              // de la entrada siguiente, que es lo que motivó borrarla.
+              { store: STORE_NAME, id: `línea ilegible ${linea.ilegible.numero}`, fecha: fecha as string }
+        );
+      }
+    });
+
+    if (!dryRun && borrados > 0) {
       const tmp = `${this.filePath}.tmp`;
-      const lineas = [...sobreviven.map((e) => JSON.stringify(e)), ...ilegibles.map((l) => l.texto)];
       await mkdir(path.dirname(this.filePath), { recursive: true });
-      await writeFile(tmp, lineas.length === 0 ? "" : `${lineas.join("\n")}\n`, "utf-8");
+      await writeFile(tmp, sobreviven.length === 0 ? "" : `${sobreviven.join("\n")}\n`, "utf-8");
       await rename(tmp, this.filePath);
     }
-    return result;
+    return { borrados, muestra };
   }
 
-  private async leer(): Promise<{ entradas: AuditLogEntry[]; ilegibles: LineaIlegible[] }> {
+  private async leer(): Promise<Linea[]> {
     let content: string;
     try {
       content = await readFile(this.filePath, "utf-8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entradas: [], ilegibles: [] };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const leido = parsearAuditLog(content);
+    const lineas = leerLineas(content);
     // Tolerar en silencio escondería el problema (modo de fallo 2): el bot
-    // seguiría andando con menos historial y nadie sabría por qué.
-    if (leido.ilegibles.length !== this.ilegiblesAvisadas) {
-      this.ilegiblesAvisadas = leido.ilegibles.length;
-      if (leido.ilegibles.length > 0) console.warn(describirIlegibles(this.filePath, leido.ilegibles));
+    // seguiría andando con menos historial y nadie sabría por qué. Se avisa
+    // cuando cambian las líneas, no la cantidad: después de una purga los
+    // números de línea se corren, y el aviso anterior quedaría apuntando mal.
+    const ilegibles = lineas.filter((l) => l.ilegible).map((l) => l.ilegible as LineaIlegible);
+    const clave = ilegibles.map((l) => l.numero).join(",");
+    if (clave !== this.ultimoAviso) {
+      this.ultimoAviso = clave;
+      if (ilegibles.length > 0) console.warn(describirIlegibles(this.filePath, ilegibles));
     }
-    return leido;
+    return lineas;
   }
 
   /**
-   * Si el proceso anterior murió a mitad de un `appendFile`, el archivo
-   * termina en media línea, sin salto. La primera entrada nueva se pegaría
-   * detrás y las dos serían una sola línea ilegible: se perdería justo la
-   * primera entrada después del reinicio (modo de fallo 3). Se agrega el salto
-   * que falta antes de escribir.
+   * Si una escritura se cortó a mitad (el proceso murió, o el disco se llenó
+   * y el proceso siguió), el archivo termina en media línea, sin salto. La
+   * entrada siguiente se pegaría detrás y las dos serían una sola línea
+   * ilegible: se perdería la entrada buena (modo de fallo 3). Devuelve el
+   * salto que hay que anteponer, o nada.
    *
-   * Alcanza con una vez por proceso: las escrituras de este proceso siempre
-   * terminan en salto. Todas las escrituras esperan esta misma promesa, así
-   * que ninguna se adelanta a la reparación. Si falla, se sigue: no poder
-   * reparar no puede impedir escribir.
+   * Se mira en cada escritura, no una vez por proceso: el corte puede pasar
+   * con el proceso vivo (disco lleno), o por una edición a mano. Cuesta leer
+   * un byte. Si no se puede mirar, se escribe igual: no poder reparar no
+   * puede impedir escribir.
    */
-  private async terminarLineaCortada(): Promise<void> {
+  private async saltoQueFalta(): Promise<string> {
+    let archivo;
     try {
-      const archivo = await open(this.filePath, "r");
-      try {
-        const { size } = await archivo.stat();
-        if (size === 0) return;
-        const ultimo = Buffer.alloc(1);
-        await archivo.read(ultimo, 0, 1, size - 1);
-        if (ultimo.toString("utf-8") === "\n") return;
-      } finally {
-        await archivo.close();
-      }
-      await appendFile(this.filePath, "\n", "utf-8");
-      console.warn(`[audit] ${this.filePath} terminaba en una línea cortada: se agregó el salto que faltaba.`);
+      archivo = await open(this.filePath, "r");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`[audit] no se pudo revisar el final de ${this.filePath}:`, error);
+      }
+      return "";
+    }
+    try {
+      const { size } = await archivo.stat();
+      if (size === 0) return "";
+      const ultimo = Buffer.alloc(1);
+      await archivo.read(ultimo, 0, 1, size - 1);
+      if (ultimo[0] === 0x0a) return "";
+      console.warn(`[audit] ${this.filePath} terminaba en una línea cortada: se agrega el salto que faltaba.`);
+      return "\n";
+    } catch (error) {
       console.error(`[audit] no se pudo revisar el final de ${this.filePath}:`, error);
+      return "";
+    } finally {
+      await archivo.close();
     }
   }
 }
