@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NumerosInternos } from "../apps/orchestrator/src/jobs/numerosInternos.js";
+import { colapsarPorMensaje } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const AUDIT = path.join(REPO, "apps/orchestrator/data/audit_log.jsonl");
@@ -36,11 +37,13 @@ interface Entrada {
   matchedIntentId: string;
 }
 
-const entradas: Entrada[] = fs
+// Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
+// recibido y la que lo resuelve, y sin colapsar se contaria dos veces.
+const entradas: Entrada[] = colapsarPorMensaje(fs
   .readFileSync(AUDIT, "utf8")
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((l) => JSON.parse(l) as Entrada);
+  .map((l) => JSON.parse(l) as Entrada));
 
 interface Conv {
   id: string;

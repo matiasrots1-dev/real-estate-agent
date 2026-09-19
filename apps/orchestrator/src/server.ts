@@ -13,6 +13,7 @@ import { ClaudePausarAgenteActionClassifier } from "./agent/pausarAgenteClassifi
 import { ClaudeBrokerAccionDirectaPlanner } from "./agent/brokerAccionDirectaPlan.js";
 import { ClaudeConfirmationClassifier } from "./agent/confirmationClassifier.js";
 import { WhatsAppBrokerNotifier } from "./agent/brokerNotifier.js";
+import { AvisoDeFallos } from "./agent/avisoDeFallos.js";
 import { FileAuditLogStore } from "./agent/auditLog.js";
 import { FileAppointmentStore } from "./agent/appointmentStore.js";
 import { FileConversationStateStore } from "./agent/conversationStateStore.js";
@@ -148,6 +149,22 @@ async function main() {
     );
   }
 
+  // Aviso de mensajes que no se pudieron procesar (docs/TASKS.md Bloque 34).
+  // Sale por el mismo sender que el resto —en modo silencioso, el que solo deja
+  // pasar envíos al broker—, pero sin borrador: el borrador lo escribe Claude,
+  // y este aviso existe justamente para cuando Claude no responde.
+  const numeroDelBroker = config.whatsapp.brokerWhatsappNumber;
+  const avisoDeFallos =
+    sender && numeroDelBroker
+      ? new AvisoDeFallos({
+          canal: {
+            enviar: async (texto) => {
+              await sender.sendText(numeroDelBroker, texto);
+            },
+          },
+        })
+      : undefined;
+
   const appointmentStore = new FileAppointmentStore(config.appointmentStorePath);
   const conversationStateStore = new FileConversationStateStore(config.conversationStateStorePath);
   const recontactStateStore = new FileRecontactStateStore(config.recontactStateStorePath);
@@ -186,6 +203,7 @@ async function main() {
     defaultLng: config.defaultLng,
     sender,
     brokerNotifier,
+    avisoDeFallos,
     brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
     modoSilencioso: config.modoSilencioso,
     whatsappWebhookVerifyToken: config.whatsapp.webhookVerifyToken,

@@ -15,4 +15,17 @@ export interface AuditLogEntry {
   escalationRule?: "requires_broker" | "low_confidence";
   escalationReason?: string;
   responseSent?: string;
+  /**
+   * Id de Meta del mensaje entrante (`wamid`). Vincula la entrada `recibido`
+   * con la que resuelve el mismo mensaje (docs/TASKS.md Bloque 34). Ausente en
+   * las entradas anteriores a ese bloque y en las de los jobs, que no responden
+   * a un mensaje entrante.
+   */
+  messageId?: string;
+  /**
+   * `recibido`: escrita al llegar el mensaje, antes de clasificar.
+   * `fallido`: el procesamiento tiró; se le avisó al broker con el texto crudo.
+   * Ausente: entrada resuelta, como todas las anteriores al Bloque 34.
+   */
+  etapa?: "recibido" | "fallido";
 }

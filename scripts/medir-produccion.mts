@@ -20,6 +20,7 @@ import { config as loadDotenv } from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadCatalog } from "../apps/orchestrator/src/agent/intentCatalog.js";
 import { ClaudeIntentClassifier, type ContextoConversacion } from "../apps/orchestrator/src/agent/classifier.js";
+import { colapsarPorMensaje, esResuelta } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotenv({ path: path.join(REPO, ".env") });
@@ -31,11 +32,13 @@ interface Entrada {
   matchedIntentId: string;
 }
 
-const entradas: Entrada[] = fs
+// Una entrada por mensaje, y solo las resueltas: una recibido o una fallido
+// llevan un intent centinela que desvirtuaria la medicion (docs/TASKS.md Bloque 34).
+const entradas: Entrada[] = colapsarPorMensaje(fs
   .readFileSync(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl"), "utf8")
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((l) => JSON.parse(l));
+  .map((l) => JSON.parse(l))).filter(esResuelta);
 
 const etiquetas: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(REPO, "apps/orchestrator/data/etiquetas_conversaciones.json"), "utf8")

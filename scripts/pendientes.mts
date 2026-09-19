@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizarTelefono } from "shared-types";
 import { FileUltimoContactoStore } from "../apps/orchestrator/src/agent/ultimoContactoStore.js";
+import { colapsarPorMensaje, INTENT_PROCESAMIENTO_FALLIDO, INTENT_SIN_CLASIFICAR } from "../apps/orchestrator/src/agent/auditPorMensaje.js";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = Object.fromEntries(
@@ -36,6 +37,10 @@ const sinTokko = process.argv.includes("--sin-tokko");
  * gente con intención concreta que quedó esperando.
  */
 const PRIORIDAD: Record<string, number> = {
+  // Un mensaje que fallo, o que llego y nunca se resolvio, no tuvo respuesta
+  // de nadie: va primero (docs/TASKS.md Bloque 34).
+  [INTENT_PROCESAMIENTO_FALLIDO]: 0,
+  [INTENT_SIN_CLASIFICAR]: 0,
   agendar_visita: 0,
   negociacion_precio: 0,
   reclamo_queja: 1,
@@ -57,11 +62,13 @@ interface Entrada {
   responseSent?: string;
 }
 
-const entradas: Entrada[] = fs
+// Una entrada por mensaje (docs/TASKS.md Bloque 34): cada mensaje deja una
+// recibido y la que lo resuelve, y sin colapsar se contaria dos veces.
+const entradas: Entrada[] = colapsarPorMensaje(fs
   .readFileSync(path.join(REPO, "apps/orchestrator/data/audit_log.jsonl"), "utf8")
   .split(/\r?\n/)
   .filter(Boolean)
-  .map((l) => JSON.parse(l) as Entrada);
+  .map((l) => JSON.parse(l) as Entrada));
 
 // Una conversación puede tener varios mensajes con intents distintos: alguien
 // escribe "quiero ver el depto" y después "hola?". Se guarda el ÚLTIMO mensaje
