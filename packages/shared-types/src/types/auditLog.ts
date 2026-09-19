@@ -45,4 +45,14 @@ export interface AuditLogEntry {
   avisoAlBroker?: "enviado" | "respaldo" | "sin_borrador" | "fallo" | "sin_destinatario";
   /** Por qué falló el borrador o el aviso, en una línea. Solo cuando algo falló. */
   avisoAlBrokerMotivo?: string;
+  /**
+   * Qué pasó al mandarle la respuesta al destinatario (docs/TASKS.md Bloque
+   * 38d). Ausente: salió todo, o no había nada que mandar — mirar
+   * `responseSent`.
+   * - `fallo`: no salió nada. `responseSent` queda vacío.
+   * - `parcial`: salió el texto pero no todas las fotos.
+   */
+  envio?: "fallo" | "parcial";
+  /** Por qué falló el envío, en una línea. */
+  envioMotivo?: string;
 }

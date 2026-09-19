@@ -76,3 +76,19 @@ function rango(entrada: ConEtapa): number {
 export function esResuelta(entrada: ConEtapa): boolean {
   return entrada.etapa === undefined;
 }
+
+/**
+ * ¿Esta conversación quedó respondida? Lo usa `pendientes` (docs/TASKS.md
+ * Bloques 38a y 38d). No alcanza con que haya una respuesta registrada:
+ * - si el aviso al broker falló, el cliente recibió solo la plantilla de
+ *   espera y el broker no sabe nada;
+ * - si el envío falló o salió a medias (el texto sí, las fotos no), al
+ *   cliente le falta algo.
+ */
+export function fueRespondida(entrada: {
+  responseSent?: string;
+  avisoAlBroker?: string;
+  envio?: string;
+}): boolean {
+  return entrada.responseSent !== undefined && entrada.avisoAlBroker !== "fallo" && entrada.envio === undefined;
+}

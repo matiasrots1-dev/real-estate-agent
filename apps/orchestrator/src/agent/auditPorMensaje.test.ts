@@ -3,7 +3,7 @@
 // resuelve, todo lo que cuenta mensajes pasaría a contar el doble.
 
 import { describe, expect, it } from "vitest";
-import { colapsarPorMensaje, esResuelta } from "./auditPorMensaje.js";
+import { colapsarPorMensaje, esResuelta, fueRespondida } from "./auditPorMensaje.js";
 
 const entrada = (id: string, extra: { messageId?: string; etapa?: "recibido" | "fallido" } = {}) => ({
   id,
@@ -78,6 +78,28 @@ describe("colapsarPorMensaje", () => {
     ];
 
     expect(colapsarPorMensaje(entradas).map((e) => e.id)).toEqual(["vieja-1", "resuelto", "vieja-2"]);
+  });
+});
+
+// docs/TASKS.md Bloques 38a y 38d. Lo usa `pendientes`, que no tiene tests
+// propios: acá se prueba la regla, no el script.
+describe("fueRespondida", () => {
+  it("con la respuesta enviada y el aviso al broker OK, está respondida", () => {
+    expect(fueRespondida({ responseSent: "listo", avisoAlBroker: "enviado" })).toBe(true);
+    expect(fueRespondida({ responseSent: "listo" })).toBe(true);
+  });
+
+  it("sin respuesta enviada, no", () => {
+    expect(fueRespondida({})).toBe(false);
+  });
+
+  it("si el aviso al broker falló, no: el cliente tiene la plantilla de espera y el broker no sabe nada", () => {
+    expect(fueRespondida({ responseSent: "Dejame confirmarlo...", avisoAlBroker: "fallo" })).toBe(false);
+  });
+
+  it("si el envío falló o salió a medias, no", () => {
+    expect(fueRespondida({ responseSent: undefined, envio: "fallo" })).toBe(false);
+    expect(fueRespondida({ responseSent: "Te paso el material:", envio: "parcial" })).toBe(false);
   });
 });
 

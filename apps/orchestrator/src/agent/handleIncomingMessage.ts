@@ -207,6 +207,23 @@ function silenciarPara(deps: HandleMessageDeps, message: IncomingWhatsAppMessage
 const MOTIVO_SILENCIOSO =
   "Modo silencioso activo: el cliente NO recibió respuesta. Respondele vos a mano.";
 
+/** Lo que pasó al mandar la respuesta (docs/TASKS.md Bloque 38d). */
+export interface ResultadoDeEnvio {
+  /** El texto que efectivamente salió. Ausente si no salió nada. */
+  textoEnviado?: string;
+  /** `fallo`: no salió nada. `parcial`: salió el texto pero no todas las fotos. */
+  estado?: "fallo" | "parcial";
+  motivo?: string;
+}
+
+/**
+ * Manda la respuesta y cuenta qué pasó. La inyecta `app.ts` con el sender
+ * real: el audit log se escribe DESPUÉS de esto, con lo que salió de verdad
+ * (docs/TASKS.md Bloque 38d). Antes el handler registraba `responseSent` y
+ * recién después `app.ts` mandaba: si el envío fallaba, el registro mentía.
+ */
+export type EnviarRespuesta = (texto: string, mediaUrls: readonly string[]) => Promise<ResultadoDeEnvio>;
+
 export interface HandleMessageDeps {
   catalog: IntentCatalog;
   classifier: IntentClassifier;
@@ -235,6 +252,11 @@ export interface HandleMessageDeps {
   /** Sin esto, broker_accion_directa igual arma el plan pero las acciones de whatsapp del plan fallan (best-effort). */
   sender?: WhatsAppSender;
   /**
+   * Sin esto, el handler registra la respuesta como enviada sin mandarla: es
+   * el caso de los tests que ejercitan el handler solo.
+   */
+  enviarRespuesta?: EnviarRespuesta;
+  /**
    * Modo silencioso (docs/TASKS.md Bloque 21): se recibe, se clasifica y se le
    * manda el borrador al broker, pero al cliente **no se le responde nada**.
    * Prendido por default. Las órdenes del propio broker sí reciben su
@@ -261,6 +283,8 @@ export interface HandleMessageResult {
   escalatedToBroker: boolean;
   /** Solo pedido_ficha_multimedia lo usa hoy. */
   mediaUrls?: string[];
+  /** Solo si algo del envío salió mal (docs/TASKS.md Bloque 38d). */
+  envio?: { estado: "fallo" | "parcial"; motivo: string };
 }
 
 export async function handleIncomingMessage(
@@ -539,8 +563,19 @@ async function finalizeNonEscalating(
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: false };
   }
 
-  await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, { responseSent: responseText });
-  return { responseText, intentId: intent.id, confidence, escalatedToBroker: false, mediaUrls };
+  const envio = await mandarRespuesta(deps, message, responseText, mediaUrls ?? []);
+  await appendAudit(deps, message, intent.id, confidence, toolsCalled, false, {
+    responseSent: envio.textoEnviado,
+    envio: detalleDelEnvio(envio),
+  });
+  return {
+    responseText,
+    intentId: intent.id,
+    confidence,
+    escalatedToBroker: false,
+    mediaUrls,
+    envio: detalleDelEnvio(envio),
+  };
 }
 
 async function finalizeEscalation(
@@ -598,13 +633,46 @@ async function finalizeEscalation(
     });
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
   }
+  const envio = await mandarRespuesta(deps, message, responseText, []);
   await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
     escalationRule: rule,
     escalationReason: reason,
-    responseSent: responseText,
+    responseSent: envio.textoEnviado,
     aviso,
+    envio: detalleDelEnvio(envio),
   });
-  return { responseText, intentId: intent.id, confidence, escalatedToBroker: true };
+  return {
+    responseText,
+    intentId: intent.id,
+    confidence,
+    escalatedToBroker: true,
+    envio: detalleDelEnvio(envio),
+  };
+}
+
+/**
+ * Manda la respuesta, si hay con qué, y devuelve qué pasó (docs/TASKS.md
+ * Bloque 38d). Si no salió nada, lo que el handler dejó armado se descarta:
+ * un "ok" del cliente no puede confirmar horarios que nunca vio, ni un "dale"
+ * del broker una orden masiva cuyo preview no le llegó.
+ */
+async function mandarRespuesta(
+  deps: HandleMessageDeps,
+  message: IncomingWhatsAppMessage,
+  texto: string,
+  mediaUrls: readonly string[]
+): Promise<ResultadoDeEnvio> {
+  if (!deps.enviarRespuesta) return { textoEnviado: texto };
+  const envio = await deps.enviarRespuesta(texto, mediaUrls);
+  if (envio.estado === "fallo") {
+    await deps.conversationStateStore.save(idleState(message.from, message.from));
+  }
+  return envio;
+}
+
+/** Lo del envío que va a la entrada del audit log y al resultado. */
+function detalleDelEnvio(envio: ResultadoDeEnvio): { estado: "fallo" | "parcial"; motivo: string } | undefined {
+  return envio.estado ? { estado: envio.estado, motivo: envio.motivo ?? "sin detalle" } : undefined;
 }
 
 /**
@@ -645,6 +713,7 @@ interface ExtrasDeAuditoria {
   /** Lo que efectivamente recibió el cliente. Sin cargar si no recibió nada. */
   responseSent?: string;
   aviso?: ResultadoDelAviso;
+  envio?: { estado: "fallo" | "parcial"; motivo: string };
 }
 
 async function appendAudit(
@@ -673,6 +742,8 @@ async function appendAudit(
     messageId: message.messageId,
     avisoAlBroker: extras.aviso?.estado,
     avisoAlBrokerMotivo: extras.aviso?.motivo,
+    envio: extras.envio?.estado,
+    envioMotivo: extras.envio?.motivo,
   };
   await deps.auditLog.append(entry);
 }

@@ -1990,7 +1990,7 @@ o promesas que el bloque hace y no cumplia) y se arreglaron aca:
       y sigue, pero no se escribe `fallido` ni sale aviso hasta que la
       llamada termine: el SDK espera 10 minutos por intento, con reintentos.
       Arreglo: timeout explicito en el cliente de Anthropic. Pasa al Bloque 38.
-- [ ] **Un envio al cliente que falla no es un fallo.** La captura termina
+- [x] *(Resuelto en 38d.)* **Un envio al cliente que falla no es un fallo.** La captura termina
       antes de `sendText`. En modo silencioso no se le manda nada al cliente,
       asi que hoy no aplica; bloquea apagarlo. Pasa al Bloque 38.
 - [ ] El `fallido` no guarda que tools ya se habian llamado: si Calendar creo
@@ -2834,6 +2834,100 @@ escalamientos tiene que tener un test del mensaje que recibe el cliente.
       pudimos reprogramar tu visita de ...". Esta completa, no tiene huecos,
       pero el "Listo," suena raro.
 
+### 38d — Un envio al cliente que falla es un fallo
+El handler registra la entrada del mensaje con `responseSent` **antes** de que
+`app.ts` mande la respuesta. Si `sendText` falla (token vencido, un 5xx de
+Meta), la tarea tira y la cola solo lo escribe en consola:
+- el audit log dice que la respuesta salio;
+- no hay `fallido` ni aviso al broker (la captura del Bloque 34 termina antes
+  del envio);
+- `pendientes` la marca como respondida;
+- si era una plantilla fija, gasta el unico envio por conversacion del
+  Bloque 31 sin que haya salido.
+Ademas, el aviso "volvio a procesar" del Bloque 34 sale **antes** del envio: un
+envio que falla despues de una caida igual lo dispara.
+
+En modo silencioso hoy no pasa con clientes (no se les manda nada), pero si con
+las respuestas a las ordenes del broker (38g).
+
+**Diseno** (cambiado en la revision del PR, ver abajo): el handler recibe una
+funcion para mandar, la llama **antes** de registrar, y escribe **una sola
+entrada** con lo que salio de verdad. La primera version dejaba el registro
+donde estaba y agregaba una entrada `envio_fallido` que la corregia al
+colapsar; eso era compensar el sintoma.
+
+**Pre-mortem**
+
+**1. La entrada dice que la respuesta salio cuando no salio.** Es el bug que
+el bloque viene a arreglar; el riesgo es que quede a medias, con lectores que
+sigan mirando `responseSent` sin mas.
+   *Mitigacion*: una sola entrada, escrita despues del envio, con
+   `responseSent` cargado solo con lo que salio, y `envio` (`fallo` /
+   `parcial`) con el motivo. `fueRespondida` —la regla que usa `pendientes`—
+   vive en el orchestrator y tiene tests propios.
+
+**2. El aviso le dice al broker que al cliente no le llego nada cuando si le
+llego el texto.** Si falla una de las fotos de `pedido_ficha_multimedia`, el
+texto ya salio, y el aviso del Bloque 34 dice "NO se le respondio nada".
+   *Mitigacion*: el aviso acepta un detalle. Un envio que falla dice "Procese
+   un mensaje pero NO pude mandarle la respuesta"; uno parcial, "Le llego el
+   texto, pero no todo". Tests de los dos textos.
+
+**3. Un envio al broker que falla le genera un aviso sobre su propio mensaje,
+o se pierde.** Las respuestas a sus ordenes (38g) salen por el mismo camino.
+   *Mitigacion*: queda la entrada con `envio: fallo`, sin aviso: el canal al
+   broker es justo el que fallo. Test.
+
+**Como quedo**
+- [x] `handleIncomingMessage` recibe `enviarRespuesta` y registra despues de
+      mandar. `app.ts` arma esa funcion con el sender real y ya no manda por
+      su cuenta. Sin `enviarRespuesta` (tests del handler solo), se registra
+      como antes.
+- [x] Campos `envio` y `envioMotivo` en la entrada. Una sola entrada por
+      mensaje: no hacen falta reglas de precedencia, ni un caso especial en
+      `esResuelta`, ni un filtro en cada lector, y no se pierden las tools
+      llamadas ni el estado del aviso al broker.
+- [x] Si el envio falla, lo que el handler dejo armado se descarta (horarios
+      propuestos, un plan masivo esperando confirmacion): el cliente no vio
+      esa respuesta, asi que un "ok" suyo no puede confirmarla.
+- [x] Un envio que el modo silencioso bloquea (devuelve la marca, no tira)
+      tambien cuenta como fallo.
+- [x] De las fotos que fallan quedan los motivos **distintos**, no solo el
+      ultimo: el primero suele ser el que explica el problema.
+- [x] `pendientes` usa `fueRespondida` y marca "NO SE PUDO MANDAR LA
+      RESPUESTA" o "LE FALTAN LAS FOTOS". Misma salida que antes sobre los
+      datos locales.
+- [x] 13 tests nuevos (webhook real y `fueRespondida`). Mutation testing, una
+      por vez:
+      - L1. el handler registra antes de mandar (lo de antes): 2 tests en rojo
+      - L2. un envio que falla no desarma lo que quedo esperando: 1 test en rojo
+      - L3. un envio fallido no avisa: 3 tests en rojo
+      - L4. el aviso dice "no pude procesar": 1 test en rojo
+      - L5. el aviso de un parcial dice "no se le respondio nada": 1 test en rojo
+      - L6. un envio parcial se da por recuperado: 1 test en rojo
+      - L7. no se mira la marca del modo silencioso: 1 test en rojo
+      - L8. de las fotos queda solo el ultimo motivo: 1 test en rojo
+      - L9. el audit log no guarda que fallo el envio: 4 tests en rojo
+      - L10. `fueRespondida` ignora el envio: 1 test en rojo
+
+**Revision del PR (#41)**: 12 hallazgos. El principal es de altura: la primera
+version compensaba el sintoma con una fila que corregia a la otra, con reglas
+de rango, un caso especial en `esResuelta` y un filtro nuevo en cada lector;
+y esa fila perdia las tools, el motivo del escalamiento y el estado del aviso.
+Ademas, una reentrega de Meta despues de un reinicio podia hacer que esa fila
+tapara una respuesta que el cliente si habia recibido. Se rehizo con una sola
+entrada escrita despues del envio. Tambien salieron de ahi: el reseteo del
+estado, la marca del modo silencioso, el texto del aviso, el aviso por las
+fotos, los motivos distintos y los tests de `fueRespondida`. Quedan anotados:
+- [ ] Un envio que WhatsApp acepta (200) pero no entrega (ventana de 24 hs,
+      numero invalido) no es un fallo aca. Se veria en los statuses del
+      webhook, que hoy no se leen.
+- [ ] Si el aviso de fallos tampoco sale (el token que fallo es el mismo),
+      `AvisoDeFallos` se lo traga con un `console.error` y la entrada no lo
+      registra. Es el riesgo abierto del Bloque 34.
+- [ ] Con el Graph API colgado, las N fotos se intentan igual: se acerca al
+      techo de 90 s de la cola.
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -2962,10 +3056,12 @@ arreglaron 8 (arriba). Quedan anotados:
       manda la plantilla de espera del catalogo, y ninguno cuenta para el
       cupo, que se decide por id de intent. Deberia decidirse por el texto
       que efectivamente sale.
-- [ ] **Un envio al cliente que falla no es un fallo.** La captura del Bloque
+- [x] *(Resuelto en el Bloque 38d.)* **Un envio al cliente que falla no es un fallo.** La captura del Bloque
       34 termina antes de `sendText`: si el envio falla, no hay `fallido` ni
       aviso, y `pendientes` la marca como respondida.
-- [ ] `responseSent` se registra antes de enviar: si el envio falla, igual se
+- [x] *(Resuelto en 38d: la entrada se escribe despues del envio, asi que no
+      dice que salio algo que no salio ni gasta el cupo.)* `responseSent` se
+      registra antes de enviar: si el envio falla, igual se
       gasta el unico envio de plantilla permitido (Bloque 31).
 - [ ] La deteccion de "el broker respondio" no ve los envios de
       `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
