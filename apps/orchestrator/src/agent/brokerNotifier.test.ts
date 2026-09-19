@@ -27,7 +27,7 @@ describe("formatBrokerNotificationText", () => {
     const text = formatBrokerNotificationText({
       ...notification,
       draftReply: null,
-      motivoSinBorrador: "529 Overloaded",
+      motivoFalloBorrador: "529 Overloaded",
     });
     expect(text).toContain("Sin borrador");
     expect(text).toContain("529 Overloaded");
@@ -36,6 +36,30 @@ describe("formatBrokerNotificationText", () => {
     expect(text).not.toContain("null");
     // El resto del aviso sigue igual.
     expect(text).toContain(notification.incomingMessage);
+  });
+
+  it("con el respaldo, dice que es la respuesta que el bot habría mandado y por qué", () => {
+    const text = formatBrokerNotificationText({
+      ...notification,
+      draftReply: "Sigue disponible por $350.000.",
+      motivoFalloBorrador: "529 Overloaded",
+    });
+    expect(text).toContain("la respuesta que el bot habría mandado");
+    expect(text).toContain("529 Overloaded");
+    expect(text).toContain("Sigue disponible por $350.000.");
+  });
+
+  // Hallazgo de la revisión del PR: WhatsApp rechaza textos de más de 4096
+  // caracteres, y el aviso fallaba siempre para un mensaje largo.
+  it("nunca pasa el límite de WhatsApp, aunque el mensaje y el borrador sean enormes", () => {
+    const text = formatBrokerNotificationText({
+      ...notification,
+      incomingMessage: "a".repeat(5000),
+      draftReply: "b".repeat(5000),
+      escalationReason: "c".repeat(2000),
+    });
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect(text).toContain("[recortado]");
   });
 
   it("omite la línea de motivo si no hay escalationReason", () => {

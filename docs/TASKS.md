@@ -2521,8 +2521,10 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
       cierre (un fin de semana sin escribirle al bot). Opciones: una
       plantilla aprobada para avisos al broker, o que el broker mantenga la
       ventana abierta escribiendole al bot.
-- [x] *(38a: si falla el borrador, el aviso sale igual; si falla el envio,
-      queda en el audit log como `avisoAlBroker: fallo`.)*
+- [x] *(38a, para los mensajes entrantes: si falla el borrador, el aviso sale
+      igual; si falla el envio, queda en el audit log y `pendientes` lo
+      muestra. El aviso del job de recontacto sigue sin cubrir: va con el
+      Bloque 27.)*
       **Si falla la notificacion al broker, nadie se entera.** Si falla el
       borrador (Claude) o el envio, el escalamiento se pierde en su propio
       `catch`. Viene del Bloque 5. El aviso de fallos del Bloque 34 no lo
@@ -2535,9 +2537,10 @@ el modo silencioso prendido. El segundo solo muerde cuando se apague.
 
 ### Orden de trabajo (decidido al arrancar, 19/09)
 Un PR por camino de codigo, para poder atribuir un fallo a un cambio:
-38a aviso al broker sin borrador → 38b timeout de Anthropic → 38c plantillas
-crudas → 38d envios al cliente → 38e supresion de la plantilla → 38f
-deteccion de la respuesta del broker. La ventana de 24 hs espera una
+38a aviso al broker sin borrador → 38g ordenes del broker en modo silencioso
+(encontrado en la revision de 38a) → 38b timeout de Anthropic → 38c
+plantillas crudas → 38d envios al cliente → 38e supresion de la plantilla →
+38f deteccion de la respuesta del broker. La ventana de 24 hs espera una
 decision del dueno del repo (plantilla aprobada o no).
 
 ### 38a — Si el borrador falla, el aviso al broker sale igual
@@ -2573,19 +2576,61 @@ hasta que se rinda.
 
 **Como quedo**
 - [x] `notifyBrokerBestEffort` separa el borrador del aviso y nunca tira. Si
-      el borrador falla, el aviso sale con "Sin borrador: no se pudo redactar
-      (motivo). Contestale vos."
-- [x] Campo `avisoAlBroker` en el audit log: `enviado`, `sin_borrador` o
-      `fallo`. `enviado` significa que WhatsApp lo acepto, no que llego (la
-      ventana de 24 hs sigue abierta como riesgo).
-- [x] 6 tests nuevos. Mutation testing, una por vez:
-      - D1. si falla el borrador no sale el aviso (lo de antes): 2 tests en rojo
+      el borrador falla (o vuelve vacio), el aviso sale igual:
+      - en modo silencioso, con la respuesta que el bot habria mandado como
+        borrador, marcada como tal;
+      - si no hay respaldo, con "Sin borrador: no se pudo redactar (motivo).
+        Contestale vos."
+- [x] Campos `avisoAlBroker` y `avisoAlBrokerMotivo` en el audit log.
+      Valores: `enviado`, `respaldo`, `sin_borrador`, `fallo` y
+      `sin_destinatario`. `enviado` significa que WhatsApp lo acepto, no
+      que llego (la ventana de 24 hs sigue abierta como riesgo).
+- [x] `pendientes` no esconde una conversacion cuyo aviso fallo, aunque el
+      cliente haya recibido la plantilla de espera, y la marca "EL AVISO NO TE
+      LLEGO". Misma salida que antes sobre los datos locales.
+- [x] El aviso nunca pasa los 4096 caracteres de WhatsApp: el mensaje, el
+      borrador y el motivo se recortan.
+- [x] `docs/escalation_policy.md` paso 2: documentado el aviso sin borrador.
+- [x] `appendAudit` recibe lo opcional por nombre: `escalationReason` y
+      `responseSent` eran dos `string | undefined` seguidos por posicion.
+- [x] 12 tests nuevos. Mutation testing, una por vez:
+      - D1. si falla el borrador no sale el aviso (lo de antes): 4 tests en rojo
       - D2. un aviso que falla hace fallar el mensaje: 2 tests en rojo
-      - D3. el audit log siempre dice `enviado`: 2 tests en rojo
-      - D4. el audit log no registra el aviso: 4 tests en rojo
-      - D5. el texto sin borrador muestra un borrador vacio: 1 test en rojo
+      - D3. el audit log siempre dice `enviado`: 4 tests en rojo
+      - D4. el audit log no registra el aviso: 7 tests en rojo
+      - D5. el texto sin borrador muestra un borrador vacio: 2 tests en rojo
       - D6. el modo silencioso no registra el aviso: 1 test en rojo
-      - D7. el aviso sin el motivo: 1 test en rojo
+      - D7. el aviso sin el motivo: 2 tests en rojo
+      - E1. el motivo del modo silencioso habla de un borrador: **sobrevivio**,
+        porque el test usaba un intent que escala y ese motivo va en el camino
+        que no escala. Se agrego el test del camino correcto: 1 en rojo
+      - E2. sin respaldo: 1 test en rojo
+      - E3. el respaldo se registra como `sin_borrador`: 1 test en rojo
+      - E4. un borrador vacio cuenta como borrador: 1 test en rojo
+      - E5. sin tope de largo: 1 test en rojo
+      - E6. "sin destinatario" no queda registrado: 1 test en rojo
+      - E7. el motivo no va al audit log: 3 tests en rojo
+
+**Revision del PR (#36)**: 14 hallazgos. Se arreglaron los que eran de 38a
+(arriba). Quedan fuera, anotados:
+- **Las ordenes del broker, en modo silencioso, no reciben respuesta** (38g,
+  abajo). No es de este PR, pero es lo mas importante que encontro.
+- El job de recontacto tiene su propio aviso al broker, que sigue tragandose
+  el error sin registrarlo. No corre en modo silencioso; va con el Bloque 27.
+- Pasar `draftReply` y `motivoFalloBorrador` a una union discriminada.
+  Detalle de tipos, sin efecto hoy.
+
+### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
+Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
+del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
+`broker_pausar_agente`, `broker_accion_directa`) terminan en
+`finalizeNonEscalating`, que en modo silencioso no manda la respuesta y le
+manda al broker un "Escalamiento" con un borrador sobre su propio mensaje. El
+resumen, la confirmacion de la pausa o el preview del gate de confirmacion
+nunca le llegan. `SilentModeSender` si deja pasar envios al broker, asi que
+la respuesta podria salir. En produccion todavia no paso: 0 ordenes del
+broker en el audit log.
+
 
 ### Muerde al apagar el modo silencioso
 - [ ] **Plantillas crudas, desde el Bloque 5 (26/07).** Un escalamiento por baja
