@@ -1673,6 +1673,74 @@ que escribe a gente que **no escribio primero**.
       pueda mandar algo.
 - [ ] Recien con las tres cosas se puede evaluar apagar el modo silencioso.
 
+### Lo que se encontro al retomarlo (20/09)
+**Las tres cosas estan construidas y probadas — y el job no usa ninguna.**
+
+- `jobs/recontactoPolicy.ts` (341 lineas, con tests) tiene el tope por corrida,
+  el tope por dia, la ventana horaria, el intervalo entre corridas, el maximo
+  de intentos por persona, los 60 dias entre mensajes y el deduplicado por
+  telefono de las fichas repetidas de Tokko.
+- `jobs/topeDiarioStore.ts` persiste el tope diario en disco, justamente para
+  que reiniciar el proceso no lo reinicie.
+- `mcp-tokko/src/candidatosRecontacto.ts` tiene **el criterio que el dueno del
+  repo ya definio** mirando la distribucion real: agente asignado, `lead_status`
+  distinto de "Cerrado" (4145 de 4683 lo son), telefono usable y barrio de sus
+  propiedades. De 4683 contactos, pasan **29**.
+- `jobs/numerosInternos.ts` junta los numeros a los que nunca hay que escribir.
+
+Todo eso lo usa **`scripts/simulacro-recontacto.mts`**, que es lo que el dueno
+del repo mira para decidir. El job que **envia de verdad** no importa ninguno
+de esos modulos: `createRecontactJob` le pide a Tokko
+`searchLeads({ diasSinRespuestaMin })` —todos los contactables de la cuenta por
+encima del umbral, unos 3600— y les escribe **a todos, en el orden que venga,
+a cualquier hora, sin tope y sin deduplicar**.
+
+O sea: el simulacro que se aprueba muestra 29 personas y el job haria otra
+cosa. Y el job **ya esta registrado en el scheduler** (detras de
+`sender && !modoSilencioso`), asi que lo unico que lo separa de correr es
+apagar el modo silencioso — que es exactamente lo que este bloque bloquea.
+La linea de PENDIENTES que decia "falta cablearlo al scheduler" estaba al
+reves: lo que falta es cablearle las salvaguardas.
+
+**Lo que se midio (servidor, 20/09)**
+- El proceso corre en **hora local -03**, no en UTC: la retencion del Bloque
+  40, que usa `setHours(4)`, disparo a las **04:01:47 -03**. Asi que la ventana
+  de 9 a 20 de la politica son horas de Argentina, como se penso. El riesgo
+  anotado en PENDIENTES ("en un servidor en UTC la ventana queda corrida 3
+  horas") **no aplica hoy**; sigue vivo si alguien cambia el huso del servidor.
+
+**Pre-mortem**
+
+**1. El job le escribe a gente que el simulacro nunca mostro.** Es el modo de
+fallo del bloque entero. Si el cableado queda a medias —el criterio aplicado
+en el script pero no en el cliente de Tokko, por ejemplo— el simulacro sigue
+mostrando 29 y el job sigue viendo 3600, y nadie se entera hasta que salgan
+los mensajes. Con 3649 contactables, el primer barrido es masivo e
+irreversible: no hay "deshacer" para un WhatsApp.
+   *Mitigacion*: el filtro de candidatos vive **en el cliente de Tokko**, no en
+   el llamador, asi que el job y el simulacro no pueden divergir sin que un
+   test lo muestre. Tests de que el job pide los candidatos de recontacto y no
+   todos los leads, y de que dos fichas con el mismo telefono producen un solo
+   envio.
+
+**2. El tope diario no cuenta lo que realmente salio.** El tope vive en disco
+porque un contador en memoria deja de ser un tope al primer reinicio. Pero si
+se suma antes de enviar, un envio que falla consume cupo; y si se suma fuera
+del camino de exito, un envio que salio no lo consume y el tope se pasa. Con
+el scheduler cada 5 minutos, un tope que no cuenta bien son decenas de
+mensajes en una tarde.
+   *Mitigacion*: se suma exactamente lo que salio, despues de cada envio
+   exitoso. Test de que un envio que falla no consume cupo y de que uno
+   exitoso si.
+
+**3. El simulacro del propio job miente.** Si el modo simulacro calcula el
+plan pero igual toca los stores (`recontactStateStore`, el tope diario), el
+job "no manda nada" pero deja a esas personas marcadas como contactadas, y al
+habilitar el envio real **no se las contacta nunca**. Es el mismo error que
+server.ts ya describe para el modo silencioso, en el mismo job.
+   *Mitigacion*: en simulacro no se escribe ningun store. Test de que despues
+   de una corrida en simulacro los tres stores quedan exactamente igual.
+
 ## Bloque 28 — El catalogo de intents no resiste el trafico real (BLOQUEANTE)
 Salio de mirar las 41 conversaciones reales que entraron entre el 2026-08-25 y
 el 26, con el modo silencioso puesto. **Hay que revisarlo contra estas
