@@ -36,6 +36,10 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   70 contactos conocidos cargados. No hay prueba en vivo de 38e ni 38f: las
   dos dependen de que el bot le responda a un cliente, y con el modo
   silencioso prendido eso no pasa.
+- **Desplegado el 19/09 a las 23:41** (`70de897`): Bloque 40. La retencion
+  pasa a correr **una vez por dia a las 04:00** del servidor, y su reporte se
+  conserva 90 dias en vez de una hora. Verificado en el arranque: "Retención:
+  corre a las 04:00 (hora del servidor), y conserva 90 días de reportes".
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
@@ -118,7 +122,8 @@ haga que el bot le escriba a clientes, y borrar datos.
       su reporte duraba una hora.** Ahora corre una vez por dia a las 4 de la
       manana (`RETENTION_HORA`), el reporte se conserva 90 dias
       (`RETENTION_DIAS_DE_REPORTES`) y el scheduler no arranca una vuelta si
-      la anterior sigue corriendo. Falta desplegarlo.
+      la anterior sigue corriendo. **Desplegado el 19/09 a las 23:41**
+      (`70de897`).
 - [ ] **Tercer numero dedicado como canal broker** (mejora, no bloquea nada).
       Hoy los borradores y las ordenes al bot van por el celular personal
       ...6699, asi que trabajo y vida privada comparten linea. Un numero
