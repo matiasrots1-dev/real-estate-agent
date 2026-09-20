@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { extraerContactosSalientes } from "../channels/whatsapp/ecoContacto.js";
-import { InMemoryUltimoContactoStore } from "./ultimoContactoStore.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  contactoDelBroker,
+  FileUltimoContactoStore,
+  InMemoryUltimoContactoStore,
+} from "./ultimoContactoStore.js";
 
 function eco(echoes: unknown[]) {
   return {
@@ -100,6 +107,103 @@ describe("registro de último contacto", () => {
     await store.registrar("lead-1", new Date("2026-08-01"), "manual");
 
     expect((await store.get("lead-1"))?.origen).toBe("manual");
+  });
+
+  // docs/TASKS.md Bloque 38f. Que el broker haya contestado es lo único que
+  // le devuelve la palabra al agente cuando se calló por el Bloque 31. Antes
+  // esa señal vivía en `origen`, y el primer contacto del sistema la borraba:
+  // el día que se cablee el recontacto del Bloque 27, esa persona se quedaba
+  // sin respuesta hasta el techo de los 7 días.
+  describe("el contacto del broker no se pierde", () => {
+    it("un contacto del sistema posterior no borra el del broker", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+      await store.registrar("lead-1", new Date("2026-08-05"), "sistema");
+
+      const registro = await store.get("lead-1");
+      // El último contacto avanza —es lo que mira el recontacto—, pero la
+      // fecha en que contestó el broker queda.
+      expect(registro?.contactadoAt).toBe(new Date("2026-08-05").toISOString());
+      expect(registro?.origen).toBe("sistema");
+      expect(contactoDelBroker(registro)).toBe(new Date("2026-08-01").getTime());
+    });
+
+    it("un registro anterior al bloque, sin `manualAt`, cuenta por su origen", async () => {
+      const viejo = {
+        leadId: "lead-1",
+        contactadoAt: "2026-08-01T00:00:00.000Z",
+        origen: "manual" as const,
+      };
+      expect(contactoDelBroker(viejo)).toBe(new Date("2026-08-01").getTime());
+      expect(contactoDelBroker({ ...viejo, origen: "sistema" })).toBeNull();
+    });
+
+    it("un eco del broker que llega tarde igual deja la marca", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-05"), "sistema");
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+
+      const registro = await store.get("lead-1");
+      expect(registro?.contactadoAt).toBe(new Date("2026-08-05").toISOString());
+      expect(contactoDelBroker(registro)).toBe(new Date("2026-08-01").getTime());
+    });
+
+    it("la marca del broker tampoco retrocede", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-05"), "manual");
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+
+      expect(contactoDelBroker(await store.get("lead-1"))).toBe(new Date("2026-08-05").getTime());
+    });
+
+    // El eco arma la fecha con el timestamp de Meta: uno absurdo
+    // (`new Date(1e20)`) da una fecha inválida, y escribirla dejaría el
+    // registro con un `contactadoAt` que ninguna comparación puede ordenar.
+    it("una fecha inválida no se registra ni rompe nada", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+      await store.registrar("lead-1", new Date(1e20), "manual");
+
+      expect((await store.get("lead-1"))?.contactadoAt).toBe(new Date("2026-08-01").toISOString());
+    });
+
+    it("un lead nuevo con una fecha inválida no queda a medio escribir", async () => {
+      const store = new InMemoryUltimoContactoStore();
+      await store.registrar("lead-1", new Date(1e20), "manual");
+      expect(await store.get("lead-1")).toBeNull();
+    });
+
+    // Nada de este módulo escribe una fecha ilegible (ver el test de arriba),
+    // pero si una quedó en el archivo —una escritura a medias, una edición a
+    // mano— el registro no se puede volver a comparar con nada: sin esto se
+    // congela para siempre y ese lead nunca vuelve a contar como contactado.
+    it("un `contactadoAt` ilegible se repara con el próximo contacto", async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "ultimo-contacto-test-"));
+      try {
+        const archivo = path.join(dir, "ultimo_contacto.json");
+        await writeFile(
+          archivo,
+          JSON.stringify({ "lead-1": { leadId: "lead-1", contactadoAt: "basura", origen: "manual" } })
+        );
+        const store = new FileUltimoContactoStore(archivo);
+
+        await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+
+        expect((await store.get("lead-1"))?.contactadoAt).toBe(new Date("2026-08-01").toISOString());
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("un lead que sólo contactó el sistema no tiene marca del broker", async () => {
+      const store = new InMemoryUltimoContactoStore();
+      await store.registrar("lead-1", new Date("2026-08-01"), "sistema");
+      expect(contactoDelBroker(await store.get("lead-1"))).toBeNull();
+    });
   });
 
   describe("queda dentro de la política de retención", () => {

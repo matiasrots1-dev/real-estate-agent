@@ -27,6 +27,33 @@ export interface UltimoContacto {
   /** ISO. La última, sin importar el origen. */
   contactadoAt: string;
   origen: "sistema" | "manual";
+  /**
+   * ISO. La última vez que lo contactó **el broker**: desde su celular (el
+   * eco de coexistencia) o dándole una orden al bot (`broker_accion_directa`).
+   * Va aparte de `contactadoAt` porque un contacto del sistema posterior le
+   * pisaba el `origen` y borraba la única señal de que el broker había
+   * contestado — con eso, el agente se quedaba callado hasta el techo de los
+   * 7 días (docs/TASKS.md Bloque 38f).
+   *
+   * Ausente en los registros anteriores a ese bloque: ahí lo dice `origen`.
+   */
+  manualAt?: string;
+}
+
+/**
+ * Cuándo contactó **el broker** a este lead, en ms, o `null` si no consta.
+ *
+ * Los registros anteriores al Bloque 38f no tienen `manualAt`: si su origen
+ * es manual, su fecha es la del contacto del broker. Sin esta lectura, los 32
+ * leads que ya estaban registrados perdían la señal el día del deploy y se
+ * quedaban sin respuesta hasta el techo de los 7 días.
+ */
+export function contactoDelBroker(registro: UltimoContacto | null | undefined): number | null {
+  if (!registro) return null;
+  const iso = registro.manualAt ?? (registro.origen === "manual" ? registro.contactadoAt : undefined);
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : t;
 }
 
 export interface UltimoContactoStore extends PurgeableByLeadStore {
@@ -40,10 +67,37 @@ type Mapa = Record<string, UltimoContacto>;
 
 function aplicar(todo: Mapa, leadId: string, cuando: Date, origen: UltimoContacto["origen"]): Mapa {
   const previo = todo[leadId];
+  const t = cuando.getTime();
+  // Una fecha inválida no se registra: escribirla dejaría el registro con un
+  // `contactadoAt` que ninguna comparación posterior puede ordenar, y es
+  // preferible perder un eco malformado a envenenar el del lead.
+  if (Number.isNaN(t)) return todo;
+
   // Monótono a propósito: un eco que llega tarde o desordenado no puede
   // "rejuvenecer" el registro y habilitar un recontacto que no corresponde.
-  if (previo && new Date(previo.contactadoAt).getTime() >= cuando.getTime()) return todo;
-  return { ...todo, [leadId]: { leadId, contactadoAt: cuando.toISOString(), origen } };
+  // Un `contactadoAt` ilegible cuenta como "no hay fecha", para que el
+  // registro se pueda reparar con el próximo contacto en vez de quedar
+  // congelado para siempre.
+  const previoCrudo = previo ? new Date(previo.contactadoAt).getTime() : Number.NEGATIVE_INFINITY;
+  const previoT = Number.isNaN(previoCrudo) ? Number.NEGATIVE_INFINITY : previoCrudo;
+  const avanzaContacto = t > previoT;
+
+  // Y monótono **por campo**: el contacto del broker no lo puede borrar un
+  // contacto del sistema posterior (Bloque 38f). Antes compartían el `origen`
+  // y el recontacto del Bloque 27, al cablearse, iba a pisarlo.
+  const manualPrevio = contactoDelBroker(previo);
+  const manualT = origen === "manual" ? Math.max(manualPrevio ?? Number.NEGATIVE_INFINITY, t) : manualPrevio;
+  const avanzaManual = manualT !== null && manualT !== manualPrevio;
+
+  if (!avanzaContacto && !avanzaManual) return todo;
+
+  const registro: UltimoContacto = {
+    leadId,
+    contactadoAt: avanzaContacto ? cuando.toISOString() : previo!.contactadoAt,
+    origen: avanzaContacto ? origen : previo!.origen,
+  };
+  if (manualT !== null && Number.isFinite(manualT)) registro.manualAt = new Date(manualT).toISOString();
+  return { ...todo, [leadId]: registro };
 }
 
 function purgar(todo: Mapa, leadIds: ReadonlySet<string>, cutoff: Date, dryRun: boolean) {

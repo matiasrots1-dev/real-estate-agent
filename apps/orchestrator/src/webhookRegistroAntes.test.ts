@@ -19,6 +19,7 @@ import { InMemoryAuditLogStore } from "./agent/auditLog.js";
 import { InMemoryConversationStateStore } from "./agent/conversationStateStore.js";
 import { InMemoryGlobalPauseStore } from "./agent/globalPauseStore.js";
 import { InMemoryLastInteractionStore } from "./agent/lastInteractionStore.js";
+import { InMemoryUltimoContactoStore } from "./agent/ultimoContactoStore.js";
 import { AvisoDeFallos } from "./agent/avisoDeFallos.js";
 import { colapsarPorMensaje } from "./agent/auditPorMensaje.js";
 import type { ContextoConversacion, IntentClassification } from "./agent/classifier.js";
@@ -336,6 +337,49 @@ describe("el contexto del clasificador", () => {
 
     expect(contextos.get("segundo")?.mensajesPrevios).toEqual(["primero"]);
     expect(contextos.get("tercero")?.mensajesPrevios).toEqual(["primero", "segundo"]);
+  });
+
+  // docs/TASKS.md Bloque 38f. El prompt dice literalmente "el broker le
+  // escribió a esta persona hace N horas" y le pide al clasificador que lea
+  // el mensaje como una respuesta a ese contacto. El store guarda también los
+  // contactos del sistema: el día que se cablee el recontacto del Bloque 27,
+  // su propio envío automático se le presentaría a Claude como un mensaje del
+  // broker.
+  it("un contacto automático del sistema no se le presenta como un mensaje del broker", async () => {
+    const ultimoContactoStore = new InMemoryUltimoContactoStore();
+    await ultimoContactoStore.registrar(TELEFONO, new Date(Date.now() - 3_600_000), "sistema");
+    const contextos: Array<ContextoConversacion | undefined> = [];
+    const banco = await levantar(
+      async (_texto, contexto) => {
+        contextos.push(contexto);
+        return ANDA;
+      },
+      { ultimoContactoStore }
+    );
+
+    await postear(banco.baseUrl, "dale, gracias", "wamid.UNO");
+    await banco.queue.idle();
+
+    expect(contextos[0]?.horasDesdeContactoDelBroker).toBeUndefined();
+  });
+
+  it("el del broker sí, aunque después haya escrito el sistema", async () => {
+    const ultimoContactoStore = new InMemoryUltimoContactoStore();
+    await ultimoContactoStore.registrar(TELEFONO, new Date(Date.now() - 3_600_000), "manual");
+    await ultimoContactoStore.registrar(TELEFONO, new Date(Date.now() - 60_000), "sistema");
+    const contextos: Array<ContextoConversacion | undefined> = [];
+    const banco = await levantar(
+      async (_texto, contexto) => {
+        contextos.push(contexto);
+        return ANDA;
+      },
+      { ultimoContactoStore }
+    );
+
+    await postear(banco.baseUrl, "dale, gracias", "wamid.UNO");
+    await banco.queue.idle();
+
+    expect(contextos[0]?.horasDesdeContactoDelBroker).toBeCloseTo(1, 1);
   });
 
   it("sí incluye un mensaje anterior que falló: el cliente lo escribió", async () => {

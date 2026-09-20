@@ -3077,6 +3077,146 @@ entre si, y la que sobra se descubre el dia que hace falta la que falta.
       buscado), y una respuesta generativa que diga lo mismo con otras
       palabras no cuenta.
 
+### 38f — Que el broker haya contestado no se pierde
+Lo unico que le devuelve la palabra al agente, cuando se callo por el Bloque
+31, es que el broker responda. Eso se detecta hoy de una sola forma: el eco de
+coexistencia registra `origen: "manual"` en `ultimoContactoStore`, y
+`decidirPlantilla` mira que el contacto manual sea posterior a la frase que
+salio. Dos agujeros conocidos, los dos medidos abajo.
+
+**Lo que se midio antes de disenar (servidor, 19/09)**
+- `ultimo_contacto.json`: **32 leads, todos `manual`**. Ningun `sistema`
+  todavia: el job de recontacto del Bloque 27 no esta cableado. El dia que se
+  cablee, su escritura le pisa el origen al contacto manual y la senal se
+  pierde — hoy el bug esta armado, no disparado.
+- **El desfasaje de formato de telefono no existe**: los 32 leads del eco
+  vienen en el mismo formato (len 13, con el 9 argentino) que los
+  `conversationId` del audit log, y 31 de 32 cruzan **exacto** con una
+  conversacion. El que falta no aparece ni canonizando: es alguien a quien el
+  broker le escribio y que nunca le escribio al bot. Canonizar los dos lados
+  no cambia ni un cruce. El hallazgo "posible diferencia de formato entre el
+  `from` entrante y el `to` del eco" queda **descartado con datos**, no
+  mitigado.
+- **El eco no refleja los envios del propio bot**: de los 32 leads con eco,
+  **0** caen a menos de 2 minutos de una respuesta que el bot registro, y a 31
+  el bot nunca les respondio. Si el eco devolviera los envios propios, cada
+  respuesta del bot destrabaria su propio silencio y el Bloque 31 no serviria
+  de nada. *La prueba es debil y hay que decirlo*: en modo silencioso el bot
+  casi no envia, asi que en 31 de los 32 casos no hubo ocasion de colisionar.
+  Se re-verifica cuando el bot responda de verdad.
+- `broker_accion_directa`: **0 ordenes en produccion** (hay 1
+  `broker_resumen_agenda`, de la prueba en vivo del 38g). El agujero es real
+  pero todavia no se disparo.
+- Una conversacion recibio la misma frase de espera **4 veces** (...1181). Es
+  el Bloque 31/38e en vivo: arreglado, sin desplegar.
+
+**Pre-mortem**
+
+**1. La repeticion vuelve porque el bot cree que el broker contesto.** Si
+`manualAt` se escribe por algo que no es el broker —un eco que devuelva un
+envio propio, un recordatorio, el recontacto— el cupo se libera en cada
+respuesta y volvemos a las 16 frases iguales seguidas del Bloque 31, sin que
+ninguna metrica lo muestre.
+   *Mitigacion*: se escribe en exactamente dos lugares — el eco de
+   coexistencia y la ejecucion de una orden del broker — y hay un test de que
+   un contacto `sistema` no lo toca.
+   *Riesgo asumido*: la medicion de "el eco no devuelve los envios propios" es
+   debil por el modo silencioso (ver arriba). Si resultara falsa, esto empeora
+   el Bloque 31 en vez de arreglarlo.
+
+**2. Los 32 registros viejos pierden la senal el dia del deploy.** Si
+`manualAt` solo se completa de ahora en mas, los 32 leads que ya tienen un
+contacto manual dejan de contar como "el broker respondio": esas personas se
+quedan sin frase de espera hasta el techo de 7 dias.
+   *Mitigacion*: un registro sin `manualAt` y con `origen: "manual"` se lee
+   como `manualAt = contactadoAt`. Test con un registro viejo.
+
+**3. Registrar el envio rompe la orden del broker.** Si el registro se hace
+dentro del executor y tira (disco lleno, JSON corrupto), la accion falla
+**despues** de que el mensaje salio: el cliente lo recibio y el broker lee
+"fallo", con el riesgo de que lo mande de nuevo.
+   *Mitigacion*: best-effort, como todo el executor — el registro va en su
+   propio catch y no cambia el resultado de la accion. Test de que una accion
+   con el store roto sigue dando `ok`.
+
+**Como quedo**
+- [x] `UltimoContacto` gana `manualAt`: **cuando contacto el broker**, aparte
+      de `contactadoAt`, que sigue siendo el ultimo contacto venga de donde
+      venga (es lo que mira el recontacto). Antes los dos compartian `origen`,
+      y por eso el primer contacto del sistema borraba la senal.
+- [x] El store es monotono **por campo**: ni la fecha del ultimo contacto ni
+      la del contacto del broker retroceden, y un contacto del sistema ya no
+      pisa al del broker. Un eco del broker que llega tarde, despues de uno
+      del sistema, igual deja su marca.
+- [x] Los 32 registros que ya existen se leen bien sin migrar nada: sin
+      `manualAt` y con `origen: "manual"`, la fecha del registro **es** la del
+      contacto del broker (`contactoDelBroker`).
+- [x] Una orden del broker que manda un mensaje (`broker_accion_directa`)
+      cuenta como contacto suyo: es el broker contestando, aunque apriete el
+      boton el bot. Con eso destraba el silencio del Bloque 31 y el recontacto
+      no le escribe manana a alguien que acaba de recibir su respuesta.
+- [x] Se registra con el `wa_id` que devuelve Meta cuando lo devuelve: el
+      telefono que trae Tokko no tiene por que venir en el formato en que
+      llegan los mensajes entrantes, que es por el que busca la supresion.
+- [x] El registro es best-effort y va **despues** del envio: si falla, la
+      accion sigue siendo un exito (el mensaje ya salio), y un envio que el
+      modo silencioso bloqueo no cuenta como contacto.
+- [x] 14 tests nuevos. Mutation testing, una por vez, las 9 mueren:
+      - N1. un contacto manual no deja marca del broker: 1 test en rojo
+      - N2. el contacto del sistema vuelve a pisar el del broker: 4 en rojo
+      - N3. los registros anteriores al bloque dejan de contar: 2 en rojo
+      - N4. la marca del broker retrocede con un eco viejo: 1 en rojo
+      - N5. la supresion deja de mirar la marca del broker: 4 en rojo
+      - N6. el executor no registra el envio del broker: 3 en rojo
+      - N7. un registro que falla rompe la orden del broker: 1 en rojo
+      - N8. se registra el telefono de Tokko y no el wa_id: 1 en rojo
+      - N9. un envio bloqueado cuenta como contacto: 1 en rojo
+- [ ] Sigue abierto: **la medicion de que el eco no devuelve los envios
+      propios es debil** (ver arriba). Si resultara falsa, cada respuesta del
+      bot destrabaria su propio silencio. Se re-verifica cuando el bot
+      responda de verdad, con el modo silencioso apagado.
+- [ ] Sigue abierto: el eco es best-effort (Meta no lo reintenta). Si se
+      pierde el eco de la respuesta del broker, esa conversacion queda callada
+      hasta el techo de los 7 dias. La orden via `broker_accion_directa` ya no
+      depende del eco; la respuesta desde su celular, si.
+
+**Revision del PR (#43)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **El mismo bug, en un segundo lugar que no habia mirado.** El contexto que
+   se le pasa al clasificador arma `horasDesdeContactoDelBroker` con
+   `contactadoAt` —el ultimo contacto, venga de donde venga— y el prompt dice
+   literalmente *"el broker le escribio a esta persona hace N horas. Es muy
+   probable que este mensaje sea una RESPUESTA a ese contacto"*. El dia que se
+   cablee el recontacto del Bloque 27, el propio envio automatico del bot se
+   le presenta a Claude como un mensaje del broker, y el clasificador lee la
+   respuesta del cliente en un marco falso. Arreglado con la misma
+   `contactoDelBroker`: 2 tests nuevos por el webhook real, no por la funcion
+   suelta.
+   **Lo que lo agarro**: buscar *todos* los lectores del registro antes de dar
+   el cambio por completo (`grep` de `.origen` y `ultimoContacto`), en vez de
+   arreglar el lector que motivo el bloque.
+2. **Una fecha invalida rompia el registro.** El eco arma la fecha con el
+   timestamp de Meta; uno absurdo da `Invalid Date`. Con el cambio de este
+   bloque, un lead nuevo con esa fecha reventaba en `previo!.contactadoAt`
+   (antes reventaba en `toISOString`: las dos estan mal). Ahora una fecha
+   ilegible no se registra, y un `contactadoAt` ilegible que ya este en el
+   archivo se repara con el proximo contacto en vez de congelar ese lead para
+   siempre.
+
+Mutation testing de la revision (3 mas, todas mueren):
+
+      - N10. el contexto del clasificador vuelve a mirar cualquier contacto: 2 en rojo
+      - N11. una fecha invalida se registra igual: 1 en rojo
+      - N12. un `contactadoAt` ilegible congela el registro: 1 en rojo
+
+**Pregunta que lo habria agarrado antes**: *¿quien mas lee este campo?* El
+bloque nacio de un lector (`decidirPlantilla`), y el pre-mortem se escribio
+alrededor de ese. El segundo lector estaba a un `grep` de distancia y hacia
+exactamente lo mismo mal.
+
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -3209,7 +3349,9 @@ arreglaron 8 (arriba). Quedan anotados:
       dice que salio algo que no salio ni gasta el cupo.)* `responseSent` se
       registra antes de enviar: si el envio falla, igual se
       gasta el unico envio de plantilla permitido (Bloque 31).
-- [ ] La deteccion de "el broker respondio" no ve los envios de
+- [x] *(Resuelto en 38f: el contacto del broker va en su propio campo y una
+      orden suya que manda un mensaje cuenta como contacto suyo.)*
+      La deteccion de "el broker respondio" no ve los envios de
       `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
       `manual`.
 - [x] *(Resuelto en 38e: la supresion va en su propio campo.)*
@@ -3219,9 +3361,11 @@ arreglaron 8 (arriba). Quedan anotados:
       despedida no lo es.)* `rechazo_desinteres` no dice "te paso con el
       asesor", y sin embargo comparte el cupo con las otras seis plantillas
       fijas.
-- [ ] Posible diferencia de formato de telefono entre el `from` entrante y el
-      `to` del eco de coexistencia. Verificarlo con datos reales antes de
-      darlo por bueno.
+- [x] *(Medido en 38f y **descartado**: los 32 leads del eco vienen en el
+      mismo formato que los `conversationId` del audit log, 31 de 32 cruzan
+      exacto y canonizar los dos lados no cambia ni un cruce. No se toco
+      nada.)* Posible diferencia de formato de telefono entre el `from`
+      entrante y el `to` del eco de coexistencia.
 - [ ] Fallar cerrado ante un error de lectura **persistente** suprime la
       plantilla para todos, indefinidamente (Bloque 31).
 
