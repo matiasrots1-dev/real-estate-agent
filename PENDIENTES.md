@@ -30,6 +30,12 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   corriendo, modo silencioso forzado, 63 contactos conocidos cargados. Prueba
   en vivo de 38g OK: el broker pidio "resumen de agenda" desde el ...6699 y
   le llego el resumen.
+- **Desplegado el 19/09 a las 23:00** (`f979d72`): 38b, 38c, 38d, 38e y 38f
+  — con eso **el Bloque 38 esta entero en produccion**. Verificado despues
+  del deploy: `/health` OK, los tres MCP corriendo, modo silencioso forzado,
+  70 contactos conocidos cargados. No hay prueba en vivo de 38e ni 38f: las
+  dos dependen de que el bot le responda a un cliente, y con el modo
+  silencioso prendido eso no pasa.
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
@@ -78,11 +84,10 @@ haga que el bot le escriba a clientes, y borrar datos.
       desplegado: 38c (ningun escalamiento le manda al cliente una plantilla
       con `{huecos}` sin llenar) y 38d (si falla mandarle la respuesta a un
       cliente, queda registrado, te llega el aviso y `pendientes` lo muestra).
-      Hecho, **sin desplegar**: 38e (la misma frase de espera no se repite,
-      venga del camino que venga) y 38f (que hayas contestado vos no se
-      pierde). Con esos dos **el Bloque 38 esta completo**: falta el deploy,
-      que no cambia nada visible mientras el modo silencioso siga prendido.
-      Lo que **afecta hoy**: la ventana de 24 hs (arriba).
+      Tambien desplegado el 19/09 a las 23:00: 38e (la misma frase de espera
+      no se repite, venga del camino que venga) y 38f (que hayas contestado
+      vos no se pierde). **El bloque esta completo y en produccion.** Lo que
+      **afecta hoy**: la ventana de 24 hs (arriba).
 - [ ] **Tu calendario personal no cuenta para ofrecer horarios.** El bot mira
       un solo calendario, el dedicado a visitas. Para ofrecerle horarios a un
       cliente consulta "ocupado/libre" solo ahi, asi que con el modo silencioso
