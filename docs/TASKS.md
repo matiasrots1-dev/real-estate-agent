@@ -1741,6 +1741,88 @@ server.ts ya describe para el modo silencioso, en el mismo job.
    *Mitigacion*: en simulacro no se escribe ningun store. Test de que despues
    de una corrida en simulacro los tres stores quedan exactamente igual.
 
+**Como quedo**
+- [x] **Tope duro por corrida y por dia.** Los aplica `planificarRecontacto`,
+      el mismo modulo que corre el simulacro. El tope diario se persiste en
+      disco (`tope_diario.json`): un contador en memoria deja de ser un tope
+      al primer reinicio.
+- [x] **Modo simulacro por default** (`RECONTACTO_ENVIO_HABILITADO=false`):
+      calcula el plan, lo reporta y **no escribe ningun store**. Si escribiera,
+      dejaria a esa gente marcada como contactada sin haberle mandado nada.
+- [x] **El criterio de a quien** se aplica en el cliente de Tokko
+      (`searchLeads({ paraRecontacto: true })`), sobre el contacto **crudo**,
+      que es donde estan el agente asignado, el `lead_status` y las etiquetas
+      de barrio. Ahi y no en el llamador: es lo unico que garantiza que el job
+      y el simulacro vean la misma gente.
+- [x] La ventana horaria (9-20), el intervalo minimo entre corridas que
+      envian, los 60 dias entre mensajes, el maximo por persona, el
+      deduplicado por telefono de las fichas repetidas de Tokko y los numeros
+      internos: todo lo aplica ahora el job, no solo el simulacro.
+- [x] **El job se anota a si mismo** en `ultimoContactoStore` con
+      `origen: "sistema"` cuando manda. Sin eso, la regla de los 60 dias solo
+      veia lo que el broker escribio a mano y el job no se contaba a si mismo
+      (docs/TASKS.md Bloque 38f).
+- [x] **Falla cerrado si no sabe a quien NO escribirle**: si falta alguna de
+      las tres fuentes de numeros internos (el numero del broker, la linea del
+      bot segun Meta, los usuarios de Tokko), el envio real queda en simulacro
+      aunque este habilitado, y el arranque dice cual falta.
+- [x] **El aviso al broker del 3er intento no es un mensaje a la persona**:
+      no consume el tope diario ni cuenta como uno de los dos mensajes
+      permitidos por persona. Si contara, un lead que entra frio a los 40 dias
+      —que recibe primero la revision— llegaria al tope sin haber recibido
+      nada. Tiene su propio tope por corrida igual, para que una cuenta con
+      miles de leads frios no le vuelque cientos de avisos al broker de una.
+- [x] 22 tests nuevos. Mutation testing, una por vez, las 11 mueren:
+      - Q1. el job no pide los candidatos de recontacto: 1 test en rojo
+      - Q2. el cliente de Tokko ignora el criterio: 2 en rojo
+      - Q3. el job le escribe a todos, sin politica: 4 en rojo
+      - Q4. el simulacro escribe igual: 1 en rojo
+      - Q5. el tope diario no cuenta lo que salio: 1 en rojo
+      - Q6. el tope diario suma aunque el envio falle: 3 en rojo
+      - Q7. no se consulta la ventana horaria: 1 en rojo
+      - Q8. el aviso al broker cuenta como mensaje a la persona: 1 en rojo
+      - Q9. el job no se anota a si mismo como contacto: 1 en rojo
+      - Q10. los avisos al broker no tienen tope: 1 en rojo
+      - Q11. se envia aunque falten numeros internos: 1 en rojo
+- [ ] **Falta la decision del dueno del repo para habilitarlo**: revisar
+      varias corridas de `npm run recontacto:simulacro` y recien ahi poner
+      `RECONTACTO_ENVIO_HABILITADO=true`. Mientras siga el modo silencioso, el
+      job ni siquiera se registra.
+- [ ] Sigue abierto: la fuente de los telefonos de los usuarios de Tokko no
+      esta cableada en el servidor (el simulacro la lee de la API de Tokko
+      directo; el orchestrator no tiene un tool para eso). Hoy eso hace que el
+      envio real quede en simulacro por la guarda de arriba, que es el
+      comportamiento correcto, pero hay que cablearla antes de poder habilitar
+      nada.
+- [ ] Sigue abierto: el simulacro sigue calculando `intentos: 0` para todos
+      en vez de leer `recontactStateStore`. Sobreestima a quien le escribiria.
+      El job si los lee bien.
+
+**Cuatro cosas que salieron del mutation testing de este bloque**
+1. **El corredor de mutaciones nunca corrio `mcp-servers/`.** Su comando por
+   defecto es `npx vitest run apps/orchestrator packages/shared-types`. La
+   mutacion del filtro en el cliente de Tokko "sobrevivio" con el test
+   delante: no estaba corriendo. Las mutaciones que tocan un MCP server
+   necesitan `"cmd"` explicito en el JSON.
+2. **Una guarda que no se puede alcanzar no es una guarda.** Al separar el
+   aviso al broker del envio al cliente, el `if (salio)` del bucle quedo
+   siempre verdadero: codigo muerto que parecia una proteccion. Se saco.
+3. **Un test puede cubrir el caso y no distinguir el bug.** El primer test del
+   3er intento usaba un lead con un intento previo, y el tope es de dos: con
+   la mutacion aplicada el resultado era el mismo. Habia que llevarlo al borde
+   exacto donde la diferencia cambia la decision.
+4. **server.ts no tiene tests** y ahi vivia la guarda que impide enviar sin
+   saber a quien NO escribirle. Se saco a una funcion pura
+   (`envioDeRecontactoPermitido`) que si se testea; el cableado sigue sin
+   cubrir, como el resto de `server.ts`.
+
+**Pregunta que lo habria agarrado antes**: *¿el modulo que decide y el que
+ejecuta son el mismo?* Las tres salvaguardas estaban escritas, probadas y
+conectadas **al simulacro**; el job que envia no importaba ninguna. Un
+simulacro que no comparte el codigo del que actua no es un simulacro, es otro
+programa que da un numero parecido.
+
+
 ## Bloque 28 — El catalogo de intents no resiste el trafico real (BLOQUEANTE)
 Salio de mirar las 41 conversaciones reales que entraron entre el 2026-08-25 y
 el 26, con el modo silencioso puesto. **Hay que revisarlo contra estas

@@ -99,10 +99,23 @@ haga que el bot le escriba a clientes, y borrar datos.
       Google permite sumar tu calendario personal a esa consulta viendo solo
       ocupado/libre, sin el detalle, si lo compartis con la cuenta del bot.
       Detectado el 19/09.
-- [ ] **Bloque 27**: recontacto. Falta cablearlo al scheduler. Ojo:
-      `recontactoPolicy.ts` y `topeDiarioStore.ts` usan la hora local del
-      proceso. En un servidor en UTC, la ventana de 9 a 20 queda corrida 3 horas
-      y el tope diario se reinicia a las 21:00.
+- [ ] **Bloque 27**: recontacto. **El código está hecho (20/09) y falta tu
+      decisión para habilitarlo.** Lo que se encontró: el job ya estaba en el
+      scheduler, pero no usaba ninguna de las tres salvaguardas —las usaba
+      sólo el simulacro que vos mirás para aprobar. O sea, aprobabas 29
+      personas y el job le habría escrito a ~3600. Ahora el job corre
+      exactamente el mismo cálculo que `npm run recontacto:simulacro`:
+      criterio, topes, ventana horaria, 60 días entre mensajes y deduplicado
+      de fichas repetidas.
+      **Para habilitarlo**: revisar varias corridas del simulacro y recién ahí
+      poner `RECONTACTO_ENVIO_HABILITADO=true`. Aunque lo pongas, hoy sigue en
+      simulacro porque falta cablear una de las tres fuentes de números
+      internos (los teléfonos de los usuarios de Tokko) y el job falla cerrado
+      si no sabe a quién NO escribirle. Y con el modo silencioso prendido ni
+      se registra.
+      *Medido el 20/09*: el servidor corre en hora local -03, así que la
+      ventana de 9 a 20 son horas de Argentina. El riesgo del huso sigue vivo
+      sólo si alguien cambia la zona horaria del servidor.
 - [ ] **Bloque 28**: catálogo. Está en 52% de precisión y 81% de recall. La
       señal "el broker le escribió" no se pudo validar sobre el histórico. El
       umbral queda quieto por decisión.

@@ -5,6 +5,7 @@ import { okResult, errorResult } from "./result.js";
 export const searchLeadsInputShape = {
   temperatura: z.enum(["nuevo", "tibio", "frio"]).optional(),
   diasSinRespuestaMin: z.number().optional(),
+  paraRecontacto: z.boolean().optional(),
 };
 
 export function createSearchLeadsHandler(client: TokkoClient) {

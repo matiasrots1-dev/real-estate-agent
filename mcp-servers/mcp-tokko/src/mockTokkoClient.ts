@@ -122,6 +122,11 @@ export class MockTokkoClient implements TokkoClient {
   }
 
   async searchLeads(filters: LeadSearchFilters): Promise<Lead[]> {
+    // `paraRecontacto` no se puede aplicar acá y es a propósito: el criterio
+    // mira campos del contacto crudo de Tokko (agente asignado, `lead_status`,
+    // etiquetas de barrio) que estos fixtures no tienen. Los leads del mock
+    // son todos candidatos. Está anotado para que "el mock ignora el filtro"
+    // sea una decisión y no un olvido (docs/TASKS.md Bloque 27).
     return this.leads.filter((lead) => {
       if (filters.temperatura && lead.temperatura !== filters.temperatura) {
         return false;

@@ -11,6 +11,17 @@ export interface TokkoPropertySearchFilters {
 export interface TokkoLeadSearchFilters {
   temperatura?: LeadTemperature;
   diasSinRespuestaMin?: number;
+  /**
+   * Solo los candidatos a recontacto proactivo: el criterio que definio el
+   * dueno del repo mirando la distribucion real de la cuenta (agente
+   * asignado, estado distinto de "Cerrado", barrio de sus propiedades). De
+   * 4683 contactos pasan 29.
+   *
+   * El filtro vive aca, sobre el contacto CRUDO de Tokko, y no en el
+   * llamador: es lo unico que garantiza que el job que envia y el simulacro
+   * que se aprueba vean la misma gente (docs/TASKS.md Bloque 27).
+   */
+  paraRecontacto?: boolean;
 }
 
 export interface LogActivityInput {
