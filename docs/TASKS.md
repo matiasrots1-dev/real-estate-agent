@@ -3077,6 +3077,68 @@ entre si, y la que sobra se descubre el dia que hace falta la que falta.
       buscado), y una respuesta generativa que diga lo mismo con otras
       palabras no cuenta.
 
+### 38f — Que el broker haya contestado no se pierde
+Lo unico que le devuelve la palabra al agente, cuando se callo por el Bloque
+31, es que el broker responda. Eso se detecta hoy de una sola forma: el eco de
+coexistencia registra `origen: "manual"` en `ultimoContactoStore`, y
+`decidirPlantilla` mira que el contacto manual sea posterior a la frase que
+salio. Dos agujeros conocidos, los dos medidos abajo.
+
+**Lo que se midio antes de disenar (servidor, 19/09)**
+- `ultimo_contacto.json`: **32 leads, todos `manual`**. Ningun `sistema`
+  todavia: el job de recontacto del Bloque 27 no esta cableado. El dia que se
+  cablee, su escritura le pisa el origen al contacto manual y la senal se
+  pierde — hoy el bug esta armado, no disparado.
+- **El desfasaje de formato de telefono no existe**: los 32 leads del eco
+  vienen en el mismo formato (len 13, con el 9 argentino) que los
+  `conversationId` del audit log, y 31 de 32 cruzan **exacto** con una
+  conversacion. El que falta no aparece ni canonizando: es alguien a quien el
+  broker le escribio y que nunca le escribio al bot. Canonizar los dos lados
+  no cambia ni un cruce. El hallazgo "posible diferencia de formato entre el
+  `from` entrante y el `to` del eco" queda **descartado con datos**, no
+  mitigado.
+- **El eco no refleja los envios del propio bot**: de los 32 leads con eco,
+  **0** caen a menos de 2 minutos de una respuesta que el bot registro, y a 31
+  el bot nunca les respondio. Si el eco devolviera los envios propios, cada
+  respuesta del bot destrabaria su propio silencio y el Bloque 31 no serviria
+  de nada. *La prueba es debil y hay que decirlo*: en modo silencioso el bot
+  casi no envia, asi que en 31 de los 32 casos no hubo ocasion de colisionar.
+  Se re-verifica cuando el bot responda de verdad.
+- `broker_accion_directa`: **0 ordenes en produccion** (hay 1
+  `broker_resumen_agenda`, de la prueba en vivo del 38g). El agujero es real
+  pero todavia no se disparo.
+- Una conversacion recibio la misma frase de espera **4 veces** (...1181). Es
+  el Bloque 31/38e en vivo: arreglado, sin desplegar.
+
+**Pre-mortem**
+
+**1. La repeticion vuelve porque el bot cree que el broker contesto.** Si
+`manualAt` se escribe por algo que no es el broker —un eco que devuelva un
+envio propio, un recordatorio, el recontacto— el cupo se libera en cada
+respuesta y volvemos a las 16 frases iguales seguidas del Bloque 31, sin que
+ninguna metrica lo muestre.
+   *Mitigacion*: se escribe en exactamente dos lugares — el eco de
+   coexistencia y la ejecucion de una orden del broker — y hay un test de que
+   un contacto `sistema` no lo toca.
+   *Riesgo asumido*: la medicion de "el eco no devuelve los envios propios" es
+   debil por el modo silencioso (ver arriba). Si resultara falsa, esto empeora
+   el Bloque 31 en vez de arreglarlo.
+
+**2. Los 32 registros viejos pierden la senal el dia del deploy.** Si
+`manualAt` solo se completa de ahora en mas, los 32 leads que ya tienen un
+contacto manual dejan de contar como "el broker respondio": esas personas se
+quedan sin frase de espera hasta el techo de 7 dias.
+   *Mitigacion*: un registro sin `manualAt` y con `origen: "manual"` se lee
+   como `manualAt = contactadoAt`. Test con un registro viejo.
+
+**3. Registrar el envio rompe la orden del broker.** Si el registro se hace
+dentro del executor y tira (disco lleno, JSON corrupto), la accion falla
+**despues** de que el mensaje salio: el cliente lo recibio y el broker lee
+"fallo", con el riesgo de que lo mande de nuevo.
+   *Mitigacion*: best-effort, como todo el executor — el registro va en su
+   propio catch y no cambia el resultado de la accion. Test de que una accion
+   con el store roto sigue dando `ok`.
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
