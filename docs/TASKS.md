@@ -3962,7 +3962,9 @@ anonimizador. Una linea rota conservada es texto que no paso.
    ejemplos. Tests de las dos.
 
 **Como quedo**
-- [x] `writeJsonFile` escribe a un temporal y hace `rename`. Lo usan 7 stores,
+- [x] `writeJsonFile` escribe a un temporal y hace `rename`. Lo usan **8**
+      stores (appointments, conversations, global_pause, last_interaction,
+      recontacts, telefonos_canonicos, ultimo_contacto y el tope diario),
       entre ellos `conversations.json`, `last_interaction.json` (el reloj de
       los 24 meses) y `ultimo_contacto.json`. El temporal lleva pid y uuid
       —puede haber otro proceso escribiendo el mismo store— y se borra en el
@@ -3993,6 +3995,14 @@ anonimizador. Una linea rota conservada es texto que no paso.
       muerta porque la suite fallo. Se reemplazo por R10, que prueba lo mismo
       sin romper el build: **una mutacion que no compila cuenta como no
       corrida, no como muerta**.
+- [ ] Sigue abierto (**hallazgo de la revision del PR #51**): `reescribir` lee
+      el corpus, calcula y despues escribe el archivo entero. Si llega un eco
+      de coexistencia entre la lectura y la escritura, ese ejemplo nuevo se
+      pierde. Ya era asi antes del bloque, pero conviene decirlo: la
+      reanonimizacion es manual y se corre en el servidor **con el bot
+      andando**. Mitigacion barata mientras tanto: correrla en un rato
+      tranquilo. La de verdad —una cola de escrituras como la del reporte de
+      retencion— queda anotada.
 - [ ] Sigue abierto: `readJsonFile` tira si el archivo existe y esta roto. Es
       deliberado —un JSON a medias es algo para mirar, no para tapar
       devolviendo el default y sobrescribirlo despues— pero significa que un
