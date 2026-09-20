@@ -4015,6 +4015,59 @@ antes de escribir, y un `catch` que convierte "no pude leer" en "no hay
 nada". Ninguno de los dos falla jamas en el camino feliz.
 
 
+## Bloque 42 — El bot se calla con lo que no es del negocio
+Sale de la medicion del Bloque 28 (20/09). **Decision del dueno del repo, el
+mismo dia**: silencio total —ni respuesta ni aviso— y la deteccion la hace el
+clasificador con un intent explicito.
+
+**Por que**: la linea del bot es la linea de trabajo real del broker, y por
+ahi entra todo: amigos, la universidad, pagos, proveedores. Medido sobre las
+45 conversaciones etiquetadas a mano, con el modo silencioso apagado hoy
+pasaria esto:
+- a un amigo que escribe "Jajajaja" le llega *"Dejame confirmarlo con el
+  asesor y te respondo enseguida"*, porque cae en fallback y el fallback
+  escala (y escalar manda texto al cliente desde el Bloque 38c);
+- y en **16 conversaciones etiquetadas "no es lead"** el clasificador matcheo
+  un intent concreto, asi que la respuesta es peor todavia: es una respuesta
+  de verdad, del tipo "¿Querés que coordinemos una visita?".
+
+El problema de fondo no es que falten intents: **el catalogo no tiene forma de
+no hacer nada**. Todos los `response.style` producen texto, y el unico camino
+que no responde —el escalamiento— tambien le manda la frase de espera al
+cliente.
+
+**Por que no se avisa al broker**: porque ese mensaje lo esta viendo igual en
+su celular. La linea es suya y el canal es coexistencia. Un aviso del bot
+seria ruido sobre algo que ya vio. (Es la diferencia con un escalamiento
+normal, donde el aviso trae un borrador que le sirve para contestar.)
+
+**Pre-mortem**
+
+**1. El bot se calla con un cliente de verdad.** Un falso positivo silencia a
+alguien que queria comprar, y como no hay aviso, **nadie se entera**. Es el
+riesgo que la decision acepta a cambio de no contestarle a los amigos.
+   *Mitigacion*: umbral de confianza alto para este intent (0.85, el mas alto
+   del catalogo), y `npm run pendientes` los lista **en su propia seccion**,
+   para poder revisar a quien se callo el bot sin que se mezclen con las
+   conversaciones sin responder. El broker ademas ve el mensaje en su celular.
+
+**2. El silencio se cuela por otro camino y el amigo recibe la frase de
+espera.** Es el modo de fallo que haria inutil el bloque entero. Si por baja
+confianza, por la red de ultima linea del Bloque 38c o por un flujo de
+visitas este intent termina en `finalizeEscalation`, sale texto al cliente.
+   *Mitigacion*: el schema prohibe `requires_broker: true` y plantilla en un
+   intent de silencio, y hay test de que un match de este intent no manda nada
+   **por ningun camino** ni escribe `responseSent`.
+
+**3. Alguien marca como silencio un intent del negocio.** `silencio` es la
+unica forma de que el bot no conteste: si manana se usa para "no molestar" en
+un intent de clientes, esa gente queda sin respuesta y sin escalamiento, y
+nada lo muestra.
+   *Mitigacion*: el schema exige que un intent de silencio no tenga plantilla
+   ni escale, y un test del catalogo fija **cuales** intents lo usan, igual
+   que se hizo con `espera` en el Bloque 38e: agregar uno obliga a mirar esta
+   decision.
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
