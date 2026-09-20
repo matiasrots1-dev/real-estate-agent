@@ -3565,6 +3565,54 @@ donde no debe y llevarse justo los reportes que importan.
    ventana, asi que el archivo nunca queda vacio. Test de que una linea rota
    no arrastra a las posteriores.
 
+**Como quedo**
+- [x] La retencion corre **una vez por dia**, a la hora local del servidor que
+      diga `RETENTION_HORA` (default 4). El scheduler sigue pasando cada 5
+      minutos por los demas jobs; la retencion decide si le toca.
+- [x] La condicion es "ya paso la hora de hoy y la ultima corrida es anterior
+      a esa hora", **no** "es tal hora": si el proceso estuvo caido durante la
+      ventana, corre en la primera vuelta despues de levantar en vez de
+      saltearse el dia.
+- [x] "Cuando fue la ultima" es el **maximo** entre lo que recuerda el proceso
+      y lo que dice el reporte. Cada una sola falla en un caso real: la
+      memoria se borra en cada deploy (hubo dos el 19/09), y la del reporte
+      desaparece si el `append` falla — ese `catch` existe a proposito.
+- [x] Si el reporte no se puede leer, corre igual: purgar de mas es preferible
+      a no purgar nunca. Si se pudiera leer y estuviera al dia, no corre.
+- [x] El reporte se conserva **por tiempo** (`RETENTION_DIAS_DE_REPORTES`,
+      default 90 dias) y ya no por cantidad. El corte sigue siendo por
+      posicion, como en el Bloque 39, asi que una linea rota no define el
+      corte ni arrastra a las posteriores; y si ningun reporte entra en la
+      ventana —reloj de la maquina para atras— no se recorta nada.
+- [x] El scheduler **no arranca una vuelta si la anterior sigue corriendo**.
+      Una vuelta en la que un job falla no lo deja trabado.
+- [x] Una `RETENTION_HORA` que no sea una hora del dia (25, -1, 4.5, texto) se
+      ignora con un aviso y se usa el default. Con la hora rota la retencion
+      no correria nunca, y eso se ve igual que una corrida que no borro nada.
+- [x] El arranque loguea a que hora corre, cuantos dias de reportes conserva y
+      cuando fue la ultima corrida. Sin eso, "no corrio nunca" y "corrio y no
+      borro nada" se siguen viendo igual.
+- [x] 19 tests nuevos y los del reporte migrados del criterio por cantidad al
+      de por tiempo. Mutation testing, una por vez, las 11 mueren:
+      - P1. la retencion vuelve a correr en cada vuelta: 2 tests en rojo
+      - P2. la condicion es "es tal hora": 2 en rojo
+      - P3. no se mira lo que dice el reporte: 1 en rojo
+      - P4. no se recuerda en memoria: 1 en rojo
+      - P5. la memoria pisa al reporte en vez de tomarse el maximo: 1 en rojo
+      - P6. un reporte ilegible frena la retencion para siempre: 1 en rojo
+      - P7. el reporte se recorta por cantidad otra vez: 7 en rojo
+      - P8. el recorte borra todo si ningun reporte entra en la ventana: 1 en rojo
+      - P9. el scheduler vuelve a superponer vueltas: 1 en rojo
+      - P10. una vuelta que falla deja el scheduler trabado: 3 en rojo
+      - P11. una hora invalida en el env se propaga: **sobrevivio**, no habia
+        ningun test de la config. Se agregaron: 4 en rojo
+- [ ] Consecuencia asumida: el borrado puede demorar **hasta un dia** sobre el
+      plazo de 12 meses. La politica publicada dice "cumplido el plazo, los
+      datos se eliminan", sin frecuencia, asi que entra — pero queda escrito
+      para que sea una decision y no un descubrimiento.
+- [ ] Sigue abierto: la carrera entre la purga y un `append` (Bloque 37) no se
+      cierra, se achica. Pasa de 288 ventanas por dia a 1.
+
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

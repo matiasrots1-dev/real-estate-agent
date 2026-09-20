@@ -114,15 +114,11 @@ haga que el bot le escriba a clientes, y borrar datos.
 
 ## Después
 
-- [ ] **Bloque 40: la retencion corre cada 5 minutos y su reporte dura una
-      hora.** Queda para despues por decision del dueno del repo (19/09). El
-      reporte guarda 12 corridas, pensadas para comparar semana contra semana:
-      desde julio de 2027, cuando empiece a borrar, el reporte de un borrado
-      desaparece en una hora. Propuesta: correrla una vez por dia, en horario
-      tranquilo, y conservar el reporte por tiempo (por ejemplo 90 dias). Va
-      junto con otro problema del mismo camino: el scheduler no espera a que
-      termine la vuelta anterior, asi que una vuelta lenta superpone todos los
-      jobs. Tiene que estar hecho antes de julio de 2027.
+- [x] *(Hecho el 19/09, Bloque 40.)* **La retencion corria cada 5 minutos y
+      su reporte duraba una hora.** Ahora corre una vez por dia a las 4 de la
+      manana (`RETENTION_HORA`), el reporte se conserva 90 dias
+      (`RETENTION_DIAS_DE_REPORTES`) y el scheduler no arranca una vuelta si
+      la anterior sigue corriendo. Falta desplegarlo.
 - [ ] **Tercer numero dedicado como canal broker** (mejora, no bloquea nada).
       Hoy los borradores y las ordenes al bot van por el celular personal
       ...6699, asi que trabajo y vida privada comparten linea. Un numero

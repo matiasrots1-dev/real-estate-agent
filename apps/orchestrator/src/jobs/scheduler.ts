@@ -19,6 +19,7 @@ export interface SchedulerOptions {
 export class Scheduler {
   private readonly jobs: ScheduledJob[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private corriendo = false;
 
   constructor(private readonly options: SchedulerOptions) {}
 
@@ -38,14 +39,34 @@ export class Scheduler {
     this.timer = null;
   }
 
-  /** Corre todos los jobs registrados una vez. Un job que falla no frena a los demás. */
+  /**
+   * Corre todos los jobs registrados una vez. Un job que falla no frena a los
+   * demás.
+   *
+   * **Una vuelta no arranca si la anterior sigue corriendo** (docs/TASKS.md
+   * Bloque 40). `setInterval` no espera: con una vuelta lenta —una llamada
+   * externa colgada— se apilaban los jobs y dos corridas de la retención
+   * podían reescribir los mismos archivos a la vez. En el servidor todavía no
+   * pasó (el intervalo medido entre corridas nunca bajó de 290 s, con el
+   * scheduler en 300 s), así que esto cierra un riesgo de diseño, no un
+   * incidente.
+   */
   async tick(): Promise<void> {
-    for (const job of this.jobs) {
-      try {
-        await job.run();
-      } catch (error) {
-        console.error(`Job "${job.name}" falló:`, error);
+    if (this.corriendo) {
+      console.warn("scheduler: la vuelta anterior todavía no terminó, se saltea esta.");
+      return;
+    }
+    this.corriendo = true;
+    try {
+      for (const job of this.jobs) {
+        try {
+          await job.run();
+        } catch (error) {
+          console.error(`Job "${job.name}" falló:`, error);
+        }
       }
+    } finally {
+      this.corriendo = false;
     }
   }
 }

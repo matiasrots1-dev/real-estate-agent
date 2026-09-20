@@ -77,6 +77,15 @@ export interface OrchestratorConfig {
      * habilitarlo explícitamente después de revisar unos cuantos reportes.
      */
     borradoHabilitado: boolean;
+    /**
+     * Hora local del servidor a la que corre la purga, una vez por día
+     * (docs/TASKS.md Bloque 40). Antes corría en cada vuelta del scheduler
+     * —288 veces por día— y eso dejaba el reporte de un borrado vivo apenas
+     * una hora.
+     */
+    hora: number;
+    /** Cuántos días de reportes se conservan. */
+    diasDeReportes: number;
   };
   /**
    * Coordenadas por defecto para consulta_clima_visita cuando la propiedad
@@ -102,6 +111,22 @@ export interface OrchestratorConfig {
   defaultLng: number;
   /** Cada cuánto corre el scheduler de jobs (recordatorios, etc). Ver jobs/scheduler.ts. */
   schedulerIntervalMs: number;
+}
+
+/**
+ * Una hora del día válida, o `undefined` si no lo es (vacía, con letras, 25,
+ * -1, 4.5). Se ignora en vez de propagarse: con una hora imposible la
+ * retención no correría nunca, y eso se ve igual que una corrida que no borró
+ * nada (docs/TASKS.md Bloque 40, modo de fallo 1).
+ */
+function horaValida(valor: string | undefined): number | undefined {
+  if (valor === undefined || valor.trim() === "") return undefined;
+  const n = Number(valor);
+  if (!Number.isInteger(n) || n < 0 || n > 23) {
+    console.warn(`RETENTION_HORA="${valor}" no es una hora del día (0-23): se usa el default.`);
+    return undefined;
+  }
+  return n;
 }
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
@@ -169,6 +194,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
         ? Number(env.RETENTION_MESES_GESTION_COMERCIAL)
         : 24,
       borradoHabilitado: env.RETENTION_BORRADO_HABILITADO === "true",
+      // Hora local del servidor a la que corre la purga, una vez por día
+      // (docs/TASKS.md Bloque 40). Un valor fuera de 0-23 se ignora: con la
+      // hora rota, la retención no correría nunca y el síntoma sería silencio.
+      hora: horaValida(env.RETENTION_HORA) ?? 4,
+      diasDeReportes: env.RETENTION_DIAS_DE_REPORTES ? Number(env.RETENTION_DIAS_DE_REPORTES) : 90,
     },
     // Invertido respecto de los demás flags a propósito: acá el valor seguro
     // es el `true`, así que cualquier cosa que no sea exactamente "false"

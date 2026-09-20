@@ -5,7 +5,14 @@ import { InMemoryConversationStateStore, idleState } from "../agent/conversation
 import { InMemoryRecontactStateStore } from "../agent/recontactStateStore.js";
 import { InMemoryLastInteractionStore } from "../agent/lastInteractionStore.js";
 import { InMemoryRetentionReportStore } from "../agent/retentionReportStore.js";
-import { ejecutarRetencion, leadsVencidos, ultimaInteraccionEfectiva, type RetentionJobDeps } from "./retention.js";
+import {
+  createRetentionJob,
+  debeCorrerRetencion,
+  ejecutarRetencion,
+  leadsVencidos,
+  ultimaInteraccionEfectiva,
+  type RetentionJobDeps,
+} from "./retention.js";
 
 const AHORA = new Date("2027-06-15T12:00:00Z");
 const TELEFONO = "5491155559999";
@@ -199,3 +206,143 @@ describe("ultimaInteraccionEfectiva / leadsVencidos", () => {
     expect([...vencidos]).toEqual(["viejo"]);
   });
 });
+
+// docs/TASKS.md Bloque 40. La retención pasa a correr una vez por día, en
+// horario tranquilo. El modo de fallo que domina el diseño es el 1: si deja
+// de correr, el síntoma es silencio — exactamente lo mismo que se ve cuando
+// corre y no borra nada, que es lo que pasa hoy y va a pasar hasta julio de
+// 2027.
+describe("debeCorrerRetencion", () => {
+  const aLas = (hora: number, dia = 15) => new Date(`2027-06-${dia}T${String(hora).padStart(2, "0")}:00:00`);
+
+  it("antes de la hora del día, no le toca", () => {
+    expect(debeCorrerRetencion({ ultima: null, ahora: aLas(3), hora: 4 })).toBe(false);
+  });
+
+  it("pasada la hora y sin corridas previas, corre", () => {
+    expect(debeCorrerRetencion({ ultima: null, ahora: aLas(4), hora: 4 })).toBe(true);
+  });
+
+  it("si ya corrió hoy después de la hora, no vuelve a correr", () => {
+    expect(debeCorrerRetencion({ ultima: aLas(4), ahora: aLas(12), hora: 4 })).toBe(false);
+  });
+
+  it("si la última fue ayer, corre", () => {
+    expect(debeCorrerRetencion({ ultima: aLas(4, 14), ahora: aLas(4), hora: 4 })).toBe(true);
+  });
+
+  // Modo de fallo 1: con la condición "es tal hora", un proceso caído durante
+  // esa vuelta —o un deploy justo ahí— se saltea el día entero.
+  it("si el proceso estuvo caído en la ventana, se pone al día cuando levanta", () => {
+    expect(debeCorrerRetencion({ ultima: aLas(4, 14), ahora: aLas(23), hora: 4 })).toBe(true);
+  });
+
+  it("una corrida de ayer POSTERIOR a la hora tampoco alcanza para saltear hoy", () => {
+    expect(debeCorrerRetencion({ ultima: aLas(23, 14), ahora: aLas(5), hora: 4 })).toBe(true);
+  });
+});
+
+describe("createRetentionJob — corre una vez por día", () => {
+  const aLas = (hora: number, dia = 15) => new Date(`2027-06-${dia}T${String(hora).padStart(2, "0")}:00:00`);
+
+  function job(e: Escenario, ahora: () => Date, hora = 4) {
+    return createRetentionJob({ ...e, now: ahora, horaDeCorrida: hora });
+  }
+
+  it("no corre antes de la hora configurada", async () => {
+    const e = escenario();
+    await job(e, () => aLas(3)).run();
+    expect(await e.reportStore.readAll()).toHaveLength(0);
+  });
+
+  it("corre una vez y no vuelve a correr en las vueltas del mismo día", async () => {
+    const e = escenario();
+    let ahora = aLas(4);
+    const j = job(e, () => ahora);
+
+    await j.run();
+    for (const h of [5, 6, 12, 23]) {
+      ahora = aLas(h);
+      await j.run();
+    }
+
+    expect(await e.reportStore.readAll()).toHaveLength(1);
+  });
+
+  it("al día siguiente vuelve a correr", async () => {
+    const e = escenario();
+    let ahora = aLas(4, 15);
+    const j = job(e, () => ahora);
+
+    await j.run();
+    ahora = aLas(4, 16);
+    await j.run();
+
+    expect(await e.reportStore.readAll()).toHaveLength(2);
+  });
+
+  // Modo de fallo 2: la marca en memoria no sobrevive a un deploy, y el 19/09
+  // hubo dos.
+  it("un proceso nuevo el mismo día no la vuelve a correr: lo dice el reporte", async () => {
+    const e = escenario();
+    let ahora = aLas(4);
+    await job(e, () => ahora).run();
+
+    ahora = aLas(10);
+    await job(e, () => ahora).run(); // otro proceso, mismo reportStore
+
+    expect(await e.reportStore.readAll()).toHaveLength(1);
+  });
+
+  // Y el otro lado del mismo modo de fallo: guardar el reporte puede fallar
+  // —ese `append` está envuelto en un catch a propósito—, y sin la marca en
+  // memoria la purga volvería a correr en cada vuelta el resto del día,
+  // reescribiendo el audit log entero cada 5 minutos.
+  it("si el reporte no se pudo guardar, igual no corre de nuevo en el día", async () => {
+    const e = escenario({
+      reportStore: {
+        append: async () => {
+          throw new Error("ENOSPC");
+        },
+        readAll: async () => [],
+      },
+    });
+    const corridas: string[] = [];
+    let ahora = aLas(4);
+    const j = job({ ...e, auditLog: espiaDeCorridas(e, corridas) } as Escenario, () => ahora);
+
+    await j.run();
+    ahora = aLas(10);
+    await j.run();
+
+    expect(corridas).toHaveLength(1);
+  });
+
+  it("si el reporte es ilegible, corre igual: es preferible purgar de más que no purgar", async () => {
+    const e = escenario({
+      reportStore: {
+        append: async () => {},
+        readAll: async () => {
+          throw new Error("archivo ilegible");
+        },
+      },
+    });
+    const corridas: string[] = [];
+    const j = job({ ...e, auditLog: espiaDeCorridas(e, corridas) } as Escenario, () => aLas(4));
+
+    await j.run();
+
+    expect(corridas).toHaveLength(1);
+  });
+});
+
+/** Cuenta cuántas veces la purga tocó el audit log. */
+function espiaDeCorridas(e: Escenario, corridas: string[]): InMemoryAuditLogStore {
+  const store = e.auditLog;
+  const original = store.purgeOlderThan.bind(store);
+  store.purgeOlderThan = async (cutoff: Date, dryRun: boolean) => {
+    corridas.push(cutoff.toISOString());
+    return original(cutoff, dryRun);
+  };
+  return store;
+}

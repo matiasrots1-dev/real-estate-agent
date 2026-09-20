@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadConfigFromEnv } from "./config.js";
 
 describe("loadConfigFromEnv — flag de firma del webhook", () => {
@@ -53,4 +53,35 @@ describe("loadConfigFromEnv — modo silencioso", () => {
       expect(loadConfigFromEnv({ AGENTE_MODO_SILENCIOSO: valor }).modoSilencioso).toBe(true);
     }
   );
+});
+
+// docs/TASKS.md Bloque 40, modo de fallo 1: con la hora rota la retención no
+// correría nunca, y eso se ve exactamente igual que una corrida que no borró
+// nada. Se ignora el valor y se avisa, en vez de propagarlo.
+describe("loadConfigFromEnv — la hora de la retención", () => {
+  it("por default corre a las 4 de la mañana", () => {
+    expect(loadConfigFromEnv({}).retention.hora).toBe(4);
+  });
+
+  it("toma la hora configurada", () => {
+    expect(loadConfigFromEnv({ RETENTION_HORA: "6" }).retention.hora).toBe(6);
+  });
+
+  // La medianoche es una hora válida, y `0` no puede caer en el default.
+  it("las 00:00 valen", () => {
+    expect(loadConfigFromEnv({ RETENTION_HORA: "0" }).retention.hora).toBe(0);
+  });
+
+  it.each(["25", "-1", "4.5", "cuatro", ""])("ignora %o y usa el default", (valor) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(loadConfigFromEnv({ RETENTION_HORA: valor }).retention.hora).toBe(4);
+    // El vacío no es un error de configuración: es "no está puesta".
+    if (valor !== "") expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("conserva 90 días de reportes por default", () => {
+    expect(loadConfigFromEnv({}).retention.diasDeReportes).toBe(90);
+    expect(loadConfigFromEnv({ RETENTION_DIAS_DE_REPORTES: "30" }).retention.diasDeReportes).toBe(30);
+  });
 });

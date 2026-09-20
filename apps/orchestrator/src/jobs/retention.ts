@@ -138,10 +138,80 @@ export async function ejecutarRetencion(deps: RetentionJobDeps): Promise<Retenti
   return report;
 }
 
-export function createRetentionJob(deps: RetentionJobDeps): ScheduledJob {
+/**
+ * El comienzo de la ventana de hoy: la hora tranquila a la que corre la
+ * retención, en la zona horaria del servidor.
+ */
+function inicioDeLaVentana(ahora: Date, hora: number): Date {
+  const d = new Date(ahora.getTime());
+  d.setHours(hora, 0, 0, 0);
+  return d;
+}
+
+/**
+ * ¿Le toca correr? (docs/TASKS.md Bloque 40).
+ *
+ * La condición **no** es "es tal hora": si lo fuera, un proceso caído durante
+ * esa vuelta —o un deploy justo ahí— saltearía el día entero, y el síntoma
+ * sería silencio, igual que el de una corrida que no borró nada. Es "ya pasó
+ * la hora de hoy y la última corrida es anterior a esa hora", así que en la
+ * primera vuelta después de levantar se pone al día.
+ */
+export function debeCorrerRetencion(args: { ultima: Date | null; ahora: Date; hora: number }): boolean {
+  const inicio = inicioDeLaVentana(args.ahora, args.hora);
+  if (args.ahora.getTime() < inicio.getTime()) return false;
+  return args.ultima === null || args.ultima.getTime() < inicio.getTime();
+}
+
+/** La corrida más reciente que quedó registrada, o `null` si no hay ninguna. */
+async function ultimaCorridaDelReporte(deps: RetentionJobDeps): Promise<Date | null> {
+  try {
+    let ultima: number | null = null;
+    for (const reporte of await deps.reportStore.readAll()) {
+      const t = new Date(reporte.corridaAt).getTime();
+      if (Number.isNaN(t)) continue;
+      if (ultima === null || t > ultima) ultima = t;
+    }
+    return ultima === null ? null : new Date(ultima);
+  } catch (error) {
+    // Sin reporte legible no se sabe cuándo fue la última: se decide con lo
+    // que recuerda el proceso. Lo peor que puede pasar es correr de más, que
+    // es preferible a no purgar nunca.
+    console.error("jobs/retention: no se pudo leer el reporte para saber cuándo fue la última corrida:", error);
+    return null;
+  }
+}
+
+export function createRetentionJob(deps: RetentionJobDeps & { horaDeCorrida: number }): ScheduledJob {
+  // La última corrida de ESTE proceso. No alcanza sola —un deploy la borra, y
+  // hubo dos el 19/09— pero cubre el caso en que el reporte no se pudo
+  // guardar: ese `append` falla en silencio a propósito (ver arriba), y sin
+  // esta marca la retención volvería a correr en cada vuelta el resto del día.
+  let ultimaEnMemoria: Date | null = null;
+
   return {
     name: "retencion_datos",
     async run(): Promise<void> {
+      const ahora = (deps.now ?? (() => new Date()))();
+      const inicio = inicioDeLaVentana(ahora, deps.horaDeCorrida);
+
+      // Si el propio proceso ya corrió dentro de la ventana de hoy, no hace
+      // falta ni leer el reporte: el resto del día no cuesta nada.
+      if (ultimaEnMemoria !== null && ultimaEnMemoria.getTime() >= inicio.getTime()) return;
+
+      const delReporte = await ultimaCorridaDelReporte(deps);
+      const ultima =
+        ultimaEnMemoria === null || (delReporte !== null && delReporte.getTime() > ultimaEnMemoria.getTime())
+          ? delReporte
+          : ultimaEnMemoria;
+      if (!debeCorrerRetencion({ ultima, ahora, hora: deps.horaDeCorrida })) return;
+
+      // Se marca ANTES de purgar: si la corrida tira a la mitad, no se
+      // reintenta en la vuelta siguiente. Una purga que falla se arregla
+      // mirando el error, no repitiéndola cada 5 minutos sobre los mismos
+      // archivos.
+      ultimaEnMemoria = ahora;
+
       const report = await ejecutarRetencion(deps);
       const modo = report.dryRun ? "SIMULACRO (no se borró nada)" : "BORRADO REAL";
       console.log(
