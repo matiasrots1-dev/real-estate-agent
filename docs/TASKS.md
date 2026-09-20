@@ -4068,6 +4068,50 @@ nada lo muestra.
    que se hizo con `espera` en el Bloque 38e: agregar uno obliga a mirar esta
    decision.
 
+**Como quedo**
+- [x] El catalogo gana un estilo de respuesta: **`style: silencio`**. Es la
+      unica forma de que el bot no haga nada, y lo usa un solo intent,
+      `conversacion_ajena_al_negocio`, con el umbral mas alto del catalogo
+      (0.85).
+- [x] El handler corta **antes** del escalamiento: no manda respuesta, no
+      llama al notificador y escribe la entrada de auditoria sin
+      `responseSent` ni `avisoAlBroker`.
+- [x] Pero **despues del umbral**: si el clasificador no esta seguro de que no
+      es del negocio, gana el camino normal y escala. Callarse con un cliente
+      de verdad es el error caro y no deja rastro, asi que solo se hace con
+      confianza.
+- [x] El schema prohibe que un intent de silencio tenga plantilla o escale
+      (`requires_broker` tiene que ser `false`, tampoco vale
+      `"conditional"`): las dos cosas terminarian mandandole texto justo a
+      quien se decidio no contestarle.
+- [x] `npm run pendientes` las lista **en su propia seccion** ("EL BOT SE
+      CALLO"), fuera de las conversaciones sin responder. Es la unica forma de
+      revisar a quien se callo, porque en esos casos no sale ningun aviso.
+- [x] 9 tests nuevos. Mutation testing, una por vez, las 6 mueren:
+      - S1. el silencio no se aplica: 2 tests en rojo
+      - S2. el silencio gana aunque la confianza sea baja: 2 en rojo
+      - S3. el silencio deja escrito que se respondio algo: 1 en rojo
+      - S4. el schema deja que un intent de silencio tenga plantilla: 1 en rojo
+      - S5. el schema deja que un intent de silencio escale: 2 en rojo
+      - S6. el umbral del intent de silencio baja: 1 en rojo
+- [ ] **Sin medir todavia**: los 6 ejemplos de `triggers` salieron de las
+      conversaciones reales anonimizadas, pero **no se midio cuantas de las 16
+      conversaciones mal clasificadas ahora caen bien**. Eso se hace con
+      `npm run medir:clasificador` (~90 llamadas a la API) y conviene correrlo
+      antes de apagar el modo silencioso, no ahora.
+- [ ] Queda abierto: el silencio se decide por mensaje, no por conversacion.
+      Una charla personal larga se va a evaluar mensaje a mensaje, y alcanza
+      con que uno caiga por debajo de 0.85 para que ese escale y salga la
+      frase de espera. El historial ayuda, pero no lo garantiza.
+
+**Pregunta que lo habria agarrado antes**: *¿que pasa si la respuesta correcta
+es no hacer nada?* El catalogo se diseno con la idea de que todo mensaje
+merece una respuesta, y por eso los dos unicos caminos —responder o escalar—
+producen texto para el cliente. La opcion "callarse" no existia como
+concepto, no es que estuviera mal implementada.
+
+
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase

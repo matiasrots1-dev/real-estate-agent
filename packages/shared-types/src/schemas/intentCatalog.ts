@@ -16,7 +16,14 @@ export const IntentPrioritySchema = z.enum([
 ]);
 export type IntentPriority = z.infer<typeof IntentPrioritySchema>;
 
-export const ResponseStyleSchema = z.enum(["template", "generative_grounded"]);
+/**
+ * `silencio` es la única forma que tiene el catálogo de **no hacer nada**: el
+ * bot no responde ni avisa al broker (docs/TASKS.md Bloque 42). Existe porque
+ * la línea del bot es la línea de trabajo real del broker y por ahí entran
+ * conversaciones que no son del negocio; sin esto, a un amigo le llega la
+ * frase de espera.
+ */
+export const ResponseStyleSchema = z.enum(["template", "generative_grounded", "silencio"]);
 export type ResponseStyle = z.infer<typeof ResponseStyleSchema>;
 
 // true | false | "conditional" (ver docs/escalation_policy.md)
@@ -166,6 +173,30 @@ export const IntentCatalogSchema = z
           path: [...ruta, "espera"],
           message: `"${intent.id}" está marcado como frase de espera pero no escala siempre (requires_broker: true)`,
         });
+      }
+
+      // `silencio` es la única forma de que el bot no conteste, así que no
+      // puede convivir con nada que produzca texto: una plantilla acá sería
+      // texto que nadie manda, y `requires_broker` haría que el escalamiento
+      // le mande al cliente la frase de espera — justo lo que este estilo
+      // evita (docs/TASKS.md Bloque 42).
+      if (intent.response.style === "silencio") {
+        if (plantilla !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...ruta, "template"],
+            message: `"${intent.id}" es de silencio: no puede tener plantilla, porque no se manda nada`,
+          });
+        }
+        if (intent.requires_broker !== false) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...ruta, "style"],
+            message:
+              `"${intent.id}" es de silencio, así que no puede escalar ` +
+              `(requires_broker tiene que ser false): escalar le manda la frase de espera al cliente`,
+          });
+        }
       }
 
       // Y al revés: un intent que escala siempre con una plantilla fija TIENE

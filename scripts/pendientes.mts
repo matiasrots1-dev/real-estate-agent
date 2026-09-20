@@ -193,7 +193,17 @@ function haceCuanto(iso: string): string {
   return `hace ${Math.floor(horas / 24)} días`;
 }
 
+/**
+ * El bot decidió que no era una conversación del negocio y se calló a
+ * propósito (docs/TASKS.md Bloque 42). No van mezcladas con las que quedaron
+ * sin responder —serían ruido— pero se listan aparte: es la única forma de
+ * revisar a quién se calló, porque en esos casos no sale ningún aviso.
+ */
+const SILENCIO = "conversacion_ajena_al_negocio";
+const silenciadas = [...porConversacion.values()].filter((c) => c.ultimo.matchedIntentId === SILENCIO);
+
 const lista = [...porConversacion.values()]
+  .filter((c) => c.ultimo.matchedIntentId !== SILENCIO)
   .filter((c) => todos || (!c.respondida && !respondioElBroker(c)))
   .sort((a, b) => {
     const p = prioridadDe(a.mejorIntent) - prioridadDe(b.mejorIntent);
@@ -247,4 +257,15 @@ for (const c of lista) {
 
 const urgentes = lista.filter((c) => prioridadDe(c.mejorIntent) === 0).length;
 if (urgentes > 0) console.log(`${urgentes} con intención concreta (agendar visita o negociar precio).`);
+
+if (silenciadas.length > 0) {
+  console.log("");
+  console.log(`EL BOT SE CALLÓ (no eran del negocio): ${silenciadas.length}`);
+  console.log("  Si alguna de estas SÍ era un cliente, avisá: el umbral se puede subir.");
+  console.log("");
+  for (const c of silenciadas) {
+    const texto = (c.ultimo.incomingMessage ?? "").replace(/s+/g, " ").slice(0, 70);
+    console.log(`  ${mostrarTel(c.id)}  —  "${texto}"  (${haceCuanto(c.ultimo.timestamp)})`);
+  }
+}
 console.log("");
