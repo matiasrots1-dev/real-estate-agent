@@ -3901,6 +3901,120 @@ entran sin validar?*
 
 
 
+## Bloque 41 — Un corte a mitad de una escritura no puede borrar un archivo
+Riesgo abierto de los Bloques 37 y 39, anotado en PENDIENTES: el corpus de
+estilo tiene el mismo problema de linea rota que tenian el audit log y el
+reporte de retencion, y los stores JSON enteros se escriben sin temporal y
+rename.
+
+**Lo que se midio antes de tocar nada (servidor, 20/09)**
+- Los **8 archivos de datos estan sanos**: los 5 JSON parsean, los 3 JSONL no
+  tienen ninguna linea rota y los tres terminan en salto de linea. Esto es
+  **prevencion, no reparacion** — como la guarda del scheduler del Bloque 40.
+- `estilo_broker.jsonl`: 112 ejemplos, 13 KB. **No se puede reconstruir**: el
+  texto crudo del broker nunca toca el disco, solo su forma anonimizada.
+
+**El caso concreto que lo hace urgente**
+`FileEstiloBrokerStore.all()` envuelve el parseo en un `catch { return [] }`:
+**una sola linea rota hace que el corpus entero parezca vacio**. Y
+`estilo:reanonimizar` hace exactamente `all()` -> transformar ->
+`reescribir()`. O sea: con una linea rota, correr la reanonimizacion
+**escribe un archivo vacio y borra los 112 ejemplos**, sin un error, sin un
+aviso y sin forma de recuperarlos. Es la misma familia del Bloque 37, con la
+diferencia de que aca el dato no se puede volver a generar.
+
+El otro lado es `writeJsonFile`, que usan 7 stores: `writeFile` trunca y
+despues escribe. Un corte entre las dos cosas —el `systemd stop` de un deploy,
+que hoy pasa varias veces por dia— deja un JSON truncado, y `readJsonFile`
+tira al parsearlo. Los archivos en juego incluyen `conversations.json` (el
+estado de cada conversacion), `last_interaction.json` (el reloj de los 24
+meses de retencion) y `ultimo_contacto.json` (lo que destraba el silencio del
+Bloque 31).
+
+**Pre-mortem**
+
+**1. La escritura atomica deja temporales tirados o pierde el archivo.**
+`rename` es atomico dentro del mismo filesystem, pero puede fallar: permisos,
+o el antivirus con el archivo abierto — **este repo ya lo sufrio**, esta en el
+test del reporte de retencion. Si el codigo borra el original antes de
+renombrar, o no limpia el temporal, el arreglo es peor que el problema.
+   *Mitigacion*: temporal con nombre unico (pid + uuid, igual que
+   `retentionReportStore`), `rename` al final y `rm` del temporal en el catch.
+   Tests de que un rename que falla deja el archivo anterior intacto y no deja
+   temporales.
+
+**2. La lectura tolerante esconde la perdida.** Saltear lineas rotas en
+silencio es exactamente el modo de fallo del Bloque 37: el corpus se degrada
+y nadie se entera, y el corpus es lo que hace que los borradores suenen al
+broker.
+   *Mitigacion*: `AvisoDeIlegibles`, el mismo del audit log y del reporte, que
+   avisa una vez con el numero de linea. Test de que avisa.
+
+**3. Conservar las lineas ilegibles al reanonimizar resucita texto sin
+anonimizar.** El Bloque 39 fijo la regla "las lineas rotas se conservan en su
+lugar", y aca esa regla choca con el proposito de `estilo:reanonimizar`, que
+existe justamente para garantizar que **todo** el archivo paso por el
+anonimizador. Una linea rota conservada es texto que no paso.
+   *Mitigacion*: las dos operaciones no son la misma y se tratan distinto. La
+   **reanonimizacion descarta** las lineas ilegibles y dice cuantas descarto
+   (su objetivo es esa garantia). La **purga** las conserva, fechadas por
+   posicion como en el Bloque 37, porque ahi el objetivo es no perder
+   ejemplos. Tests de las dos.
+
+**Como quedo**
+- [x] `writeJsonFile` escribe a un temporal y hace `rename`. Lo usan **8**
+      stores (appointments, conversations, global_pause, last_interaction,
+      recontacts, telefonos_canonicos, ultimo_contacto y el tope diario),
+      entre ellos `conversations.json`, `last_interaction.json` (el reloj de
+      los 24 meses) y `ultimo_contacto.json`. El temporal lleva pid y uuid
+      —puede haber otro proceso escribiendo el mismo store— y se borra en el
+      catch: si el rename falla, el archivo anterior queda entero.
+- [x] El corpus de estilo lee con `jsonl.ts`: **una linea rota ya no lo vacia**,
+      y `AvisoDeIlegibles` avisa una vez con el numero de linea.
+- [x] `guardar` usa `saltoQueFalta`: si el archivo quedo cortado a la mitad, el
+      ejemplo nuevo no se le pega.
+- [x] `reescribir` (la reanonimizacion) **descarta** las lineas ilegibles y
+      devuelve cuantas: son texto que no paso por el anonimizador, y el
+      proposito de esa operacion es garantizar que no quede ninguno. El script
+      lo imprime, asi que la perdida no es silenciosa.
+- [x] `purgeOlderThan` **conserva** las ilegibles, fechadas por posicion como
+      en el Bloque 37: la fecha de una rota es la del proximo ejemplo legible,
+      asi que vence con el en vez de quedarse para siempre.
+- [x] Las dos reescrituras del corpus tambien van por temporal + rename.
+- [x] 14 tests nuevos. Mutation testing, una por vez, las 10 mueren:
+      - R1. `writeJsonFile` escribe directo otra vez: 1 test en rojo
+      - R2. el temporal no se limpia si falla el rename: 1 en rojo
+      - R4. el corpus no avisa de las lineas ilegibles: 1 en rojo
+      - R5. reanonimizar conserva las ilegibles: 1 en rojo
+      - R6. la purga descarta las ilegibles: 1 en rojo
+      - R7. la purga no fecha por posicion: 1 en rojo
+      - R8. `guardar` vuelve a pegarse a la media linea: 1 en rojo
+      - R9. la reescritura del corpus vuelve a ser directa: 1 en rojo
+      - R10. una linea rota vuelve a vaciar el corpus: 3 en rojo
+      Una mutacion previa (R3) **no compilaba**, y el corredor la reporto como
+      muerta porque la suite fallo. Se reemplazo por R10, que prueba lo mismo
+      sin romper el build: **una mutacion que no compila cuenta como no
+      corrida, no como muerta**.
+- [ ] Sigue abierto (**hallazgo de la revision del PR #51**): `reescribir` lee
+      el corpus, calcula y despues escribe el archivo entero. Si llega un eco
+      de coexistencia entre la lectura y la escritura, ese ejemplo nuevo se
+      pierde. Ya era asi antes del bloque, pero conviene decirlo: la
+      reanonimizacion es manual y se corre en el servidor **con el bot
+      andando**. Mitigacion barata mientras tanto: correrla en un rato
+      tranquilo. La de verdad —una cola de escrituras como la del reporte de
+      retencion— queda anotada.
+- [ ] Sigue abierto: `readJsonFile` tira si el archivo existe y esta roto. Es
+      deliberado —un JSON a medias es algo para mirar, no para tapar
+      devolviendo el default y sobrescribirlo despues— pero significa que un
+      archivo corrupto deja ese store muerto hasta que alguien lo arregle a
+      mano. Con la escritura atomica, llegar a ese estado es mucho mas dificil.
+
+**Pregunta que lo habria agarrado antes**: *¿que pasa si esto se corta a la
+mitad?* Los dos bugs son el mismo con dos caras: un `writeFile` que trunca
+antes de escribir, y un `catch` que convierte "no pude leer" en "no hay
+nada". Ninguno de los dos falla jamas en el camino feliz.
+
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase

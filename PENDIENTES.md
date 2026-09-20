@@ -195,11 +195,11 @@ haga que el bot le escriba a clientes, y borrar datos.
 - [ ] **Riesgos abiertos del Bloque 35**: una guarda en el código contra dos
       schedulers (laptop y servidor), drenar la cola al apagar, y una copia de
       los datos fuera de AWS.
-- [ ] **Riesgos abiertos de los Bloques 37 y 39**: el corpus de estilo tiene el
-      mismo problema de línea rota que tenían el audit log y el reporte de
-      retención (y `estilo:reanonimizar` lo borraría entero); ya está el
-      módulo `jsonl.ts` para arreglarlo. Los stores JSON enteros se escriben
-      sin temporal y rename.
+- [x] *(Hecho el 20/09, Bloque 41.)* **Riesgos abiertos de los Bloques 37 y
+      39**: el corpus de estilo tenía el mismo problema de línea rota, y
+      `estilo:reanonimizar` lo habría borrado entero. Ahora lee con `jsonl.ts`
+      y las escrituras enteras —las suyas y las de los 7 stores JSON— van por
+      temporal + rename. Falta desplegarlo.
 
 ## Riesgos asumidos (no son trabajo pendiente)
 
