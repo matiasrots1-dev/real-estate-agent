@@ -33,6 +33,9 @@ import { createRequestListener } from "./app.js";
 import { Scheduler } from "./jobs/scheduler.js";
 import { createReminderJob } from "./jobs/reminders.js";
 import { createRecontactJob } from "./jobs/recontact.js";
+import { FileTopeDiarioStore } from "./jobs/topeDiarioStore.js";
+import { envioDeRecontactoPermitido, reunirNumerosInternos } from "./jobs/numerosInternosDelSistema.js";
+import { lineaDelBotSiHayCredenciales } from "./channels/whatsapp/lineaPropia.js";
 import { createSeguimientoPostVisitaJob } from "./jobs/seguimientoPostVisita.js";
 import { createRetentionJob } from "./jobs/retention.js";
 
@@ -258,6 +261,21 @@ async function main() {
     console.log(`orchestrator escuchando en :${config.port}`);
   });
 
+  // Los números a los que el recontacto NUNCA puede escribirle. Se arma acá,
+  // una vez, porque una de las fuentes es una llamada a Meta (docs/TASKS.md
+  // Bloque 27). Si falta alguna, **el envío real queda deshabilitado**: no
+  // escribirle a nadie hoy es recuperable; escribirle a la propia línea del
+  // bot —que está cargada en el CRM y pasa el criterio— no se deshace.
+  const { internos, faltantes } = await reunirNumerosInternos({
+    brokerWhatsappNumber: config.whatsapp.brokerWhatsappNumber,
+    lineaDelBot: lineaDelBotSiHayCredenciales(config.whatsapp.phoneNumberId, config.whatsapp.accessToken),
+  });
+  const permiso = envioDeRecontactoPermitido({
+    habilitadoPorConfig: config.recontacto.envioHabilitado,
+    faltantes,
+  });
+  if (permiso.motivo) console.warn(`Recontacto: ${permiso.motivo}.`);
+
   const scheduler = new Scheduler({ intervalMs: config.schedulerIntervalMs });
   // En modo silencioso los jobs de mensajería no se registran, en vez de
   // dejar que el sender les bloquee los envíos: si los dejáramos correr,
@@ -285,6 +303,10 @@ async function main() {
         recontactStateStore,
         auditLog,
         brokerNotifier,
+        ultimoContactoStore,
+        topeDiarioStore: new FileTopeDiarioStore(config.topeDiarioStorePath),
+        internos,
+        envioHabilitado: permiso.permitido,
       })
     );
     scheduler.register(

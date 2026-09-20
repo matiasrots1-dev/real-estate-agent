@@ -16,13 +16,34 @@ export interface TopeDiario {
   /** `YYYY-MM-DD` en hora local. */
   fecha: string;
   enviados: number;
+  /**
+   * Cuándo salió el último mensaje. Lo usa el intervalo mínimo entre corridas
+   * que envían: sin él, con el scheduler cada 5 minutos el tope diario se
+   * agota en veinte minutos y parece un bot (docs/TASKS.md Bloque 27).
+   */
+  ultimaCorridaAt?: string;
 }
 
 export interface TopeDiarioStore {
   /** Cuántos se enviaron en la fecha dada. Cero si es otro día. */
   enviadosEn(dia: Date): Promise<number>;
-  /** Suma al contador del día. */
+  /**
+   * Suma al contador del día y deja anotado cuándo fue. Las dos cosas van
+   * juntas a propósito: son el mismo hecho —salió un mensaje— y separarlas
+   * permitiría sumar sin anotar la hora, que es como el intervalo entre
+   * corridas deja de existir sin que nada falle.
+   */
   sumar(dia: Date, cuantos: number): Promise<void>;
+  /**
+   * Anota que la corrida hizo algo, sin sumar al contador. Lo usan los avisos
+   * al broker: no son mensajes a clientes —no van al tope diario— pero sí
+   * tienen que contar para el intervalo mínimo entre corridas. Sin esto, una
+   * tanda de avisos cada 5 minutos le vuelca cientos al broker en un día
+   * (revisión del PR #48).
+   */
+  registrarActividad(cuando: Date): Promise<void>;
+  /** Cuándo salió el último mensaje o aviso, si salió alguno. */
+  ultimaCorridaAt(): Promise<string | undefined>;
 }
 
 /** Día calendario local, no UTC: el tope es "por día" en la cabeza del broker. */
@@ -41,12 +62,27 @@ export class InMemoryTopeDiarioStore implements TopeDiarioStore {
   }
 
   async sumar(dia: Date, cuantos: number): Promise<void> {
-    const clave = claveDeDia(dia);
-    this.estado =
-      this.estado.fecha === clave
-        ? { fecha: clave, enviados: this.estado.enviados + cuantos }
-        : { fecha: clave, enviados: cuantos };
+    this.estado = sumado(this.estado, dia, cuantos);
   }
+
+  async registrarActividad(cuando: Date): Promise<void> {
+    this.estado = { ...this.estado, ultimaCorridaAt: cuando.toISOString() };
+  }
+
+  async ultimaCorridaAt(): Promise<string | undefined> {
+    return this.estado.ultimaCorridaAt;
+  }
+}
+
+/**
+ * El día cambia solo: si el registro es de ayer, el contador arranca de cero.
+ * `ultimaCorridaAt` **no** se reinicia con el día — el intervalo entre corridas
+ * cruza la medianoche como cualquier otro rato.
+ */
+function sumado(estado: TopeDiario, dia: Date, cuantos: number): TopeDiario {
+  const clave = claveDeDia(dia);
+  const enviados = estado.fecha === clave ? estado.enviados + cuantos : cuantos;
+  return { fecha: clave, enviados, ultimaCorridaAt: dia.toISOString() };
 }
 
 // TODO(fase 2+): migrar a Postgres junto con el resto de los stores.
@@ -59,10 +95,16 @@ export class FileTopeDiarioStore implements TopeDiarioStore {
   }
 
   async sumar(dia: Date, cuantos: number): Promise<void> {
-    const clave = claveDeDia(dia);
     const estado = await readJsonFile<TopeDiario>(this.filePath, { fecha: "", enviados: 0 });
-    const nuevo: TopeDiario =
-      estado.fecha === clave ? { fecha: clave, enviados: estado.enviados + cuantos } : { fecha: clave, enviados: cuantos };
-    await writeJsonFile(this.filePath, nuevo);
+    await writeJsonFile(this.filePath, sumado(estado, dia, cuantos));
+  }
+
+  async registrarActividad(cuando: Date): Promise<void> {
+    const estado = await readJsonFile<TopeDiario>(this.filePath, { fecha: "", enviados: 0 });
+    await writeJsonFile(this.filePath, { ...estado, ultimaCorridaAt: cuando.toISOString() });
+  }
+
+  async ultimaCorridaAt(): Promise<string | undefined> {
+    return (await readJsonFile<TopeDiario>(this.filePath, { fecha: "", enviados: 0 })).ultimaCorridaAt;
   }
 }

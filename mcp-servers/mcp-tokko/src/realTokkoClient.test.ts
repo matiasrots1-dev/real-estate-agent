@@ -229,6 +229,46 @@ describe("leads", () => {
     expect(r.map((l) => l.id)).toEqual(["1"]);
   });
 
+  // docs/TASKS.md Bloque 27. `paraRecontacto` es lo unico que hace que el job
+  // que envia vea la misma gente que el simulacro que el dueno del repo
+  // aprueba. El criterio mira campos del contacto CRUDO —el agente asignado,
+  // el `lead_status`, las etiquetas de barrio— que el Lead mapeado ya no
+  // tiene, asi que el filtro tiene que vivir aca.
+  describe("paraRecontacto", () => {
+    const deMatias = (over: Record<string, unknown> = {}) =>
+      contacto({
+        agent: { name: "Matias Rots" },
+        lead_status: { name: "Abierto" },
+        tags: [{ name: "Colegiales" }],
+        ...over,
+      });
+
+    it("sin el filtro devuelve a todos los contactables", async () => {
+      const c = cliente([], [deMatias({ id: 1 }), contacto({ id: 2, agent: { name: "Otro Agente" } })]);
+
+      const r = await c.searchLeads({});
+
+      expect(r.map((l) => l.id)).toEqual(["1", "2"]);
+    });
+
+    it("con el filtro deja solo a los que pasan el criterio", async () => {
+      const c = cliente([], [deMatias({ id: 1 }), contacto({ id: 2, agent: { name: "Otro Agente" } })]);
+
+      const r = await c.searchLeads({ paraRecontacto: true });
+
+      expect(r.map((l) => l.id)).toEqual(["1"]);
+    });
+
+    // 4145 de los 4683 contactos de la cuenta estan "Cerrado": es el filtro
+    // que mas gente saca, y escribirle a alguien cuyo tema ya termino es lo
+    // que mas riesgo tiene.
+    it("un lead cerrado no es candidato", async () => {
+      const c = cliente([], [deMatias({ id: 1, lead_status: { name: "Cerrado" } })]);
+
+      expect(await c.searchLeads({ paraRecontacto: true })).toEqual([]);
+    });
+  });
+
   it("normaliza el telefono a E.164 sin +", async () => {
     const c = cliente([], [contacto({ cellphone: "011 15 5555 1234" })]);
 

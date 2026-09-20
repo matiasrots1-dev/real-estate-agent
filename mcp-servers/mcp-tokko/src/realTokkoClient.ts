@@ -7,6 +7,7 @@ import type {
   TokkoClient,
 } from "./tokkoClient.js";
 import { mapearLead, mapearPropiedad } from "./tokkoMapper.js";
+import { esCandidatoARecontacto } from "./candidatosRecontacto.js";
 
 /**
  * Cliente real de Tokko Broker.
@@ -212,6 +213,10 @@ export class RealTokkoClient implements TokkoClient {
     const salida: Lead[] = [];
 
     for (const raw of crudos) {
+      // Antes de mapear: el criterio mira campos del contacto CRUDO (el agente
+      // asignado, el `lead_status`, las etiquetas de barrio) que el Lead
+      // mapeado no conserva.
+      if (filters.paraRecontacto && !esCandidatoARecontacto(raw)) continue;
       const mapeado = mapearLead(raw);
       if (!mapeado) continue;
       // Un lead sin teléfono usable no puede recibir un WhatsApp. Se excluye

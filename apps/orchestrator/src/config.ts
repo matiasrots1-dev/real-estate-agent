@@ -53,6 +53,17 @@ export interface OrchestratorConfig {
   appointmentStorePath: string;
   conversationStateStorePath: string;
   recontactStateStorePath: string;
+  /** Dónde vive el tope diario de recontactos, persistido (docs/TASKS.md Bloque 27). */
+  topeDiarioStorePath: string;
+  recontacto: {
+    /**
+     * Default `false` a propósito: el recontacto arranca en **simulacro**.
+     * Es el único job que le escribe a gente que no escribió primero, y un
+     * WhatsApp no se deshace. Hay que habilitarlo explícitamente después de
+     * revisar varias corridas de `npm run recontacto:simulacro`.
+     */
+    envioHabilitado: boolean;
+  };
   globalPauseStorePath: string;
   lastInteractionStorePath: string;
   retentionReportPath: string;
@@ -191,6 +202,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
     conversationStateStorePath:
       env.CONVERSATION_STATE_STORE_PATH ??
       path.join(REPO_ROOT, "apps/orchestrator/data/conversations.json"),
+    topeDiarioStorePath:
+      env.TOPE_DIARIO_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/tope_diario.json"),
+    recontacto: {
+      envioHabilitado: env.RECONTACTO_ENVIO_HABILITADO === "true",
+    },
     recontactStateStorePath:
       env.RECONTACT_STATE_STORE_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/recontacts.json"),
     globalPauseStorePath:
