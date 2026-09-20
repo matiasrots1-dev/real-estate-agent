@@ -103,5 +103,16 @@ if (!aplicar) {
   process.exit(0);
 }
 
-await store.reescribir(actualizados);
-console.log(`Listo: ${cambiados} ejemplos re-anonimizados.\n`);
+const { ilegiblesDescartadas } = await store.reescribir(actualizados);
+console.log(`Listo: ${cambiados} ejemplos re-anonimizados.`);
+// Una línea ilegible es texto que nunca pasó por el anonimizador: esta
+// operación existe justamente para garantizar que no quede ninguno, así que
+// se descartan. Se dice cuántas para que la pérdida no sea silenciosa
+// (docs/TASKS.md Bloque 41).
+if (ilegiblesDescartadas > 0) {
+  console.log(
+    `Se descartaron ${ilegiblesDescartadas} línea(s) ilegibles del corpus: ` +
+      `era texto que no había pasado por el anonimizador.`
+  );
+}
+console.log("");

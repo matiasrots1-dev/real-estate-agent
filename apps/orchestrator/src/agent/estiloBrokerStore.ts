@@ -1,6 +1,8 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PurgeResult } from "./purge.js";
+import { AvisoDeIlegibles, esObjeto, ilegiblesDe, leerArchivoJsonl, saltoQueFalta } from "./jsonl.js";
 
 /**
  * Corpus de cómo escribe el broker, para que los borradores suenen a él.
@@ -57,8 +59,11 @@ export interface EstiloBrokerStore {
    * texto se guarda ya anonimizado, un identificador que no se conocia al
    * escribir queda ahi para siempre; volver a pasar el anonimizador con la
    * lista de nombres actualizada es lo que lo limpia.
+   *
+   * Devuelve cuántas líneas ilegibles descartó: son texto que **no** pasó por
+   * el anonimizador, así que no pueden quedarse (docs/TASKS.md Bloque 41).
    */
-  reescribir(ejemplos: EjemploDeEstilo[]): Promise<void>;
+  reescribir(ejemplos: EjemploDeEstilo[]): Promise<{ ilegiblesDescartadas: number }>;
   purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult>;
 }
 
@@ -93,8 +98,9 @@ export class InMemoryEstiloBrokerStore implements EstiloBrokerStore {
     return [...this.datos];
   }
 
-  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<void> {
+  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<{ ilegiblesDescartadas: number }> {
     this.datos = [...ejemplos];
+    return { ilegiblesDescartadas: 0 };
   }
 
   async purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
@@ -107,45 +113,119 @@ export class InMemoryEstiloBrokerStore implements EstiloBrokerStore {
   }
 }
 
+const ETIQUETA = "estilo";
+
+/** Un ejemplo legible: los campos que cualquier lector del corpus recorre. */
+function esEjemplo(valor: unknown): valor is EjemploDeEstilo {
+  return (
+    esObjeto(valor) &&
+    typeof valor.intent === "string" &&
+    typeof valor.texto === "string" &&
+    typeof valor.cuando === "string" &&
+    !Number.isNaN(Date.parse(valor.cuando))
+  );
+}
+
 // TODO(fase 2+): migrar a Postgres junto con el resto de los stores.
 export class FileEstiloBrokerStore implements EstiloBrokerStore {
-  constructor(private readonly filePath: string) {}
+  private readonly aviso: AvisoDeIlegibles;
+
+  constructor(private readonly filePath: string) {
+    this.aviso = new AvisoDeIlegibles(ETIQUETA, filePath);
+  }
 
   async guardar(ejemplo: EjemploDeEstilo): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    await appendFile(this.filePath, JSON.stringify(ejemplo) + "\n", "utf-8");
+    // El salto que falta va en la misma escritura: si el archivo terminó en
+    // media línea, este ejemplo no se pega a ella (docs/TASKS.md Bloque 37).
+    const prefijo = await saltoQueFalta(this.filePath, ETIQUETA);
+    await appendFile(this.filePath, `${prefijo}${JSON.stringify(ejemplo)}\n`, "utf-8");
   }
 
   async ejemplosDe(intent: string, cuantos: number): Promise<EjemploDeEstilo[]> {
     return filtrarYOrdenar(await this.all(), intent, cuantos);
   }
 
+  /**
+   * **Una línea rota no vacía el corpus** (docs/TASKS.md Bloque 41). Antes el
+   * parseo estaba envuelto en un `catch { return [] }`: con una sola línea
+   * ilegible esto devolvía cero ejemplos, y `estilo:reanonimizar` —que hace
+   * `all()` y después `reescribir()`— escribía un archivo vacío. Son 112
+   * ejemplos que no se pueden reconstruir: el texto crudo nunca toca el disco.
+   */
   async all(): Promise<EjemploDeEstilo[]> {
-    try {
-      const crudo = await readFile(this.filePath, "utf-8");
-      return crudo
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as EjemploDeEstilo);
-    } catch {
-      return [];
-    }
+    const lineas = await leerArchivoJsonl(this.filePath, esEjemplo);
+    this.aviso.avisar(ilegiblesDe(lineas));
+    return lineas.flatMap((l) => (l.valor ? [l.valor] : []));
   }
 
-  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<void> {
-    const contenido = ejemplos.map((r) => JSON.stringify(r)).join("\n");
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, contenido + (ejemplos.length ? "\n" : ""), "utf-8");
+  /**
+   * Reescribe el corpus entero. Es lo que usa `estilo:reanonimizar`, y por eso
+   * **las líneas ilegibles se descartan** en vez de conservarse: el objetivo
+   * de esa operación es garantizar que todo el archivo pasó por el
+   * anonimizador, y una línea rota conservada es texto que no pasó. Va contra
+   * la regla del Bloque 39 ("las rotas se conservan en su lugar") a propósito
+   * y sólo acá; la purga, más abajo, sí las conserva.
+   *
+   * Devuelve cuántas descartó, para que quien reanonimiza lo sepa.
+   */
+  async reescribir(ejemplos: EjemploDeEstilo[]): Promise<{ ilegiblesDescartadas: number }> {
+    const lineas = await leerArchivoJsonl(this.filePath, esEjemplo);
+    const descartadas = ilegiblesDe(lineas).length;
+    await this.escribirTodo(ejemplos.map((r) => JSON.stringify(r)));
+    return { ilegiblesDescartadas: descartadas };
   }
 
+  /**
+   * Acá las ilegibles **sí** se conservan, fechadas por posición como en el
+   * Bloque 37: la fecha de una línea rota es la del próximo ejemplo legible.
+   * El objetivo de la purga es no perder ejemplos, no garantizar que pasaron
+   * por el anonimizador.
+   */
   async purgeOlderThan(cutoff: Date, dryRun: boolean): Promise<PurgeResult> {
-    const todos = await this.all();
-    const sobreviven = todos.filter((e) => new Date(e.cuando).getTime() >= cutoff.getTime());
-    const borrados = todos.length - sobreviven.length;
-    if (!dryRun && borrados > 0) {
-      const contenido = sobreviven.map((r) => JSON.stringify(r)).join("\n");
-      await writeFile(this.filePath, contenido + (sobreviven.length ? "\n" : ""), "utf-8");
+    const lineas = await leerArchivoJsonl(this.filePath, esEjemplo);
+    this.aviso.avisar(ilegiblesDe(lineas));
+    const corte = cutoff.getTime();
+
+    const fechas: Array<string | undefined> = new Array(lineas.length);
+    let siguiente: string | undefined;
+    for (let i = lineas.length - 1; i >= 0; i--) {
+      const valor = lineas[i].valor;
+      if (valor) siguiente = valor.cuando;
+      fechas[i] = siguiente;
     }
+
+    const sobreviven: string[] = [];
+    let borrados = 0;
+    lineas.forEach((linea, i) => {
+      const fecha = fechas[i];
+      if (fecha !== undefined && new Date(fecha).getTime() < corte) {
+        borrados += 1;
+        return;
+      }
+      sobreviven.push(linea.valor ? JSON.stringify(linea.valor) : linea.ilegible.texto);
+    });
+
+    if (!dryRun && borrados > 0) await this.escribirTodo(sobreviven);
+    // La muestra va vacía: un ejemplo del corpus ES el texto, y el reporte de
+    // purgado no puede convertirse en una copia de lo que se está borrando.
     return { borrados, muestra: [] };
+  }
+
+  /**
+   * A un temporal y después `rename`: un corte a mitad de la reescritura
+   * borraría el corpus entero, y no se puede reconstruir (Bloque 41).
+   */
+  private async escribirTodo(lineas: string[]): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    const contenido = lineas.length > 0 ? `${lineas.join("\n")}\n` : "";
+    const tmp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tmp, contenido, "utf-8");
+      await rename(tmp, this.filePath);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 }

@@ -3961,6 +3961,50 @@ anonimizador. Una linea rota conservada es texto que no paso.
    posicion como en el Bloque 37, porque ahi el objetivo es no perder
    ejemplos. Tests de las dos.
 
+**Como quedo**
+- [x] `writeJsonFile` escribe a un temporal y hace `rename`. Lo usan 7 stores,
+      entre ellos `conversations.json`, `last_interaction.json` (el reloj de
+      los 24 meses) y `ultimo_contacto.json`. El temporal lleva pid y uuid
+      —puede haber otro proceso escribiendo el mismo store— y se borra en el
+      catch: si el rename falla, el archivo anterior queda entero.
+- [x] El corpus de estilo lee con `jsonl.ts`: **una linea rota ya no lo vacia**,
+      y `AvisoDeIlegibles` avisa una vez con el numero de linea.
+- [x] `guardar` usa `saltoQueFalta`: si el archivo quedo cortado a la mitad, el
+      ejemplo nuevo no se le pega.
+- [x] `reescribir` (la reanonimizacion) **descarta** las lineas ilegibles y
+      devuelve cuantas: son texto que no paso por el anonimizador, y el
+      proposito de esa operacion es garantizar que no quede ninguno. El script
+      lo imprime, asi que la perdida no es silenciosa.
+- [x] `purgeOlderThan` **conserva** las ilegibles, fechadas por posicion como
+      en el Bloque 37: la fecha de una rota es la del proximo ejemplo legible,
+      asi que vence con el en vez de quedarse para siempre.
+- [x] Las dos reescrituras del corpus tambien van por temporal + rename.
+- [x] 14 tests nuevos. Mutation testing, una por vez, las 10 mueren:
+      - R1. `writeJsonFile` escribe directo otra vez: 1 test en rojo
+      - R2. el temporal no se limpia si falla el rename: 1 en rojo
+      - R4. el corpus no avisa de las lineas ilegibles: 1 en rojo
+      - R5. reanonimizar conserva las ilegibles: 1 en rojo
+      - R6. la purga descarta las ilegibles: 1 en rojo
+      - R7. la purga no fecha por posicion: 1 en rojo
+      - R8. `guardar` vuelve a pegarse a la media linea: 1 en rojo
+      - R9. la reescritura del corpus vuelve a ser directa: 1 en rojo
+      - R10. una linea rota vuelve a vaciar el corpus: 3 en rojo
+      Una mutacion previa (R3) **no compilaba**, y el corredor la reporto como
+      muerta porque la suite fallo. Se reemplazo por R10, que prueba lo mismo
+      sin romper el build: **una mutacion que no compila cuenta como no
+      corrida, no como muerta**.
+- [ ] Sigue abierto: `readJsonFile` tira si el archivo existe y esta roto. Es
+      deliberado —un JSON a medias es algo para mirar, no para tapar
+      devolviendo el default y sobrescribirlo despues— pero significa que un
+      archivo corrupto deja ese store muerto hasta que alguien lo arregle a
+      mano. Con la escritura atomica, llegar a ese estado es mucho mas dificil.
+
+**Pregunta que lo habria agarrado antes**: *¿que pasa si esto se corta a la
+mitad?* Los dos bugs son el mismo con dos caras: un `writeFile` que trunca
+antes de escribir, y un `catch` que convierte "no pude leer" en "no hay
+nada". Ninguno de los dos falla jamas en el camino feliz.
+
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase
