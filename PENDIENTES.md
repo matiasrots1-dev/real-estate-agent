@@ -12,8 +12,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 
 Lo último que se hizo, en orden: **Bloque 38 completo**, **Bloque 40**
 (retención diaria), **Bloque 27** (recontacto seguro), la **medición nueva
-del Bloque 28** y el **Bloque 41** (escrituras atómicas y corpus tolerante).
-Todo mergeado y **desplegado**. La suite está en 839 tests.
+del Bloque 28**, el **Bloque 41** (escrituras atómicas y corpus tolerante) y
+el **Bloque 42** (el bot se calla con lo que no es del negocio, decisión
+tuya del 20/09). Todo mergeado y **desplegado**. La suite está en 849 tests.
 
 **Lo que sigue, por orden de lo que bloquea apagar el modo silencioso:**
 
@@ -83,6 +84,12 @@ PR). No hace falta nada más: todo lo decidido está en esos tres lugares.
   enteras de archivos de datos van por temporal + rename, y una línea rota ya
   no vacía el corpus de estilo. Verificado después del deploy: los 5 JSON
   parsean y no quedó ningún temporal.
+- **Desplegado el 20/09 a las 19:37** (`b539c69`): Bloque 42. El bot ahora
+  puede **callarse**: si el clasificador reconoce que la conversación no es
+  del negocio (con confianza >= 0.85), no responde ni avisa. Con el modo
+  silencioso puesto no cambia nada visible, pero **empieza a generar el
+  dato**: cuántas veces dice "esto no es del negocio" y con quién. Se revisa
+  con `npm run pendientes`, sección "EL BOT SE CALLÓ".
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
