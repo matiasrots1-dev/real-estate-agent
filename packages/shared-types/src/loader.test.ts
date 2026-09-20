@@ -218,3 +218,76 @@ intents:
     expect(issues).toContain("no escala siempre");
   });
 });
+
+// docs/TASKS.md Bloque 42. `silencio` es la única forma que tiene el catálogo
+// de no hacer nada. Si conviviera con una plantilla o con un escalamiento, el
+// bot terminaría mandándole texto justamente a quien decidió no contestarle.
+describe("parseIntentCatalog — el estilo silencio", () => {
+  function conSilencio(extra: string): string {
+    return `
+version: 1
+meta:
+  default_confidence_threshold: 0.75
+  escalation_channel: broker_whatsapp
+  audit_log: true
+  language: es-AR
+  escalation_waiting_template_from: fallback_low_confidence
+intents:
+  - id: fallback_low_confidence
+    description: no se entendió
+    channel: any
+    priority: high
+    tools: []
+    requires_client_confirmation: false
+    requires_broker: true
+    confidence_threshold: null
+    response:
+      style: template
+      template: "Dejame confirmarlo con el asesor y te respondo enseguida."
+      espera: true
+  - id: conversacion_ajena_al_negocio
+    description: no es del negocio
+    channel: cliente
+    priority: low
+    tools: []
+    requires_client_confirmation: false
+    confidence_threshold: 0.85
+${extra}
+`;
+  }
+
+  function problemasDe(yaml: string): string[] {
+    try {
+      parseIntentCatalog(yaml);
+    } catch (error) {
+      if (error instanceof IntentCatalogValidationError) return error.issues;
+      throw error;
+    }
+    return [];
+  }
+
+  it("un intent de silencio que no escala y no tiene plantilla es válido", () => {
+    expect(problemasDe(conSilencio("    requires_broker: false\n    response:\n      style: silencio"))).toEqual([]);
+  });
+
+  it("falla si un intent de silencio tiene plantilla", () => {
+    const issues = problemasDe(
+      conSilencio('    requires_broker: false\n    response:\n      style: silencio\n      template: "hola"')
+    ).join("\n");
+    expect(issues).toContain("no puede tener plantilla");
+  });
+
+  // Escalar manda la frase de espera al cliente desde el Bloque 38c: sería
+  // exactamente lo que este estilo existe para evitar.
+  it("falla si un intent de silencio escala", () => {
+    const issues = problemasDe(conSilencio("    requires_broker: true\n    response:\n      style: silencio")).join("\n");
+    expect(issues).toContain("no puede escalar");
+  });
+
+  it("falla también con requires_broker conditional", () => {
+    const issues = problemasDe(
+      conSilencio('    requires_broker: "conditional"\n    response:\n      style: silencio')
+    ).join("\n");
+    expect(issues).toContain("no puede escalar");
+  });
+});

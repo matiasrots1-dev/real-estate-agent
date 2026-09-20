@@ -17,14 +17,20 @@ Todo mergeado y **desplegado**. La suite está en 839 tests.
 
 **Lo que sigue, por orden de lo que bloquea apagar el modo silencioso:**
 
-1. **Bloque 28 — el catálogo no resiste el tráfico real.** Es el único
-   bloqueante que queda sin tocar, y el 20/09 **se midió de nuevo y el
-   diagnóstico cambió**: el problema no es que falten intents, es que 16
-   conversaciones que vos etiquetaste "no es lead" SÍ matchean un intent y
-   recibirían respuesta del bot. **Espera dos decisiones tuyas** (qué hacer
-   con una conversación que no es del negocio, y si le pasamos al
-   clasificador lo que vos escribiste). El detalle está más abajo y en
-   docs/TASKS.md.
+1. **Bloque 28 — el catálogo no resiste el tráfico real.** El 20/09 se
+   midió de nuevo, el diagnóstico cambió, y **la primera de las dos
+   decisiones ya la tomaste**: cuando la conversación no es del negocio el
+   bot se calla del todo, y lo detecta el clasificador. Eso se implementó en
+   el **Bloque 42**.
+   **Falta la segunda decisión**: si le pasamos al clasificador lo que vos
+   escribiste. Hoy sólo ve los mensajes del cliente, y por eso un "Dale!" o
+   un "recordame el link" son inclasificables — eran 3 de los 5 leads que se
+   escaparon. El texto ya lo tenemos (el eco lo trae, se usa anonimizado para
+   el corpus de estilo); usarlo como contexto implica guardarlo tal cual, con
+   el mismo plazo de 12 meses que el resto.
+   **Y falta medir**: correr `npm run medir:clasificador` para ver cuántas de
+   las 16 conversaciones mal clasificadas mejoran con el intent nuevo. Son
+   ~90 llamadas a la API.
 2. **Tu calendario personal** para no ofrecer horarios encima de tus
    compromisos: hay que compartirlo con la cuenta del bot (lo hacés vos) y
    después sumar el calendario a la consulta de ocupado/libre (lo hago yo).

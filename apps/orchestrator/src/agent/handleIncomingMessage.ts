@@ -373,6 +373,19 @@ export async function handleIncomingMessage(
   const threshold = effectiveConfidenceThreshold(deps.catalog, intent);
   const decision = decideEscalation(intent, classification.confidence, threshold);
 
+  // Antes del escalamiento, a propósito: la conversación no es del negocio, y
+  // escalar le mandaría al cliente la frase de espera (docs/TASKS.md Bloque
+  // 42). Es el único camino del handler que no produce nada — ni respuesta ni
+  // aviso — porque ese mensaje el broker lo está viendo igual en su celular.
+  //
+  // Va DESPUÉS del umbral igual: si el clasificador no está seguro de que no
+  // es del negocio, gana el camino normal. Callarse con un cliente de verdad
+  // es el error caro y no deja rastro, así que sólo se hace con confianza.
+  if (intent.response.style === "silencio" && !decision.shouldEscalate) {
+    await appendAudit(deps, message, intent.id, classification.confidence, [], false);
+    return { responseText: null, intentId: intent.id, confidence: classification.confidence, escalatedToBroker: false };
+  }
+
   if (decision.shouldEscalate) {
     // La plantilla de espera, nunca la del caso exitoso con huecos (Bloque 38c).
     const responseText = respuestaDeEspera(deps.catalog, intent);

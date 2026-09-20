@@ -4015,6 +4015,128 @@ antes de escribir, y un `catch` que convierte "no pude leer" en "no hay
 nada". Ninguno de los dos falla jamas en el camino feliz.
 
 
+## Bloque 42 — El bot se calla con lo que no es del negocio
+Sale de la medicion del Bloque 28 (20/09). **Decision del dueno del repo, el
+mismo dia**: silencio total —ni respuesta ni aviso— y la deteccion la hace el
+clasificador con un intent explicito.
+
+**Por que**: la linea del bot es la linea de trabajo real del broker, y por
+ahi entra todo: amigos, la universidad, pagos, proveedores. Medido sobre las
+45 conversaciones etiquetadas a mano, con el modo silencioso apagado hoy
+pasaria esto:
+- a un amigo que escribe "Jajajaja" le llega *"Dejame confirmarlo con el
+  asesor y te respondo enseguida"*, porque cae en fallback y el fallback
+  escala (y escalar manda texto al cliente desde el Bloque 38c);
+- y en **16 conversaciones etiquetadas "no es lead"** el clasificador matcheo
+  un intent concreto, asi que la respuesta es peor todavia: es una respuesta
+  de verdad, del tipo "¿Querés que coordinemos una visita?".
+
+El problema de fondo no es que falten intents: **el catalogo no tiene forma de
+no hacer nada**. Todos los `response.style` producen texto, y el unico camino
+que no responde —el escalamiento— tambien le manda la frase de espera al
+cliente.
+
+**Por que no se avisa al broker**: porque ese mensaje lo esta viendo igual en
+su celular. La linea es suya y el canal es coexistencia. Un aviso del bot
+seria ruido sobre algo que ya vio. (Es la diferencia con un escalamiento
+normal, donde el aviso trae un borrador que le sirve para contestar.)
+
+**Pre-mortem**
+
+**1. El bot se calla con un cliente de verdad.** Un falso positivo silencia a
+alguien que queria comprar, y como no hay aviso, **nadie se entera**. Es el
+riesgo que la decision acepta a cambio de no contestarle a los amigos.
+   *Mitigacion*: umbral de confianza alto para este intent (0.85, el mas alto
+   del catalogo), y `npm run pendientes` los lista **en su propia seccion**,
+   para poder revisar a quien se callo el bot sin que se mezclen con las
+   conversaciones sin responder. El broker ademas ve el mensaje en su celular.
+
+**2. El silencio se cuela por otro camino y el amigo recibe la frase de
+espera.** Es el modo de fallo que haria inutil el bloque entero. Si por baja
+confianza, por la red de ultima linea del Bloque 38c o por un flujo de
+visitas este intent termina en `finalizeEscalation`, sale texto al cliente.
+   *Mitigacion*: el schema prohibe `requires_broker: true` y plantilla en un
+   intent de silencio, y hay test de que un match de este intent no manda nada
+   **por ningun camino** ni escribe `responseSent`.
+
+**3. Alguien marca como silencio un intent del negocio.** `silencio` es la
+unica forma de que el bot no conteste: si manana se usa para "no molestar" en
+un intent de clientes, esa gente queda sin respuesta y sin escalamiento, y
+nada lo muestra.
+   *Mitigacion*: el schema exige que un intent de silencio no tenga plantilla
+   ni escale, y un test del catalogo fija **cuales** intents lo usan, igual
+   que se hizo con `espera` en el Bloque 38e: agregar uno obliga a mirar esta
+   decision.
+
+**Como quedo**
+- [x] El catalogo gana un estilo de respuesta: **`style: silencio`**. Es la
+      unica forma de que el bot no haga nada, y lo usa un solo intent,
+      `conversacion_ajena_al_negocio`, con el umbral mas alto del catalogo
+      (0.85).
+- [x] El handler corta **antes** del escalamiento: no manda respuesta, no
+      llama al notificador y escribe la entrada de auditoria sin
+      `responseSent` ni `avisoAlBroker`.
+- [x] Pero **despues del umbral**: si el clasificador no esta seguro de que no
+      es del negocio, gana el camino normal y escala. Callarse con un cliente
+      de verdad es el error caro y no deja rastro, asi que solo se hace con
+      confianza.
+- [x] El schema prohibe que un intent de silencio tenga plantilla o escale
+      (`requires_broker` tiene que ser `false`, tampoco vale
+      `"conditional"`): las dos cosas terminarian mandandole texto justo a
+      quien se decidio no contestarle.
+- [x] `npm run pendientes` las lista **en su propia seccion** ("EL BOT SE
+      CALLO"), fuera de las conversaciones sin responder. Es la unica forma de
+      revisar a quien se callo, porque en esos casos no sale ningun aviso.
+- [x] 9 tests nuevos. Mutation testing, una por vez, las 6 mueren:
+      - S1. el silencio no se aplica: 2 tests en rojo
+      - S2. el silencio gana aunque la confianza sea baja: 2 en rojo
+      - S3. el silencio deja escrito que se respondio algo: 1 en rojo
+      - S4. el schema deja que un intent de silencio tenga plantilla: 1 en rojo
+      - S5. el schema deja que un intent de silencio escale: 2 en rojo
+      - S6. el umbral del intent de silencio baja: 1 en rojo
+- [ ] **Sin medir todavia**: los 6 ejemplos de `triggers` salieron de las
+      conversaciones reales anonimizadas, pero **no se midio cuantas de las 16
+      conversaciones mal clasificadas ahora caen bien**. Eso se hace con
+      `npm run medir:clasificador` (~90 llamadas a la API) y conviene correrlo
+      antes de apagar el modo silencioso, no ahora.
+- [ ] Queda abierto: el silencio se decide por mensaje, no por conversacion.
+      Una charla personal larga se va a evaluar mensaje a mensaje, y alcanza
+      con que uno caiga por debajo de 0.85 para que ese escale y salga la
+      frase de espera. El historial ayuda, pero no lo garantiza.
+
+**Revision del PR (#53)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **Un "jaja" al final borraba un lead de la lista de pendientes.** La
+   seccion nueva de `pendientes` sacaba de la lista toda conversacion cuyo
+   **ultimo** mensaje fuera silencio. Si el cliente pregunto el precio y
+   despues mando un "jaja", la pregunta sigue sin responder y la conversacion
+   desaparecia igual. Ahora sale de la lista solo si **nada** en esa
+   conversacion fue una consulta concreta (`mejorIntent` con prioridad >= 3),
+   que es el dato que `pendientes` ya venia llevando.
+2. **Un resto del Bloque 38f que se me habia pasado.** `scripts/pendientes.mts`
+   seguia mirando `origen === "manual"` para saber si el broker habia
+   contestado a mano. Es exactamente el campo que el Bloque 38f saco de
+   circulacion porque un contacto del sistema se lo pisa: el dia que el
+   recontacto le escriba a alguien que el broker ya habia contestado, esa
+   conversacion volvia a aparecer como pendiente. Ahora usa
+   `contactoDelBroker`.
+
+**Pregunta que lo habria agarrado antes** (la del hallazgo 2, y es la misma
+que ya me habia hecho en la revision del #43): *¿quien mas lee este campo?* La
+respuesta fue incompleta porque busque solo en `apps/orchestrator/src` y los
+scripts de `scripts/` tambien lo leen. El grep tiene que cubrir el repo, no
+el paquete.
+
+**Pregunta que lo habria agarrado antes**: *¿que pasa si la respuesta correcta
+es no hacer nada?* El catalogo se diseno con la idea de que todo mensaje
+merece una respuesta, y por eso los dos unicos caminos —responder o escalar—
+producen texto para el cliente. La opcion "callarse" no existia como
+concepto, no es que estuviera mal implementada.
+
+
+
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
       `ConversationStateStore`, todos con interfaz ya lista desde la Fase

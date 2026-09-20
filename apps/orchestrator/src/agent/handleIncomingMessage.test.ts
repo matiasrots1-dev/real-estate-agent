@@ -1097,3 +1097,72 @@ describe("handleIncomingMessage — broker_accion_directa (Bloque 10)", () => {
     expect(sentText).not.toHaveBeenCalled();
   });
 });
+
+// docs/TASKS.md Bloque 42. La línea del bot es la línea de trabajo real del
+// broker: por ahí entran amigos, la universidad, proveedores. Sin esto, un
+// "Jajajaja" cae en fallback, escala, y el amigo recibe "Dejame confirmarlo
+// con el asesor y te respondo enseguida".
+describe("handleIncomingMessage — el bot se calla con lo que no es del negocio (Bloque 42)", () => {
+  const AJENO = { intentId: "conversacion_ajena_al_negocio", confidence: 0.95 };
+
+  it("no responde, no escala y no avisa", async () => {
+    const notifier = recordingBrokerNotifier();
+    const deps = baseDeps({ classifier: stubClassifier(AJENO), brokerNotifier: notifier });
+
+    const r = await handleIncomingMessage(incoming("Jajajaja"), deps);
+
+    expect(r.responseText).toBeNull();
+    expect(r.escalatedToBroker).toBe(false);
+    expect(notifier.notifications).toHaveLength(0);
+  });
+
+  // Modo de fallo 2: si el silencio se cuela por el camino del escalamiento,
+  // el amigo recibe la frase de espera y el bloque no sirvió de nada.
+  it("el audit log no dice que se le mandó nada", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const deps = baseDeps({ classifier: stubClassifier(AJENO), auditLog });
+
+    await handleIncomingMessage(incoming("Jajajaja"), deps);
+
+    const [entrada] = await auditLog.readAll();
+    expect(entrada).toMatchObject({
+      matchedIntentId: "conversacion_ajena_al_negocio",
+      escalatedToBroker: false,
+    });
+    expect(entrada.responseSent).toBeUndefined();
+    expect(entrada.avisoAlBroker).toBeUndefined();
+  });
+
+  // Modo de fallo 1: callarse con un cliente de verdad no deja rastro. Por eso
+  // sólo se hace con confianza; si el clasificador duda, gana el camino normal.
+  it("con confianza por debajo del umbral NO se calla: escala como siempre", async () => {
+    const notifier = recordingBrokerNotifier();
+    const deps = baseDeps({
+      classifier: stubClassifier({ intentId: "conversacion_ajena_al_negocio", confidence: 0.4 }),
+      brokerNotifier: notifier,
+    });
+
+    const r = await handleIncomingMessage(incoming("mmm"), deps);
+
+    expect(r.escalatedToBroker).toBe(true);
+    expect(r.responseText).not.toBeNull();
+    expect(notifier.notifications).toHaveLength(1);
+  });
+
+  it("el umbral de este intent es el más alto del catálogo, y es a propósito", () => {
+    const intent = catalog.intents.find((i) => i.id === "conversacion_ajena_al_negocio");
+    const umbrales = catalog.intents
+      .map((i) => i.confidence_threshold)
+      .filter((u): u is number => typeof u === "number");
+
+    expect(intent?.confidence_threshold).toBe(Math.max(...umbrales));
+  });
+
+  // Modo de fallo 3: `silencio` es la única forma de que el bot no conteste.
+  // Este test fija cuáles intents lo usan, para que agregar otro obligue a
+  // mirar esta decisión (mismo criterio que `espera` en el Bloque 38e).
+  it("sólo un intent del catálogo es de silencio", () => {
+    const ids = catalog.intents.filter((i) => i.response.style === "silencio").map((i) => i.id);
+    expect(ids).toEqual(["conversacion_ajena_al_negocio"]);
+  });
+});
