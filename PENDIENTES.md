@@ -11,16 +11,20 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
 ## Dónde quedamos (20/09, 06:30)
 
 Lo último que se hizo, en orden: **Bloque 38 completo**, **Bloque 40**
-(retención diaria) y **Bloque 27** (recontacto seguro). Los tres están
-mergeados y **desplegados**. La suite está en 825 tests.
+(retención diaria), **Bloque 27** (recontacto seguro), la **medición nueva
+del Bloque 28** y el **Bloque 41** (escrituras atómicas y corpus tolerante).
+Todo mergeado y **desplegado**. La suite está en 839 tests.
 
 **Lo que sigue, por orden de lo que bloquea apagar el modo silencioso:**
 
 1. **Bloque 28 — el catálogo no resiste el tráfico real.** Es el único
-   bloqueante que queda sin tocar: 39% de las conversaciones caen en
-   `fallback_low_confidence` y hay que revisar el catálogo contra las 38
-   conversaciones reales. Necesita decisiones tuyas sobre qué responder en
-   cada caso, así que conviene empezarlo juntos.
+   bloqueante que queda sin tocar, y el 20/09 **se midió de nuevo y el
+   diagnóstico cambió**: el problema no es que falten intents, es que 16
+   conversaciones que vos etiquetaste "no es lead" SÍ matchean un intent y
+   recibirían respuesta del bot. **Espera dos decisiones tuyas** (qué hacer
+   con una conversación que no es del negocio, y si le pasamos al
+   clasificador lo que vos escribiste). El detalle está más abajo y en
+   docs/TASKS.md.
 2. **Tu calendario personal** para no ofrecer horarios encima de tus
    compromisos: hay que compartirlo con la cuenta del bot (lo hacés vos) y
    después sumar el calendario a la consulta de ocupado/libre (lo hago yo).
@@ -69,6 +73,10 @@ PR). No hace falta nada más: todo lo decidido está en esos tres lugares.
 - **Desplegado el 20/09 a las 06:23** (`c1cf821`): Bloque 27. El job de
   recontacto ahora corre la misma política que el simulacro. Verificado: sigue
   **sin registrarse** por el modo silencioso, que es lo esperado.
+- **Desplegado el 20/09 a las 15:18** (`f043b78`): Bloque 41. Las escrituras
+  enteras de archivos de datos van por temporal + rename, y una línea rota ya
+  no vacía el corpus de estilo. Verificado después del deploy: los 5 JSON
+  parsean y no quedó ningún temporal.
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
@@ -198,8 +206,8 @@ haga que el bot le escriba a clientes, y borrar datos.
 - [x] *(Hecho el 20/09, Bloque 41.)* **Riesgos abiertos de los Bloques 37 y
       39**: el corpus de estilo tenía el mismo problema de línea rota, y
       `estilo:reanonimizar` lo habría borrado entero. Ahora lee con `jsonl.ts`
-      y las escrituras enteras —las suyas y las de los 7 stores JSON— van por
-      temporal + rename. Falta desplegarlo.
+      y las escrituras enteras —las suyas y las de los 8 stores JSON— van por
+      temporal + rename. **Desplegado el 20/09 a las 15:18** (`f043b78`).
 
 ## Riesgos asumidos (no son trabajo pendiente)
 
