@@ -3613,6 +3613,45 @@ donde no debe y llevarse justo los reportes que importan.
 - [ ] Sigue abierto: la carrera entre la purga y un `append` (Bloque 37) no se
       cierra, se achica. Pasa de 288 ventanas por dia a 1.
 
+**Revision del PR (#46)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **La hora se validaba y los plazos no.** El bloque agrego `horaValida`
+   porque una hora rota deja a la retencion sin correr en silencio — y dejo
+   `Number(env.RETENTION_MESES_MENSAJES)` y `Number(env.RETENTION_DIAS_DE_REPORTES)`
+   como estaban, a un par de lineas de distancia. `Number("abc")` es `NaN`, y
+   un `NaN` en los meses **apaga la purga sin decir nada** (las comparaciones
+   contra una fecha invalida dan todas falso); uno en los dias hace que el
+   reporte no se recorte nunca. Es exactamente el mismo modo de fallo que
+   motivo la guarda, en el campo de al lado. Ahora los tres pasan por la misma
+   validacion, con aviso.
+   **Lo que lo agarro**: preguntarse *que otro valor del mismo bloque entra
+   sin validar por el mismo camino*, en vez de dar por cerrado el campo que
+   motivo la guarda.
+2. **Dos instancias del store del reporte.** El log del arranque construia una
+   segunda `FileRetentionReportStore` **sin** los dias configurados. Hoy no
+   hace dano (esa instancia solo lee), pero es una bomba para el que manana le
+   agregue un `append`: recortaria con 90 dias aunque el env diga otra cosa.
+   Una sola instancia, compartida.
+
+Mutation testing de la revision (2 mas):
+
+      - P12. un plazo invalido apaga la purga en silencio: 3 en rojo
+      - P13. el arranque no dice cuando fue la ultima corrida: **sobrevive**
+
+**P13 queda sin test, y hay que decirlo**: el log del arranque vive en
+`server.ts`, que no se puede ejercitar sin levantar el servidor entero (MCPs y
+puerto incluidos), y no hay hoy ningun test que lo haga. Asi que la mitigacion
+**testeada** del modo de fallo 1 es la condicion de puesta al dia (P1, P2) y
+el maximo entre las dos marcas (P3, P4, P5), no el log: el log ayuda al que
+mire el journal, pero nada garantiza que siga saliendo.
+
+**Pregunta que lo habria agarrado antes**: *cuando agrego una validacion
+porque un valor roto falla en silencio, ¿que otros valores del mismo camino
+entran sin validar?*
+
+
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

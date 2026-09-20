@@ -85,3 +85,37 @@ describe("loadConfigFromEnv — la hora de la retención", () => {
     expect(loadConfigFromEnv({ RETENTION_DIAS_DE_REPORTES: "30" }).retention.diasDeReportes).toBe(30);
   });
 });
+
+// Hallazgo de la revisión del PR #46: la hora se validaba y los plazos no.
+// `Number("abc")` es NaN, y un NaN en los meses apaga la purga sin decir nada
+// (las comparaciones contra una fecha inválida dan todas falso); uno en los
+// días hace que el reporte no se recorte nunca. El síntoma es el mismo que el
+// de no tener nada que borrar.
+describe("loadConfigFromEnv — los plazos de la retención", () => {
+  it("los defaults son los de la política publicada", () => {
+    const { retention } = loadConfigFromEnv({});
+    expect(retention.mesesMensajes).toBe(12);
+    expect(retention.mesesGestionComercial).toBe(24);
+  });
+
+  it("toma los plazos configurados", () => {
+    const { retention } = loadConfigFromEnv({
+      RETENTION_MESES_MENSAJES: "6",
+      RETENTION_MESES_GESTION_COMERCIAL: "18",
+    });
+    expect(retention.mesesMensajes).toBe(6);
+    expect(retention.mesesGestionComercial).toBe(18);
+  });
+
+  it.each(["abc", "0", "-3", ""])("un plazo inválido (%o) no apaga la purga en silencio", (valor) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { retention } = loadConfigFromEnv({
+      RETENTION_MESES_MENSAJES: valor,
+      RETENTION_DIAS_DE_REPORTES: valor,
+    });
+    expect(retention.mesesMensajes).toBe(12);
+    expect(retention.diasDeReportes).toBe(90);
+    if (valor !== "") expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

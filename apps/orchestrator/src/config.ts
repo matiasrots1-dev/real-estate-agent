@@ -129,6 +129,24 @@ function horaValida(valor: string | undefined): number | undefined {
   return n;
 }
 
+/**
+ * Un número positivo, o `undefined` si no lo es. Mismo criterio que
+ * `horaValida`, y por la misma razón: `Number("abc")` es `NaN`, y un `NaN` en
+ * cualquiera de estos plazos **apaga la purga sin decir nada** —las
+ * comparaciones contra una fecha inválida dan todas falso— o hace que el
+ * reporte no se recorte nunca. El síntoma es idéntico al de no tener nada que
+ * borrar (revisión del PR #46).
+ */
+function numeroPositivo(valor: string | undefined, nombre: string): number | undefined {
+  if (valor === undefined || valor.trim() === "") return undefined;
+  const n = Number(valor);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`${nombre}="${valor}" no es un número positivo: se usa el default.`);
+    return undefined;
+  }
+  return n;
+}
+
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OrchestratorConfig {
   return {
     port: env.PORT ? Number(env.PORT) : 3000,
@@ -189,16 +207,15 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Orchest
     retentionReportPath:
       env.RETENTION_REPORT_PATH ?? path.join(REPO_ROOT, "apps/orchestrator/data/retention_reports.jsonl"),
     retention: {
-      mesesMensajes: env.RETENTION_MESES_MENSAJES ? Number(env.RETENTION_MESES_MENSAJES) : 12,
-      mesesGestionComercial: env.RETENTION_MESES_GESTION_COMERCIAL
-        ? Number(env.RETENTION_MESES_GESTION_COMERCIAL)
-        : 24,
+      mesesMensajes: numeroPositivo(env.RETENTION_MESES_MENSAJES, "RETENTION_MESES_MENSAJES") ?? 12,
+      mesesGestionComercial:
+        numeroPositivo(env.RETENTION_MESES_GESTION_COMERCIAL, "RETENTION_MESES_GESTION_COMERCIAL") ?? 24,
       borradoHabilitado: env.RETENTION_BORRADO_HABILITADO === "true",
       // Hora local del servidor a la que corre la purga, una vez por día
       // (docs/TASKS.md Bloque 40). Un valor fuera de 0-23 se ignora: con la
       // hora rota, la retención no correría nunca y el síntoma sería silencio.
       hora: horaValida(env.RETENTION_HORA) ?? 4,
-      diasDeReportes: env.RETENTION_DIAS_DE_REPORTES ? Number(env.RETENTION_DIAS_DE_REPORTES) : 90,
+      diasDeReportes: numeroPositivo(env.RETENTION_DIAS_DE_REPORTES, "RETENTION_DIAS_DE_REPORTES") ?? 90,
     },
     // Invertido respecto de los demás flags a propósito: acá el valor seguro
     // es el `true`, así que cualquier cosa que no sea exactamente "false"
