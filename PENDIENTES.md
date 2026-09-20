@@ -145,9 +145,22 @@ haga que el bot le escriba a clientes, y borrar datos.
       *Medido el 20/09*: el servidor corre en hora local -03, así que la
       ventana de 9 a 20 son horas de Argentina. El riesgo del huso sigue vivo
       sólo si alguien cambia la zona horaria del servidor.
-- [ ] **Bloque 28**: catálogo. Está en 52% de precisión y 81% de recall. La
-      señal "el broker le escribió" no se pudo validar sobre el histórico. El
-      umbral queda quieto por decisión.
+- [ ] **Bloque 28**: catálogo. **Medido de nuevo el 20/09 y el diagnóstico
+      cambió** (detalle en docs/TASKS.md). Cruzando con tus 45 etiquetas: de
+      las 28 conversaciones que sólo cayeron en fallback, **23 no son leads**
+      —conversaciones personales, la universidad, pruebas—, así que para esas
+      fallback es la respuesta correcta. El problema real es el opuesto: **16
+      conversaciones que vos etiquetaste "no es lead" SÍ matchearon un intent
+      concreto**, contra 5 leads que no matchearon ninguno. Con el modo
+      silencioso apagado, esas 16 reciben respuesta del bot como si fueran
+      clientes.
+      El umbral de confianza **queda descartado con datos**: sólo 4 de 291
+      mensajes en fallback tienen confianza >= 0.5.
+      **Espera dos decisiones tuyas**: (1) qué tiene que hacer el bot con una
+      conversación que no es del negocio —hoy no tiene forma de callarse, todo
+      intent responde o escala—, y (2) si le pasamos al clasificador lo que
+      vos escribiste (hoy sólo ve los mensajes del cliente, y por eso un
+      "Dale!" o un "recordame el link" son inclasificables).
 
 ## Bloquea publicar la política de privacidad
 
