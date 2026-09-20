@@ -8,6 +8,7 @@ import type { ConversationStateStore } from "./conversationStateStore.js";
 import { idleState } from "./conversationStateStore.js";
 import type { BrokerAccionDirectaPlanner, PlannedAction } from "./brokerAccionDirectaPlan.js";
 import type { ConfirmationClassifier } from "./confirmationClassifier.js";
+import type { UltimoContactoStore } from "./ultimoContactoStore.js";
 import { executeActionPlan, summarizeExecution, toolsCalledForPlan } from "./brokerAccionDirectaExecutor.js";
 
 export interface BrokerAccionDirectaDeps {
@@ -20,6 +21,12 @@ export interface BrokerAccionDirectaDeps {
   conversationStateStore: ConversationStateStore;
   /** Sin sender configurado, las acciones de whatsapp del plan fallan (best-effort). */
   sender?: WhatsAppSender;
+  /**
+   * Para registrar que el broker contactó a ese lead cuando la orden manda un
+   * mensaje: es el broker contestando, aunque apriete el botón el bot
+   * (docs/TASKS.md Bloque 38f).
+   */
+  ultimoContactoStore?: UltimoContactoStore;
   /**
    * Con el modo silencioso prendido, los mensajes a clientes del plan no van
    * a salir (los bloquea `SilentModeSender`), pero las acciones de calendario
@@ -95,6 +102,7 @@ export async function runBrokerAccionDirecta(
     tokko: deps.tokko,
     appointmentStore: deps.appointmentStore,
     sender: deps.sender,
+    ultimoContactoStore: deps.ultimoContactoStore,
   });
   return { responseText: summarizeExecution(results), toolsCalled: toolsCalledForPlan(plan.actions) };
 }
@@ -143,6 +151,7 @@ export async function continueBrokerAccionDirecta(
     tokko: deps.tokko,
     appointmentStore: deps.appointmentStore,
     sender: deps.sender,
+    ultimoContactoStore: deps.ultimoContactoStore,
   });
   return { responseText: summarizeExecution(results), toolsCalled: toolsCalledForPlan(context.actions) };
 }

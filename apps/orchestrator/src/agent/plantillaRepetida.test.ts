@@ -284,6 +284,39 @@ describe("decidirPlantilla", () => {
       expect(decision.suprimir).toBe(true);
     });
 
+    // docs/TASKS.md Bloque 38f: antes, el primer contacto del sistema le
+    // pisaba el `origen` al del broker y la señal desaparecía. Esa persona
+    // quedaba sin respuesta hasta el techo de los 7 días.
+    it("un contacto del sistema posterior no borra que el broker respondió", () => {
+      const decision = decidirPlantilla({
+        ...base,
+        texto: ESPERA,
+        historial,
+        ultimoContacto: {
+          leadId: "x",
+          contactadoAt: haceHoras(1),
+          origen: "sistema",
+          manualAt: haceHoras(3),
+        },
+      });
+      expect(decision.suprimir).toBe(false);
+    });
+
+    it("y la marca del broker, si es anterior a la plantilla, tampoco cuenta", () => {
+      const decision = decidirPlantilla({
+        ...base,
+        texto: ESPERA,
+        historial,
+        ultimoContacto: {
+          leadId: "x",
+          contactadoAt: haceHoras(1),
+          origen: "sistema",
+          manualAt: haceHoras(9),
+        },
+      });
+      expect(decision.suprimir).toBe(true);
+    });
+
     it("un contacto del broker ANTERIOR a la plantilla no cuenta", () => {
       const decision = decidirPlantilla({
         ...base,
@@ -368,6 +401,22 @@ describe("cableado en handleIncomingMessage", () => {
     await handleIncomingMessage(mensaje("???"), d);
     // El eco de coexistencia registrando que el broker escribió a mano.
     await ultimoContactoStore.registrar("5491133339999", new Date(Date.now() + 60_000), "manual");
+
+    const despues = await handleIncomingMessage(mensaje("y entonces?"), d);
+    expect(despues.responseText).not.toBeNull();
+  });
+
+  // docs/TASKS.md Bloque 38f, de punta a punta: el broker contesta y después
+  // el recontacto le escribe al mismo lead. Antes, ese segundo contacto
+  // borraba el primero y el agente se quedaba callado hasta los 7 días.
+  it("después de que el broker responde, un contacto del sistema no vuelve a callar al agente", async () => {
+    const auditLog = new InMemoryAuditLogStore();
+    const ultimoContactoStore = new InMemoryUltimoContactoStore();
+    const d = deps(FALLBACK, { auditLog, ultimoContactoStore });
+
+    await handleIncomingMessage(mensaje("???"), d);
+    await ultimoContactoStore.registrar(CLIENTE, new Date(Date.now() + 60_000), "manual");
+    await ultimoContactoStore.registrar(CLIENTE, new Date(Date.now() + 120_000), "sistema");
 
     const despues = await handleIncomingMessage(mensaje("y entonces?"), d);
     expect(despues.responseText).not.toBeNull();

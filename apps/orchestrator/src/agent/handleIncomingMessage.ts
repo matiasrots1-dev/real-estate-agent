@@ -502,6 +502,7 @@ function brokerAccionDirectaDeps(deps: HandleMessageDeps): BrokerAccionDirectaDe
     conversationStateStore: deps.conversationStateStore,
     sender: deps.sender,
     modoSilencioso: deps.modoSilencioso,
+    ultimoContactoStore: deps.ultimoContactoStore,
   };
 }
 

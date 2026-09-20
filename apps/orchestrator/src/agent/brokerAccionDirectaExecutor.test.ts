@@ -6,6 +6,11 @@ import { InMemoryAppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
 import { executeActionPlan, summarizeExecution, toolsCalledForPlan } from "./brokerAccionDirectaExecutor.js";
 import { SilentModeSender } from "../channels/whatsapp/silentModeSender.js";
+import {
+  contactoDelBroker,
+  InMemoryUltimoContactoStore,
+  type UltimoContactoStore,
+} from "./ultimoContactoStore.js";
 
 function stubGcal(): GcalQueries {
   return {
@@ -156,6 +161,95 @@ describe("executeActionPlan", () => {
 // devolviendo un resultado en vez de tirar; el resumen decía "✓ Mensaje
 // enviado" igual. Con el SilentModeSender real, no con un stub: el problema
 // es la combinación de los dos.
+// docs/TASKS.md Bloque 38f. Una orden del broker que manda un mensaje es el
+// broker contestando, aunque apriete el botón el bot: si no queda registrado,
+// el agente sigue callado con esa persona hasta el techo de los 7 días
+// (Bloque 31) y el recontacto le escribe mañana a alguien que acaba de
+// recibir su respuesta.
+describe("executeActionPlan — el envío del broker queda registrado", () => {
+  const MENSAJE: PlannedAction = { type: "whatsapp_send_message", leadId: "lead-1", message: "Hola!" };
+
+  function base(ultimoContactoStore?: UltimoContactoStore) {
+    return {
+      gcal: stubGcal(),
+      appointmentStore: new InMemoryAppointmentStore(),
+      tokko: tokkoConLead(),
+      sender: stubSender(),
+      ultimoContactoStore,
+    };
+  }
+
+  it("un mensaje del plan cuenta como contacto del broker", async () => {
+    const store = new InMemoryUltimoContactoStore();
+
+    await executeActionPlan([MENSAJE], base(store));
+
+    expect(contactoDelBroker(await store.get("5491100000001"))).not.toBeNull();
+  });
+
+  it("una plantilla del plan, también", async () => {
+    const store = new InMemoryUltimoContactoStore();
+    const action: PlannedAction = {
+      type: "whatsapp_send_template",
+      leadId: "lead-1",
+      templateName: "baja_precio",
+      languageCode: "es_AR",
+      bodyParams: [],
+    };
+
+    await executeActionPlan([action], base(store));
+
+    expect(contactoDelBroker(await store.get("5491100000001"))).not.toBeNull();
+  });
+
+  // El teléfono que trae Tokko no tiene por qué venir en el formato en que
+  // Meta entrega los mensajes entrantes, y la supresión busca por ese. Cuando
+  // Meta dice cuál es el `wa_id`, se registra ese.
+  it("se registra con el wa_id que devuelve Meta, no con el de Tokko", async () => {
+    const store = new InMemoryUltimoContactoStore();
+    const deps = base(store);
+    deps.sender.sendText = vi.fn(async () => ({
+      raw: { messaging_product: "whatsapp" },
+      waId: "5491100000002",
+    }));
+
+    await executeActionPlan([MENSAJE], deps);
+
+    expect(await store.get("5491100000002")).not.toBeNull();
+    expect(await store.get("5491100000001")).toBeNull();
+  });
+
+  // Modo de fallo 3 del pre-mortem: el mensaje YA salió. Si el registro
+  // convierte la acción en un fallo, el broker lo manda de nuevo y el cliente
+  // lo recibe dos veces.
+  it("si el registro falla, la acción sigue siendo un éxito", async () => {
+    const store = new InMemoryUltimoContactoStore();
+    store.registrar = vi.fn(async () => {
+      throw new Error("disco lleno");
+    });
+
+    const results = await executeActionPlan([MENSAJE], base(store));
+
+    expect(results[0]).toMatchObject({ ok: true });
+  });
+
+  it("sin store configurado, la acción se ejecuta igual", async () => {
+    const results = await executeActionPlan([MENSAJE], base(undefined));
+    expect(results[0]).toMatchObject({ ok: true });
+  });
+
+  // Lo que no salió no es el broker contestando.
+  it("un envío que el modo silencioso bloqueó no cuenta como contacto", async () => {
+    const store = new InMemoryUltimoContactoStore();
+    const deps = base(store);
+    deps.sender = new SilentModeSender(stubSender(), "5491199999999", () => {});
+
+    await executeActionPlan([MENSAJE], deps);
+
+    expect(await store.get("5491100000001")).toBeNull();
+  });
+});
+
 describe("executeActionPlan — en modo silencioso", () => {
   const BROKER = "5491199999999";
 

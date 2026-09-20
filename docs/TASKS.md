@@ -3139,6 +3139,47 @@ dentro del executor y tira (disco lleno, JSON corrupto), la accion falla
    propio catch y no cambia el resultado de la accion. Test de que una accion
    con el store roto sigue dando `ok`.
 
+**Como quedo**
+- [x] `UltimoContacto` gana `manualAt`: **cuando contacto el broker**, aparte
+      de `contactadoAt`, que sigue siendo el ultimo contacto venga de donde
+      venga (es lo que mira el recontacto). Antes los dos compartian `origen`,
+      y por eso el primer contacto del sistema borraba la senal.
+- [x] El store es monotono **por campo**: ni la fecha del ultimo contacto ni
+      la del contacto del broker retroceden, y un contacto del sistema ya no
+      pisa al del broker. Un eco del broker que llega tarde, despues de uno
+      del sistema, igual deja su marca.
+- [x] Los 32 registros que ya existen se leen bien sin migrar nada: sin
+      `manualAt` y con `origen: "manual"`, la fecha del registro **es** la del
+      contacto del broker (`contactoDelBroker`).
+- [x] Una orden del broker que manda un mensaje (`broker_accion_directa`)
+      cuenta como contacto suyo: es el broker contestando, aunque apriete el
+      boton el bot. Con eso destraba el silencio del Bloque 31 y el recontacto
+      no le escribe manana a alguien que acaba de recibir su respuesta.
+- [x] Se registra con el `wa_id` que devuelve Meta cuando lo devuelve: el
+      telefono que trae Tokko no tiene por que venir en el formato en que
+      llegan los mensajes entrantes, que es por el que busca la supresion.
+- [x] El registro es best-effort y va **despues** del envio: si falla, la
+      accion sigue siendo un exito (el mensaje ya salio), y un envio que el
+      modo silencioso bloqueo no cuenta como contacto.
+- [x] 14 tests nuevos. Mutation testing, una por vez, las 9 mueren:
+      - N1. un contacto manual no deja marca del broker: 1 test en rojo
+      - N2. el contacto del sistema vuelve a pisar el del broker: 4 en rojo
+      - N3. los registros anteriores al bloque dejan de contar: 2 en rojo
+      - N4. la marca del broker retrocede con un eco viejo: 1 en rojo
+      - N5. la supresion deja de mirar la marca del broker: 4 en rojo
+      - N6. el executor no registra el envio del broker: 3 en rojo
+      - N7. un registro que falla rompe la orden del broker: 1 en rojo
+      - N8. se registra el telefono de Tokko y no el wa_id: 1 en rojo
+      - N9. un envio bloqueado cuenta como contacto: 1 en rojo
+- [ ] Sigue abierto: **la medicion de que el eco no devuelve los envios
+      propios es debil** (ver arriba). Si resultara falsa, cada respuesta del
+      bot destrabaria su propio silencio. Se re-verifica cuando el bot
+      responda de verdad, con el modo silencioso apagado.
+- [ ] Sigue abierto: el eco es best-effort (Meta no lo reintenta). Si se
+      pierde el eco de la respuesta del broker, esa conversacion queda callada
+      hasta el techo de los 7 dias. La orden via `broker_accion_directa` ya no
+      depende del eco; la respuesta desde su celular, si.
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -3271,7 +3312,9 @@ arreglaron 8 (arriba). Quedan anotados:
       dice que salio algo que no salio ni gasta el cupo.)* `responseSent` se
       registra antes de enviar: si el envio falla, igual se
       gasta el unico envio de plantilla permitido (Bloque 31).
-- [ ] La deteccion de "el broker respondio" no ve los envios de
+- [x] *(Resuelto en 38f: el contacto del broker va en su propio campo y una
+      orden suya que manda un mensaje cuenta como contacto suyo.)*
+      La deteccion de "el broker respondio" no ve los envios de
       `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
       `manual`.
 - [x] *(Resuelto en 38e: la supresion va en su propio campo.)*
@@ -3281,9 +3324,11 @@ arreglaron 8 (arriba). Quedan anotados:
       despedida no lo es.)* `rechazo_desinteres` no dice "te paso con el
       asesor", y sin embargo comparte el cupo con las otras seis plantillas
       fijas.
-- [ ] Posible diferencia de formato de telefono entre el `from` entrante y el
-      `to` del eco de coexistencia. Verificarlo con datos reales antes de
-      darlo por bueno.
+- [x] *(Medido en 38f y **descartado**: los 32 leads del eco vienen en el
+      mismo formato que los `conversationId` del audit log, 31 de 32 cruzan
+      exacto y canonizar los dos lados no cambia ni un cruce. No se toco
+      nada.)* Posible diferencia de formato de telefono entre el `from`
+      entrante y el `to` del eco de coexistencia.
 - [ ] Fallar cerrado ante un error de lectura **persistente** suprime la
       plantilla para todos, indefinidamente (Bloque 31).
 

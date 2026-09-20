@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extraerContactosSalientes } from "../channels/whatsapp/ecoContacto.js";
-import { InMemoryUltimoContactoStore } from "./ultimoContactoStore.js";
+import { contactoDelBroker, InMemoryUltimoContactoStore } from "./ultimoContactoStore.js";
 
 function eco(echoes: unknown[]) {
   return {
@@ -100,6 +100,63 @@ describe("registro de último contacto", () => {
     await store.registrar("lead-1", new Date("2026-08-01"), "manual");
 
     expect((await store.get("lead-1"))?.origen).toBe("manual");
+  });
+
+  // docs/TASKS.md Bloque 38f. Que el broker haya contestado es lo único que
+  // le devuelve la palabra al agente cuando se calló por el Bloque 31. Antes
+  // esa señal vivía en `origen`, y el primer contacto del sistema la borraba:
+  // el día que se cablee el recontacto del Bloque 27, esa persona se quedaba
+  // sin respuesta hasta el techo de los 7 días.
+  describe("el contacto del broker no se pierde", () => {
+    it("un contacto del sistema posterior no borra el del broker", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+      await store.registrar("lead-1", new Date("2026-08-05"), "sistema");
+
+      const registro = await store.get("lead-1");
+      // El último contacto avanza —es lo que mira el recontacto—, pero la
+      // fecha en que contestó el broker queda.
+      expect(registro?.contactadoAt).toBe(new Date("2026-08-05").toISOString());
+      expect(registro?.origen).toBe("sistema");
+      expect(contactoDelBroker(registro)).toBe(new Date("2026-08-01").getTime());
+    });
+
+    it("un registro anterior al bloque, sin `manualAt`, cuenta por su origen", async () => {
+      const viejo = {
+        leadId: "lead-1",
+        contactadoAt: "2026-08-01T00:00:00.000Z",
+        origen: "manual" as const,
+      };
+      expect(contactoDelBroker(viejo)).toBe(new Date("2026-08-01").getTime());
+      expect(contactoDelBroker({ ...viejo, origen: "sistema" })).toBeNull();
+    });
+
+    it("un eco del broker que llega tarde igual deja la marca", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-05"), "sistema");
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+
+      const registro = await store.get("lead-1");
+      expect(registro?.contactadoAt).toBe(new Date("2026-08-05").toISOString());
+      expect(contactoDelBroker(registro)).toBe(new Date("2026-08-01").getTime());
+    });
+
+    it("la marca del broker tampoco retrocede", async () => {
+      const store = new InMemoryUltimoContactoStore();
+
+      await store.registrar("lead-1", new Date("2026-08-05"), "manual");
+      await store.registrar("lead-1", new Date("2026-08-01"), "manual");
+
+      expect(contactoDelBroker(await store.get("lead-1"))).toBe(new Date("2026-08-05").getTime());
+    });
+
+    it("un lead que sólo contactó el sistema no tiene marca del broker", async () => {
+      const store = new InMemoryUltimoContactoStore();
+      await store.registrar("lead-1", new Date("2026-08-01"), "sistema");
+      expect(contactoDelBroker(await store.get("lead-1"))).toBeNull();
+    });
   });
 
   describe("queda dentro de la política de retención", () => {

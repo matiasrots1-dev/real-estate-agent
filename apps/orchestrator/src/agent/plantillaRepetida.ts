@@ -1,5 +1,5 @@
 import type { AuditLogEntry, IntentCatalog } from "shared-types";
-import type { UltimoContacto } from "./ultimoContactoStore.js";
+import { contactoDelBroker, type UltimoContacto } from "./ultimoContactoStore.js";
 
 /**
  * La plantilla fija se manda **una vez por conversación**; después el agente
@@ -101,15 +101,14 @@ export function decidirPlantilla(args: {
   // El broker contestó después de la plantilla: a estos efectos la
   // conversación arranca de nuevo y la plantilla puede volver a salir.
   //
-  // `origen === "manual"` no es un detalle: el store guarda también los
-  // contactos del sistema, y el job de recontacto del Bloque 27 va a escribir
-  // `"sistema"` cuando se cablee. Mirando sólo la fecha, el recontacto
-  // automático del propio agente contaría como "el broker respondió" y la
-  // repetición volvería sin que nadie toque este archivo.
-  if (ultimoContacto && ultimoContacto.origen === "manual") {
-    const contactoAt = new Date(ultimoContacto.contactadoAt).getTime();
-    if (!Number.isNaN(contactoAt) && contactoAt > ultimaEnviada) return NO_SUPRIMIR;
-  }
+  // Se mira la fecha del contacto **del broker**, no la del último contacto:
+  // el store guarda también los del sistema, y el job de recontacto del
+  // Bloque 27 va a escribir `"sistema"` cuando se cablee. Mirando sólo la
+  // fecha, el recontacto automático del propio agente contaría como "el
+  // broker respondió" y la repetición volvería sin que nadie toque este
+  // archivo (docs/TASKS.md Bloques 31 y 38f).
+  const contactoManual = contactoDelBroker(ultimoContacto);
+  if (contactoManual !== null && contactoManual > ultimaEnviada) return NO_SUPRIMIR;
 
   const dias = (ahora.getTime() - ultimaEnviada) / (24 * 3600 * 1000);
   if (dias >= DIAS_TECHO_SILENCIO) return NO_SUPRIMIR;

@@ -5,6 +5,7 @@ import type { TokkoQueries } from "../mcp/tokkoMcpClient.js";
 import type { WhatsAppSendResult, WhatsAppSender } from "../channels/whatsapp/sender.js";
 import type { AppointmentStore } from "./appointmentStore.js";
 import type { PlannedAction } from "./brokerAccionDirectaPlan.js";
+import type { UltimoContactoStore } from "./ultimoContactoStore.js";
 
 export interface BrokerAccionDirectaExecutorDeps {
   gcal: GcalQueries;
@@ -17,6 +18,11 @@ export interface BrokerAccionDirectaExecutorDeps {
   tokko: TokkoQueries;
   /** Sin sender configurado, las acciones de whatsapp fallan (best-effort, no rompe las demás). */
   sender?: WhatsAppSender;
+  /**
+   * Para registrar que el broker contactó a ese lead (docs/TASKS.md Bloque
+   * 38f). Opcional: sin store, la acción se ejecuta igual.
+   */
+  ultimoContactoStore?: UltimoContactoStore;
 }
 
 export interface ExecutedAction {
@@ -111,24 +117,22 @@ async function executeOne(
     case "whatsapp_send_message": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
       const lead = await resolverLead(action.leadId, deps);
-      exigirQueSalio(
-        await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead)),
-        lead.telefonoWhatsapp
-      );
+      const resultado = await deps.sender.sendText(lead.telefonoWhatsapp, personalizar(action.message, lead));
+      exigirQueSalio(resultado, lead.telefonoWhatsapp);
+      await registrarContactoDelBroker(deps, lead.telefonoWhatsapp, resultado);
       return lead.telefonoWhatsapp;
     }
     case "whatsapp_send_template": {
       if (!deps.sender) throw new Error("No hay WhatsAppSender configurado.");
       const lead = await resolverLead(action.leadId, deps);
-      exigirQueSalio(
-        await deps.sender.sendTemplate(
-          lead.telefonoWhatsapp,
-          action.templateName,
-          action.languageCode,
-          action.bodyParams.map((p) => personalizar(p, lead))
-        ),
-        lead.telefonoWhatsapp
+      const resultado = await deps.sender.sendTemplate(
+        lead.telefonoWhatsapp,
+        action.templateName,
+        action.languageCode,
+        action.bodyParams.map((p) => personalizar(p, lead))
       );
+      exigirQueSalio(resultado, lead.telefonoWhatsapp);
+      await registrarContactoDelBroker(deps, lead.telefonoWhatsapp, resultado);
       return lead.telefonoWhatsapp;
     }
   }
@@ -146,6 +150,33 @@ class EnvioQueNoSalio extends Error {
  * en vez de tirar. Sin esta guarda, el resumen le diría al broker "✓ Mensaje
  * enviado" sobre algo que no salió (docs/TASKS.md Bloque 38g).
  */
+/**
+ * El broker contestándole a alguien **a través del bot** sigue siendo el
+ * broker contestando (docs/TASKS.md Bloque 38f): destraba el silencio del
+ * Bloque 31 y evita que el recontacto le escriba mañana a alguien que acaba
+ * de recibir su respuesta.
+ *
+ * Se registra con el `wa_id` que devuelve Meta cuando lo devuelve: es el
+ * formato en el que llegan los mensajes entrantes, y el teléfono que trae
+ * Tokko no tiene por qué coincidir. Si Meta no lo dice, va el de Tokko.
+ *
+ * Best-effort, como el resto del executor: el mensaje **ya salió**, así que
+ * un fallo del registro no puede convertir la acción en un fallo — el broker
+ * lo volvería a mandar y el cliente lo recibiría dos veces.
+ */
+async function registrarContactoDelBroker(
+  deps: BrokerAccionDirectaExecutorDeps,
+  telefono: string,
+  resultado: WhatsAppSendResult | undefined
+): Promise<void> {
+  if (!deps.ultimoContactoStore) return;
+  try {
+    await deps.ultimoContactoStore.registrar(resultado?.waId ?? telefono, new Date(), "manual");
+  } catch (error) {
+    console.warn("[broker] no se pudo registrar el contacto del broker:", error);
+  }
+}
+
 function exigirQueSalio(resultado: WhatsAppSendResult | undefined, telefono: string): void {
   if (resultado?.bloqueado === "modo_silencioso") throw new EnvioQueNoSalio(telefono);
 }
