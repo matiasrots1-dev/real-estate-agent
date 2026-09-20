@@ -1822,6 +1822,29 @@ conectadas **al simulacro**; el job que envia no importaba ninguna. Un
 simulacro que no comparte el codigo del que actua no es un simulacro, es otro
 programa que da un numero parecido.
 
+**Revision del PR (#48)**
+
+Dos agujeros, los dos arreglados en el mismo PR.
+
+1. **Los avisos al broker no respetaban el intervalo entre corridas.** No
+   suman al tope diario —no son mensajes a clientes—, y por eso tampoco
+   dejaban rastro de que la corrida habia hecho algo. Con el scheduler cada 5
+   minutos eso son tres avisos cada cinco minutos: **cientos en un dia**. Se
+   agrego `registrarActividad`, que anota la hora sin tocar el contador (si lo
+   tocara, una tanda de avisos le devolveria el cupo del dia al envio real).
+2. **`internos` era opcional en las deps del job.** La politica lo acepta
+   opcional, asi que un llamador que lo omitiera se saltaba la comprobacion
+   **en silencio** — justo la que evita escribirle a la propia linea del bot.
+   Ahora es obligatorio: quien no tenga la lista pasa `{ contiene: () => false }`
+   y que se vea.
+
+Mutaciones de la revision: Q12 (los avisos no dejan rastro) y Q13
+(`registrarActividad` pisa el contador), las dos mueren.
+
+**Pregunta que lo habria agarrado antes**: *lo que no cuenta para el tope,
+¿cuenta para algo?* Al separar los avisos del tope quedaron sin ningun freno.
+
+
 
 ## Bloque 28 — El catalogo de intents no resiste el trafico real (BLOQUEANTE)
 Salio de mirar las 41 conversaciones reales que entraron entre el 2026-08-25 y

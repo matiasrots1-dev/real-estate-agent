@@ -76,6 +76,8 @@ function makeDeps(overrides: Partial<RecontactJobDeps> = {}): RecontactJobDeps &
     auditLog: new InMemoryAuditLogStore(),
     ultimoContactoStore: new InMemoryUltimoContactoStore(),
     topeDiarioStore: new InMemoryTopeDiarioStore(),
+    // Vacío por default: cada test que necesite la lista la pasa.
+    internos: { contiene: () => false },
     // Los tests de acá prueban el envío; el simulacro tiene los suyos.
     envioHabilitado: true,
     // Reloj fijo DENTRO de la ventana horaria de la política (9-20). Sin
@@ -464,6 +466,45 @@ describe("createRecontactJob — el aviso al broker no es un mensaje a la person
     await createRecontactJob(deps).run();
 
     // CONFIG_POR_DEFECTO.topePorCorrida = 3.
+    expect(brokerNotifier.notifications).toHaveLength(3);
+  });
+});
+
+// Hallazgo de la revisión del PR #48: los avisos al broker no suman al tope
+// diario —no son mensajes a clientes— y por eso no dejaban rastro de que la
+// corrida había hecho algo. Con el scheduler cada 5 minutos, eso son tres
+// avisos cada cinco minutos: cientos en un día.
+describe("createRecontactJob — los avisos al broker respetan el intervalo entre corridas", () => {
+  function conLeadsEnRevision(topeDiarioStore: InMemoryTopeDiarioStore, brokerNotifier: BrokerNotifier) {
+    return makeDeps({
+      topeDiarioStore,
+      brokerNotifier,
+      tokko: {
+        searchProperties: vi.fn(async () => []),
+        getProperty: vi.fn(async () => propertyOriginal),
+        searchLeads: vi.fn(async () =>
+          Array.from({ length: 10 }, (_, i) =>
+            sampleLead({ id: `lead-${i}`, telefonoWhatsapp: `54911000000${i}`, diasSinRespuesta: 40 })
+          )
+        ),
+        getLead: vi.fn(),
+        logActivity: vi.fn(),
+      },
+    });
+  }
+
+  it("una segunda corrida cinco minutos después no vuelve a avisar", async () => {
+    const topeDiarioStore = new InMemoryTopeDiarioStore();
+    const brokerNotifier = recordingBrokerNotifier();
+
+    await createRecontactJob(conLeadsEnRevision(topeDiarioStore, brokerNotifier)).run();
+    expect(brokerNotifier.notifications).toHaveLength(3);
+
+    const cincoMinutosDespues = new Date(AHORA.getTime() + 5 * 60_000);
+    const deps = conLeadsEnRevision(topeDiarioStore, brokerNotifier);
+    await createRecontactJob({ ...deps, now: () => cincoMinutosDespues }).run();
+
+    // CONFIG_POR_DEFECTO.intervaloEntreCorridasMinutos = 45.
     expect(brokerNotifier.notifications).toHaveLength(3);
   });
 });

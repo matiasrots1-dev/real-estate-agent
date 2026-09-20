@@ -37,8 +37,14 @@ export interface RecontactJobDeps {
   ultimoContactoStore: UltimoContactoStore;
   /** El tope por día, persistido: un contador en memoria no sobrevive a un reinicio. */
   topeDiarioStore: TopeDiarioStore;
-  /** Números a los que el job nunca le escribe (la línea del bot, el broker, los usuarios de Tokko). */
-  internos?: { contiene(telefono: string): boolean };
+  /**
+   * Números a los que el job nunca le escribe (la línea del bot, el broker,
+   * los usuarios de Tokko). **Obligatorio**: la política lo acepta opcional,
+   * y si un llamador lo omitiera esa comprobación simplemente no pasaría, en
+   * silencio. Quien no tenga la lista pasa `{ contiene: () => false }` y que
+   * se vea (revisión del PR #48).
+   */
+  internos: { contiene(telefono: string): boolean };
   config?: RecontactoConfig;
   /**
    * `false` (default en config) = **simulacro**: calcula exactamente el mismo
@@ -350,6 +356,10 @@ export function createRecontactJob(deps: RecontactJobDeps): ScheduledJob {
           console.error(`jobs/recontact: no se pudo avisar al broker sobre el lead ${lead.id}:`, error);
         }
       }
+      // Los avisos no suman al tope diario —no son mensajes a clientes— pero
+      // sí cuentan para el intervalo entre corridas: si no, salen tres cada
+      // cinco minutos.
+      if (aRevision.length > 0) await deps.topeDiarioStore.registrarActividad(ahora);
 
       let enviados = 0;
       for (const destinatario of plan.aEnviar) {

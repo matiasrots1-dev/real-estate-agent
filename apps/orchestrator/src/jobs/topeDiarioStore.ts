@@ -34,7 +34,15 @@ export interface TopeDiarioStore {
    * corridas deja de existir sin que nada falle.
    */
   sumar(dia: Date, cuantos: number): Promise<void>;
-  /** Cuándo salió el último mensaje, si salió alguno. */
+  /**
+   * Anota que la corrida hizo algo, sin sumar al contador. Lo usan los avisos
+   * al broker: no son mensajes a clientes —no van al tope diario— pero sí
+   * tienen que contar para el intervalo mínimo entre corridas. Sin esto, una
+   * tanda de avisos cada 5 minutos le vuelca cientos al broker en un día
+   * (revisión del PR #48).
+   */
+  registrarActividad(cuando: Date): Promise<void>;
+  /** Cuándo salió el último mensaje o aviso, si salió alguno. */
   ultimaCorridaAt(): Promise<string | undefined>;
 }
 
@@ -55,6 +63,10 @@ export class InMemoryTopeDiarioStore implements TopeDiarioStore {
 
   async sumar(dia: Date, cuantos: number): Promise<void> {
     this.estado = sumado(this.estado, dia, cuantos);
+  }
+
+  async registrarActividad(cuando: Date): Promise<void> {
+    this.estado = { ...this.estado, ultimaCorridaAt: cuando.toISOString() };
   }
 
   async ultimaCorridaAt(): Promise<string | undefined> {
@@ -85,6 +97,11 @@ export class FileTopeDiarioStore implements TopeDiarioStore {
   async sumar(dia: Date, cuantos: number): Promise<void> {
     const estado = await readJsonFile<TopeDiario>(this.filePath, { fecha: "", enviados: 0 });
     await writeJsonFile(this.filePath, sumado(estado, dia, cuantos));
+  }
+
+  async registrarActividad(cuando: Date): Promise<void> {
+    const estado = await readJsonFile<TopeDiario>(this.filePath, { fecha: "", enviados: 0 });
+    await writeJsonFile(this.filePath, { ...estado, ultimaCorridaAt: cuando.toISOString() });
   }
 
   async ultimaCorridaAt(): Promise<string | undefined> {

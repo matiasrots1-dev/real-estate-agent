@@ -73,3 +73,29 @@ describe("tope diario", () => {
     expect(await new InMemoryTopeDiarioStore().enviadosEn(HOY)).toBe(0);
   });
 });
+
+// Revisión del PR #48. `registrarActividad` existe para los avisos al broker,
+// que no son mensajes a clientes: anota que la corrida hizo algo **sin tocar
+// el contador**. Si lo reiniciara, una tanda de avisos le devolvería el cupo
+// del día al envío real.
+describe("registrarActividad", () => {
+  const AHORA = new Date("2026-09-22T10:00:00");
+
+  it("anota la hora sin tocar lo enviado", async () => {
+    const store = new InMemoryTopeDiarioStore();
+    await store.sumar(AHORA, 4);
+
+    await store.registrarActividad(new Date(AHORA.getTime() + 60_000));
+
+    expect(await store.enviadosEn(AHORA)).toBe(4);
+    expect(await store.ultimaCorridaAt()).toBe(new Date(AHORA.getTime() + 60_000).toISOString());
+  });
+
+  it("sumar también deja anotada la hora: es el mismo hecho", async () => {
+    const store = new InMemoryTopeDiarioStore();
+
+    await store.sumar(AHORA, 1);
+
+    expect(await store.ultimaCorridaAt()).toBe(AHORA.toISOString());
+  });
+});
