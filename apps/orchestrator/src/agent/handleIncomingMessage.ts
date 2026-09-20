@@ -15,7 +15,7 @@ import {
 } from "./intentCatalog.js";
 import type { ContextoConversacion, IntentClassifier } from "./classifier.js";
 import type { UltimoContactoStore } from "./ultimoContactoStore.js";
-import type { UltimoContacto } from "./ultimoContactoStore.js";
+import { contactoDelBroker, type UltimoContacto } from "./ultimoContactoStore.js";
 import {
   decidirPlantilla,
   frasesDeEspera,
@@ -133,9 +133,16 @@ function armarContexto(
     if (entrada.incomingMessage) previos.push(entrada.incomingMessage);
   }
 
+  // La fecha del contacto **del broker**, no la del último contacto: el
+  // prompt dice literalmente "el broker le escribió hace N horas" y le pide
+  // al clasificador que interprete el mensaje como una respuesta a eso. Con
+  // `contactadoAt` a secas, el día que se cablee el recontacto del Bloque 27
+  // el propio envío automático del bot se le presentaría a Claude como un
+  // mensaje del broker (docs/TASKS.md Bloque 38f).
   let horasDesdeContactoDelBroker: number | undefined;
-  if (historial.ultimoContacto) {
-    const ms = ahora.getTime() - new Date(historial.ultimoContacto.contactadoAt).getTime();
+  const cuandoElBroker = contactoDelBroker(historial.ultimoContacto);
+  if (cuandoElBroker !== null) {
+    const ms = ahora.getTime() - cuandoElBroker;
     // Solo se informa si es reciente: que el broker haya escrito hace tres
     // meses no ayuda a interpretar el mensaje de hoy, y meterlo en el prompt
     // solo agrega ruido.

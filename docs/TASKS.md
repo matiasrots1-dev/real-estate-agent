@@ -3180,6 +3180,43 @@ dentro del executor y tira (disco lleno, JSON corrupto), la accion falla
       hasta el techo de los 7 dias. La orden via `broker_accion_directa` ya no
       depende del eco; la respuesta desde su celular, si.
 
+**Revision del PR (#43)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **El mismo bug, en un segundo lugar que no habia mirado.** El contexto que
+   se le pasa al clasificador arma `horasDesdeContactoDelBroker` con
+   `contactadoAt` —el ultimo contacto, venga de donde venga— y el prompt dice
+   literalmente *"el broker le escribio a esta persona hace N horas. Es muy
+   probable que este mensaje sea una RESPUESTA a ese contacto"*. El dia que se
+   cablee el recontacto del Bloque 27, el propio envio automatico del bot se
+   le presenta a Claude como un mensaje del broker, y el clasificador lee la
+   respuesta del cliente en un marco falso. Arreglado con la misma
+   `contactoDelBroker`: 2 tests nuevos por el webhook real, no por la funcion
+   suelta.
+   **Lo que lo agarro**: buscar *todos* los lectores del registro antes de dar
+   el cambio por completo (`grep` de `.origen` y `ultimoContacto`), en vez de
+   arreglar el lector que motivo el bloque.
+2. **Una fecha invalida rompia el registro.** El eco arma la fecha con el
+   timestamp de Meta; uno absurdo da `Invalid Date`. Con el cambio de este
+   bloque, un lead nuevo con esa fecha reventaba en `previo!.contactadoAt`
+   (antes reventaba en `toISOString`: las dos estan mal). Ahora una fecha
+   ilegible no se registra, y un `contactadoAt` ilegible que ya este en el
+   archivo se repara con el proximo contacto en vez de congelar ese lead para
+   siempre.
+
+Mutation testing de la revision (3 mas, todas mueren):
+
+      - N10. el contexto del clasificador vuelve a mirar cualquier contacto: 2 en rojo
+      - N11. una fecha invalida se registra igual: 1 en rojo
+      - N12. un `contactadoAt` ilegible congela el registro: 1 en rojo
+
+**Pregunta que lo habria agarrado antes**: *¿quien mas lee este campo?* El
+bloque nacio de un lector (`decidirPlantilla`), y el pre-mortem se escribio
+alrededor de ese. El segundo lector estaba a un `grep` de distancia y hacia
+exactamente lo mismo mal.
+
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,

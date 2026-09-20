@@ -68,9 +68,18 @@ type Mapa = Record<string, UltimoContacto>;
 function aplicar(todo: Mapa, leadId: string, cuando: Date, origen: UltimoContacto["origen"]): Mapa {
   const previo = todo[leadId];
   const t = cuando.getTime();
+  // Una fecha inválida no se registra: escribirla dejaría el registro con un
+  // `contactadoAt` que ninguna comparación posterior puede ordenar, y es
+  // preferible perder un eco malformado a envenenar el del lead.
+  if (Number.isNaN(t)) return todo;
+
   // Monótono a propósito: un eco que llega tarde o desordenado no puede
   // "rejuvenecer" el registro y habilitar un recontacto que no corresponde.
-  const previoT = previo ? new Date(previo.contactadoAt).getTime() : Number.NEGATIVE_INFINITY;
+  // Un `contactadoAt` ilegible cuenta como "no hay fecha", para que el
+  // registro se pueda reparar con el próximo contacto en vez de quedar
+  // congelado para siempre.
+  const previoCrudo = previo ? new Date(previo.contactadoAt).getTime() : Number.NEGATIVE_INFINITY;
+  const previoT = Number.isNaN(previoCrudo) ? Number.NEGATIVE_INFINITY : previoCrudo;
   const avanzaContacto = t > previoT;
 
   // Y monótono **por campo**: el contacto del broker no lo puede borrar un
