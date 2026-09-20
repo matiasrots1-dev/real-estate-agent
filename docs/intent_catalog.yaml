@@ -20,6 +20,12 @@
 #                                   "generative_grounded" (LLM redacta, pero solo con
 #                                   datos que vinieron de un tool, nunca inventa)
 #   response.template           -> solo si style = template
+#   response.espera             -> obligatorio en los intents que escalan siempre
+#                                   con plantilla fija: true si la plantilla es una
+#                                   frase de espera ("te paso con el asesor"), que
+#                                   sale UNA vez por conversación mientras el broker
+#                                   no responda; false si no lo es (una despedida)
+#                                   (docs/TASKS.md Bloques 31 y 38e)
 #
 # Reglas globales de escalamiento (ver docs/escalation_policy.md):
 #   1. requires_broker = true en el intent matcheado
@@ -292,6 +298,9 @@ intents:
     response:
       style: template
       template: "Gracias por avisarme. Cualquier cosa que necesites más adelante, quedo a disposición."
+      # Es una despedida, no una frase de espera: sale siempre, y no gasta el
+      # cupo de la conversación (docs/TASKS.md Bloque 38e).
+      espera: false
 
   # El otro hueco del mismo análisis: colegas de otras inmobiliarias escriben
   # derivando un cliente. Hoy caen en fallback o, peor, matchean reclamo_queja

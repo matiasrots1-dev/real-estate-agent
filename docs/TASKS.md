@@ -3001,10 +3001,81 @@ mas una frase de espera, y el sintoma es silencio.
       - M6. sin historial se manda igual (deja de fallar cerrado): 1 test en rojo
       - M7. el schema no exige marcar la plantilla generica: **sobrevivio**, por
         la misma razon. Se agrego el test del catalogo roto: 1 en rojo
-- [ ] Sigue abierto: la supresion mira el texto exacto. Dos frases de espera
-      distintas del catalogo cuentan como una sola (es lo buscado), pero si
-      alguien edita una y deja la vieja en el historial, esa conversacion
-      arranca de nuevo con cupo.
+
+**Revision del PR (#42)**
+
+Seis hallazgos, todos arreglados en el mismo PR.
+
+1. **Al broker se le suprimia igual, y su silencio no se destrababa nunca.**
+   Lo que devuelve la palabra es que el broker responda, y eso se detecta por
+   el eco de coexistencia sobre un lead conocido: su propio numero nunca
+   aparece ahi. Una orden ambigua suya que escalaba le sacaba la frase de
+   espera una vez y despues lo dejaba mudo **hasta el techo de 7 dias**. En
+   su canal ya no se suprime nada.
+2. **La continuacion de un flujo de visitas era el unico camino sin test.**
+   Reemplazar la lectura del historial de `decidirEnvioDePlantilla` por un
+   historial vacio dejaba la suite entera en verde: el camino que la usa
+   (continuacion de `agendar_visita` / `reprogramar_cancelar_visita`, que no
+   pasa por la lectura que arma el contexto del clasificador) no estaba
+   cubierto. Test agregado, y ahora esa mutacion mata 2.
+3. **En modo silencioso se decidia igual.** No sale nada, asi que no hay nada
+   que suprimir — pero una continuacion pagaba una lectura completa del audit
+   log por mensaje para decidir sobre algo que no se iba a enviar. Se saltea,
+   con test.
+4. **Dos relojes para el mismo mensaje.** El contexto del clasificador usaba
+   `ahora` y la supresion un `new Date()` propio. Ahora el llamador pasa el
+   suyo. No es observable en un test (los dos relojes caen en el mismo
+   milisegundo): es consistencia, no una mitigacion testeada — se anota asi
+   para no contarla como cubierta.
+5. **El cupo dependia del texto vigente del catalogo.** Era el "queda
+   abierto" de mas arriba, y tenia arreglo: el envio deja marcado en el audit
+   log que lo que salio era una frase de espera (`fraseDeEspera`), y el
+   historial se lee por ese marcador. Editar una frase ya no le devuelve el
+   cupo a las conversaciones en curso. El texto queda como respaldo para las
+   entradas anteriores a este bloque — sin eso, el dia del deploy toda
+   conversacion viva recuperaba el cupo y recibia la frase otra vez.
+6. **El catalogo dejaba agregar un intent que se caia del cupo sin ruido.**
+   Tres reglas nuevas en el schema: una frase de espera necesita plantilla;
+   solo puede marcarse en un intent que escala siempre (`requires_broker:
+   true`), porque la supresion esta cableada en el cierre del escalamiento; y
+   al reves, un intent que escala siempre con plantilla fija **tiene que
+   decir** si es o no una frase de espera. `rechazo_desinteres` declara
+   `espera: false` con el motivo al lado.
+
+Mutation testing, la lista completa (15, todas mueren):
+
+      - M1. la supresion no mira el texto: 1 test en rojo
+      - M2. el historial cuenta cualquier texto enviado: 1 en rojo
+      - M3. la despedida cuenta como frase de espera: 3 en rojo
+      - M4. no se decide en el cierre del escalamiento: 8 en rojo
+      - M5. la supresion pisa el motivo del escalamiento: 1 en rojo
+      - M6. sin historial se manda igual: 1 en rojo
+      - M7. el schema no exige marcar la plantilla generica: 1 en rojo
+      - M8. al broker tambien se le suprime: 1 en rojo
+      - M9. en modo silencioso se decide igual: 1 en rojo
+      - M10. la continuacion decide con un historial vacio: 2 en rojo
+      - M11. el envio no deja el marcador: 1 en rojo
+      - M12. el marcador reemplaza al texto (las viejas dejan de contar): 6 en rojo
+      - M13. el schema deja marcar como espera un intent sin plantilla: 1 en rojo
+      - M14. ...un intent que no escala siempre: 1 en rojo
+      - M15. ...y no obliga a decidir en uno nuevo que escala siempre: 1 en rojo
+
+M7 **sobrevivio en la primera corrida de esta tanda**, y no por lo mismo que
+la primera vez: su test pasaba por la regla nueva (M15), que da un mensaje
+distinto sobre el mismo catalogo roto. Una regla tapando el agujero de otra
+deja el test verde y la regla original borrable. El test ahora apunta a su
+propio mensaje.
+
+**Pregunta que lo habria agarrado antes**: *cuando agrego una regla que
+valida algo parecido a una que ya existe, ¿el test de la vieja sigue fallando
+si borro solo la vieja?* Dos reglas que se solapan parcialmente se tapan
+entre si, y la que sobra se descubre el dia que hace falta la que falta.
+
+**Lo que sigue abierto**
+- [ ] La supresion sigue siendo por conversacion y por texto/marcador, no por
+      significado: dos frases de espera distintas cuentan como una sola (es lo
+      buscado), y una respuesta generativa que diga lo mismo con otras
+      palabras no cuenta.
 
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents

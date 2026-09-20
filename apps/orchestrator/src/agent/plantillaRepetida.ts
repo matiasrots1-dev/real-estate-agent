@@ -59,6 +59,7 @@ const NO_SUPRIMIR: DecisionPlantilla = { suprimir: false };
 export interface EntradaPrevia {
   timestamp: string;
   responseSent?: string;
+  fraseDeEspera?: boolean;
 }
 
 /**
@@ -84,7 +85,13 @@ export function decidirPlantilla(args: {
   // que falló), y eso no gasta el único envío permitido.
   let ultimaEnviada: number | undefined;
   for (const entrada of historial) {
-    if (!entrada.responseSent || !esperas.has(entrada.responseSent)) continue;
+    if (!entrada.responseSent) continue;
+    // El marcador lo escribió el envío, mirando el catálogo de ese momento.
+    // El texto es el respaldo para las entradas anteriores al Bloque 38e. Sin
+    // el marcador, editar una frase del catálogo le devolvería el cupo a toda
+    // conversación que tuviera la versión vieja en el historial, y la frase
+    // saldría de nuevo (revisión del PR #42).
+    if (entrada.fraseDeEspera !== true && !esperas.has(entrada.responseSent)) continue;
     const t = new Date(entrada.timestamp).getTime();
     if (Number.isNaN(t)) continue;
     if (ultimaEnviada === undefined || t > ultimaEnviada) ultimaEnviada = t;

@@ -136,12 +136,49 @@ export const IntentCatalogSchema = z
 
     catalogo.intents.forEach((intent, i) => {
       const plantilla = intent.response.template;
+      const ruta = ["intents", i, "response"];
       const debeSerDeEspera = intent.requires_broker === true || intent.id === idEspera || intent.response.espera === true;
       if (debeSerDeEspera && plantilla && HUECO_DE_PLANTILLA.test(plantilla)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ["intents", i, "response", "template"],
+          path: [...ruta, "template"],
           message: `"${intent.id}" escala sin llenar datos, así que su plantilla no puede tener huecos: "${plantilla}"`,
+        });
+      }
+
+      // Una frase de espera sin plantilla no existe: `frasesDeEspera` la
+      // ignoraría en silencio y el intent quedaría fuera del cupo creyendo
+      // que está adentro (revisión del PR #42).
+      if (intent.response.espera === true && !plantilla) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...ruta, "espera"],
+          message: `"${intent.id}" está marcado como frase de espera pero no tiene plantilla`,
+        });
+      }
+
+      // La supresión está cableada en el camino de escalamiento: una frase de
+      // espera en un intent que no escala saldría sin pasar por ahí, pero
+      // gastaría igual el cupo de la conversación.
+      if (intent.response.espera === true && intent.requires_broker !== true) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...ruta, "espera"],
+          message: `"${intent.id}" está marcado como frase de espera pero no escala siempre (requires_broker: true)`,
+        });
+      }
+
+      // Y al revés: un intent que escala siempre con una plantilla fija TIENE
+      // que decir si es una frase de espera. Sin esto, el que se agregue
+      // mañana queda fuera del cupo por olvido y su frase se repite.
+      const plantillaFija = plantilla !== undefined && !HUECO_DE_PLANTILLA.test(plantilla);
+      if (intent.requires_broker === true && plantillaFija && intent.response.espera === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...ruta, "espera"],
+          message:
+            `"${intent.id}" escala siempre con una plantilla fija: tiene que decir si es una frase de espera ` +
+            `("espera: true") o no ("espera: false", como una despedida)`,
         });
       }
     });

@@ -74,18 +74,27 @@ describe("parseIntentCatalog — la plantilla de espera", () => {
     plantillaFallback = "Dejame confirmarlo con el asesor y te respondo enseguida.",
     plantillaReclamo = "Te contacto con el asesor.",
     marcarEspera = true,
+    esperaReclamo = true,
+    plantillaFicha = "Te paso el material de {direccion_corta}:",
+    esperaFicha = null,
   }: {
     esperaDesde?: string;
     plantillaFallback?: string | null;
     plantillaReclamo?: string;
     marcarEspera?: boolean;
+    esperaReclamo?: boolean | null;
+    plantillaFicha?: string;
+    esperaFicha?: boolean | null;
   } = {}): string {
     // `espera: true` lo exige el schema para la plantilla de espera genérica
-    // (docs/TASKS.md Bloque 38e).
+    // (docs/TASKS.md Bloque 38e). La marca va aparte de la plantilla: un
+    // intent marcado como frase de espera y sin plantilla también tiene que
+    // fallar.
+    const lineaEspera = (valor: boolean | null | undefined): string =>
+      valor === null || valor === undefined ? "" : `\n      espera: ${valor}`;
     const templateFallback =
-      plantillaFallback === null
-        ? ""
-        : `\n      template: "${plantillaFallback}"${marcarEspera ? "\n      espera: true" : ""}`;
+      (plantillaFallback === null ? "" : `\n      template: "${plantillaFallback}"`) +
+      (marcarEspera ? "\n      espera: true" : "");
     return `
 version: 1
 meta:
@@ -115,7 +124,7 @@ intents:
     confidence_threshold: 0.75
     response:
       style: template
-      template: "${plantillaReclamo}"
+      template: "${plantillaReclamo}"${lineaEspera(esperaReclamo)}
   - id: pedido_ficha_multimedia
     description: ficha
     channel: cliente
@@ -126,7 +135,7 @@ intents:
     confidence_threshold: 0.75
     response:
       style: template
-      template: "Te paso el material de {direccion_corta}:"
+      template: "${plantillaFicha}"${lineaEspera(esperaFicha)}
 `;
   }
 
@@ -156,7 +165,13 @@ intents:
   // docs/TASKS.md Bloque 38e, modo de fallo 2: sin la marca, la frase de
   // espera se repetiría como antes del Bloque 31 y nada lo mostraría.
   it("falla si la plantilla de espera genérica no está marcada como frase de espera", () => {
-    expect(problemas(catalogo({ marcarEspera: false })).join("\n")).toContain('"espera: true"');
+    // Por SU regla, no por la de abajo ("tiene que decir si es de espera"),
+    // que sólo mira los intents con `requires_broker: true`: el intent al que
+    // apunta `escalation_waiting_template_from` puede no serlo (revisión del
+    // PR #42 — sin esto el test pasaba con la regla borrada).
+    expect(problemas(catalogo({ marcarEspera: false })).join("\n")).toContain(
+      "es la plantilla de espera genérica"
+    );
   });
 
   it("falla si el intent de espera no tiene plantilla", () => {
@@ -171,5 +186,35 @@ intents:
   it("falla si un intent que escala siempre tiene una plantilla con huecos", () => {
     const issues = problemas(catalogo({ plantillaReclamo: "Te contacto con {nombre_asesor}." }));
     expect(issues.join("\n")).toContain("reclamo_queja");
+  });
+
+  // Revisión del PR #42. Las tres reglas de abajo existen para que el intent
+  // que alguien agregue mañana no quede fuera del cupo por omisión: el modo de
+  // fallo del Bloque 31 vuelve en silencio, sin que ningún test lo muestre.
+  it("falla si un intent que escala siempre con plantilla fija no dice si es una frase de espera", () => {
+    const issues = problemas(catalogo({ esperaReclamo: null })).join("\n");
+    expect(issues).toContain("reclamo_queja");
+    expect(issues).toContain("tiene que decir si es una frase de espera");
+  });
+
+  it("decir que NO es una frase de espera es válido: una despedida escala y sale siempre", () => {
+    expect(problemas(catalogo({ esperaReclamo: false }))).toEqual([]);
+  });
+
+  it("falla si un intent está marcado como frase de espera y no tiene plantilla", () => {
+    // `frasesDeEspera` lo ignoraría en silencio: el intent quedaría fuera del
+    // cupo creyendo que está adentro.
+    const issues = problemas(catalogo({ plantillaFallback: null })).join("\n");
+    expect(issues).toContain("está marcado como frase de espera pero no tiene plantilla");
+  });
+
+  it("falla si un intent que no escala siempre está marcado como frase de espera", () => {
+    // La supresión está cableada en el cierre del escalamiento: esa frase
+    // saldría sin pasar por ahí, pero gastaría igual el cupo.
+    const issues = problemas(
+      catalogo({ plantillaFicha: "Te paso el material.", esperaFicha: true })
+    ).join("\n");
+    expect(issues).toContain("pedido_ficha_multimedia");
+    expect(issues).toContain("no escala siempre");
   });
 });
