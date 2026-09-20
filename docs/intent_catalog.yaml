@@ -20,6 +20,12 @@
 #                                   "generative_grounded" (LLM redacta, pero solo con
 #                                   datos que vinieron de un tool, nunca inventa)
 #   response.template           -> solo si style = template
+#   response.espera             -> obligatorio en los intents que escalan siempre
+#                                   con plantilla fija: true si la plantilla es una
+#                                   frase de espera ("te paso con el asesor"), que
+#                                   sale UNA vez por conversación mientras el broker
+#                                   no responda; false si no lo es (una despedida)
+#                                   (docs/TASKS.md Bloques 31 y 38e)
 #
 # Reglas globales de escalamiento (ver docs/escalation_policy.md):
 #   1. requires_broker = true en el intent matcheado
@@ -192,6 +198,9 @@ intents:
     response:
       style: template
       template: "Dejame confirmar esa condición con el asesor y te respondo a la brevedad."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: reclamo_queja
     description: "Cualquier mensaje con tono de disconformidad, enojo o reclamo."
@@ -211,6 +220,9 @@ intents:
     response:
       style: template
       template: "Entiendo, te voy a poner en contacto directo con el asesor para resolverlo cuanto antes."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: consulta_legal_contractual
     description: "Preguntas sobre rescisión, cláusulas contractuales, plazos legales."
@@ -229,6 +241,9 @@ intents:
     response:
       style: template
       template: "Es un tema para consultarlo puntualmente, te contacto con el asesor."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: hablar_con_persona
     description: "Pedido explícito de hablar con un humano."
@@ -247,6 +262,9 @@ intents:
     response:
       style: template
       template: "Por supuesto, te contacto con el asesor en breve."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   # Agregado tras etiquetar a mano 43 conversaciones reales (docs/TASKS.md
   # Bloque 32). Dos de los cinco leads que el clasificador perdía enteros eran
@@ -280,6 +298,9 @@ intents:
     response:
       style: template
       template: "Gracias por avisarme. Cualquier cosa que necesites más adelante, quedo a disposición."
+      # Es una despedida, no una frase de espera: sale siempre, y no gasta el
+      # cupo de la conversación (docs/TASKS.md Bloque 38e).
+      espera: false
 
   # El otro hueco del mismo análisis: colegas de otras inmobiliarias escriben
   # derivando un cliente. Hoy caen en fallback o, peor, matchean reclamo_queja
@@ -305,6 +326,9 @@ intents:
     response:
       style: template
       template: "¡Hola! Te paso con el asesor para coordinar, en breve te escribe."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   - id: fallback_low_confidence
     description: "Intent no matcheado con confianza suficiente contra ningún otro intent."
@@ -320,6 +344,9 @@ intents:
     response:
       style: template
       template: "Dejame confirmarlo con el asesor y te respondo enseguida."
+      # Frase de espera: se manda una sola vez por conversación mientras el
+      # broker no responda (docs/TASKS.md Bloques 31 y 38e).
+      espera: true
 
   # -------------------------------------------------------------------------
   # INTENTS PROACTIVOS (disparados por reglas temporales, no por mensaje entrante)

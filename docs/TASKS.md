@@ -2928,6 +2928,155 @@ fotos, los motivos distintos y los tests de `fueRespondida`. Quedan anotados:
 - [ ] Con el Graph API colgado, las N fotos se intentan igual: se acerca al
       techo de 90 s de la cola.
 
+### 38e — La misma frase no se repite, venga del camino que venga
+El Bloque 31 suprime la plantilla fija repetida, pero decide por **id de
+intent**: solo cuentan los 7 intents cuya respuesta es una plantilla sin
+huecos. Desde 38c, **todo** escalamiento que no es de un intent que escala
+siempre manda la plantilla de espera del catalogo: baja confianza, los flujos
+de agendar y reprogramar, y la red de ultima linea. Esos mandan la misma
+frase y no cuentan para el cupo, asi que la repeticion vuelve por la ventana.
+
+Ademas, de la revision del Bloque 31 (PR #29) quedaron dos cosas:
+- `rechazo_desinteres` comparte el cupo aunque su plantilla no dice "te paso
+  con el asesor": es una despedida ("Gracias por avisarme...").
+- La entrada suprimida **reemplaza** el motivo real del escalamiento en el
+  audit log por el de la supresion.
+
+**Diseno**: la supresion se decide por **el texto que va a salir**, no por el
+intent. El catalogo marca cuales de sus plantillas son frases de espera
+(`response.espera`), y la decision vive dentro del cierre del escalamiento,
+que es por donde pasan todos los caminos.
+
+**Pre-mortem**
+
+**1. Se suprime una respuesta legitima.** Si la regla mirara cualquier texto
+repetido, dos respuestas generativas iguales ("Si, sigue disponible") dejarian
+al cliente sin la segunda; y si mirara todas las plantillas fijas, la
+despedida de `rechazo_desinteres` no saldria por haberle mandado antes una
+frase de espera.
+   *Mitigacion*: solo participan los textos marcados `espera: true` en el
+   catalogo. La despedida no esta marcada. Tests de los dos casos.
+
+**2. El catalogo cambia y la supresion deja de aplicar sin que nadie lo
+note.** Si alguien agrega una plantilla de espera nueva y no la marca, esa
+frase se repite como antes del Bloque 31, y ninguna metrica lo muestra: el
+intent esta bien clasificado.
+   *Mitigacion*: el schema exige que la plantilla de espera generica
+   (`meta.escalation_waiting_template_from`) este marcada, y que lo marcado
+   sea una plantilla sin huecos. Un test contra el catalogo real fija cuales
+   estan marcadas hoy, asi agregar una obliga a mirar esta decision.
+
+**3. El historial no se puede leer y la frase se suprime para siempre.** La
+regla falla cerrado (decision del dueno del repo, Bloque 31): sin historial,
+no se manda. Con un error de lectura persistente, ningun cliente recibe nunca
+mas una frase de espera, y el sintoma es silencio.
+   *Mitigacion*: la supresion queda en el audit log en su propio campo, con el
+   motivo, sin pisar el del escalamiento; `pendientes` ya muestra esas
+   conversaciones como sin responder, porque no hay `responseSent`. Test de que
+   el motivo real del escalamiento sobrevive.
+
+**Como quedo**
+- [x] El catalogo marca sus frases de espera (`response.espera`): las 6 que
+      dicen "te paso con el asesor". La despedida de `rechazo_desinteres`
+      queda afuera y ya no comparte el cupo.
+- [x] `frasesDeEspera` devuelve **textos**, y `decidirPlantilla` decide por el
+      texto que iba a salir y por el que salio antes, no por el intent. Con
+      eso cuentan todos los caminos: baja confianza, los flujos de visita y la
+      red de ultima linea del Bloque 38c.
+- [x] La decision se toma dentro de `finalizeEscalation`, que es por donde
+      pasan todos los escalamientos. Los flujos de visita, que la salteaban,
+      ahora cuentan.
+- [x] La supresion va en su propio campo del audit log (`supresion`) y ya no
+      pisa el motivo real del escalamiento.
+- [x] El schema exige que la plantilla de espera generica este marcada: sin la
+      marca, la repeticion volveria sin que nada lo muestre.
+- [x] 6 tests nuevos; los del Bloque 31 migrados al criterio por texto.
+      Mutation testing, una por vez:
+      - M1. la supresion no mira el texto: 1 test en rojo
+      - M2. el historial cuenta cualquier texto enviado: **sobrevivio**, porque
+        ningun test mandaba antes una respuesta normal. Se agrego: 1 en rojo
+      - M3. la despedida cuenta como frase de espera: 2 tests en rojo
+      - M4. no se decide en el cierre del escalamiento: 5 tests en rojo
+      - M5. la supresion vuelve a pisar el motivo del escalamiento: 1 test en rojo
+      - M6. sin historial se manda igual (deja de fallar cerrado): 1 test en rojo
+      - M7. el schema no exige marcar la plantilla generica: **sobrevivio**, por
+        la misma razon. Se agrego el test del catalogo roto: 1 en rojo
+
+**Revision del PR (#42)**
+
+Seis hallazgos, todos arreglados en el mismo PR.
+
+1. **Al broker se le suprimia igual, y su silencio no se destrababa nunca.**
+   Lo que devuelve la palabra es que el broker responda, y eso se detecta por
+   el eco de coexistencia sobre un lead conocido: su propio numero nunca
+   aparece ahi. Una orden ambigua suya que escalaba le sacaba la frase de
+   espera una vez y despues lo dejaba mudo **hasta el techo de 7 dias**. En
+   su canal ya no se suprime nada.
+2. **La continuacion de un flujo de visitas era el unico camino sin test.**
+   Reemplazar la lectura del historial de `decidirEnvioDePlantilla` por un
+   historial vacio dejaba la suite entera en verde: el camino que la usa
+   (continuacion de `agendar_visita` / `reprogramar_cancelar_visita`, que no
+   pasa por la lectura que arma el contexto del clasificador) no estaba
+   cubierto. Test agregado, y ahora esa mutacion mata 2.
+3. **En modo silencioso se decidia igual.** No sale nada, asi que no hay nada
+   que suprimir — pero una continuacion pagaba una lectura completa del audit
+   log por mensaje para decidir sobre algo que no se iba a enviar. Se saltea,
+   con test.
+4. **Dos relojes para el mismo mensaje.** El contexto del clasificador usaba
+   `ahora` y la supresion un `new Date()` propio. Ahora el llamador pasa el
+   suyo. No es observable en un test (los dos relojes caen en el mismo
+   milisegundo): es consistencia, no una mitigacion testeada — se anota asi
+   para no contarla como cubierta.
+5. **El cupo dependia del texto vigente del catalogo.** Era el "queda
+   abierto" de mas arriba, y tenia arreglo: el envio deja marcado en el audit
+   log que lo que salio era una frase de espera (`fraseDeEspera`), y el
+   historial se lee por ese marcador. Editar una frase ya no le devuelve el
+   cupo a las conversaciones en curso. El texto queda como respaldo para las
+   entradas anteriores a este bloque — sin eso, el dia del deploy toda
+   conversacion viva recuperaba el cupo y recibia la frase otra vez.
+6. **El catalogo dejaba agregar un intent que se caia del cupo sin ruido.**
+   Tres reglas nuevas en el schema: una frase de espera necesita plantilla;
+   solo puede marcarse en un intent que escala siempre (`requires_broker:
+   true`), porque la supresion esta cableada en el cierre del escalamiento; y
+   al reves, un intent que escala siempre con plantilla fija **tiene que
+   decir** si es o no una frase de espera. `rechazo_desinteres` declara
+   `espera: false` con el motivo al lado.
+
+Mutation testing, la lista completa (15, todas mueren):
+
+      - M1. la supresion no mira el texto: 1 test en rojo
+      - M2. el historial cuenta cualquier texto enviado: 1 en rojo
+      - M3. la despedida cuenta como frase de espera: 3 en rojo
+      - M4. no se decide en el cierre del escalamiento: 8 en rojo
+      - M5. la supresion pisa el motivo del escalamiento: 1 en rojo
+      - M6. sin historial se manda igual: 1 en rojo
+      - M7. el schema no exige marcar la plantilla generica: 1 en rojo
+      - M8. al broker tambien se le suprime: 1 en rojo
+      - M9. en modo silencioso se decide igual: 1 en rojo
+      - M10. la continuacion decide con un historial vacio: 2 en rojo
+      - M11. el envio no deja el marcador: 1 en rojo
+      - M12. el marcador reemplaza al texto (las viejas dejan de contar): 6 en rojo
+      - M13. el schema deja marcar como espera un intent sin plantilla: 1 en rojo
+      - M14. ...un intent que no escala siempre: 1 en rojo
+      - M15. ...y no obliga a decidir en uno nuevo que escala siempre: 1 en rojo
+
+M7 **sobrevivio en la primera corrida de esta tanda**, y no por lo mismo que
+la primera vez: su test pasaba por la regla nueva (M15), que da un mensaje
+distinto sobre el mismo catalogo roto. Una regla tapando el agujero de otra
+deja el test verde y la regla original borrable. El test ahora apunta a su
+propio mensaje.
+
+**Pregunta que lo habria agarrado antes**: *cuando agrego una regla que
+valida algo parecido a una que ya existe, ¿el test de la vieja sigue fallando
+si borro solo la vieja?* Dos reglas que se solapan parcialmente se tapan
+entre si, y la que sobra se descubre el dia que hace falta la que falta.
+
+**Lo que sigue abierto**
+- [ ] La supresion sigue siendo por conversacion y por texto/marcador, no por
+      significado: dos frases de espera distintas cuentan como una sola (es lo
+      buscado), y una respuesta generativa que diga lo mismo con otras
+      palabras no cuenta.
+
 ### 38g — En modo silencioso, las ordenes del broker no reciben respuesta
 Encontrado en la revision de 38a y **confirmado en el codigo**: los intents
 del canal broker (`broker_resumen_agenda`, `broker_resumen_leads`,
@@ -3050,12 +3199,9 @@ arreglaron 8 (arriba). Quedan anotados:
       hizo. Afecta a 5 intents: `pedido_ficha_multimedia`,
       `reprogramar_cancelar_visita`, `recordatorio_visita`,
       `seguimiento_post_visita`, `broker_pausar_agente`.
-- [ ] **La misma frase se puede repetir por caminos que el Bloque 31 no
-      cubre.** Desde 38c, todo escalamiento que no es de un intent que escala
-      siempre (baja confianza, flujos de visita, la red de ultima linea)
-      manda la plantilla de espera del catalogo, y ninguno cuenta para el
-      cupo, que se decide por id de intent. Deberia decidirse por el texto
-      que efectivamente sale.
+- [x] *(Resuelto en 38e: se decide por el texto que sale.)*
+      **La misma frase se puede repetir por caminos que el Bloque 31 no
+      cubre.**
 - [x] *(Resuelto en el Bloque 38d.)* **Un envio al cliente que falla no es un fallo.** La captura del Bloque
       34 termina antes de `sendText`: si el envio falla, no hay `fallido` ni
       aviso, y `pendientes` la marca como respondida.
@@ -3066,10 +3212,13 @@ arreglaron 8 (arriba). Quedan anotados:
 - [ ] La deteccion de "el broker respondio" no ve los envios de
       `broker_accion_directa`, y un contacto `sistema` posterior pisa uno
       `manual`.
-- [ ] La entrada suprimida reemplaza el motivo real del escalamiento en el
+- [x] *(Resuelto en 38e: la supresion va en su propio campo.)*
+      La entrada suprimida reemplaza el motivo real del escalamiento en el
       audit log.
-- [ ] `rechazo_desinteres` no dice "te paso con el asesor", y sin embargo
-      comparte el cupo con las otras seis plantillas fijas.
+- [x] *(Resuelto en 38e: el catalogo marca cuales son frases de espera y la
+      despedida no lo es.)* `rechazo_desinteres` no dice "te paso con el
+      asesor", y sin embargo comparte el cupo con las otras seis plantillas
+      fijas.
 - [ ] Posible diferencia de formato de telefono entre el `from` entrante y el
       `to` del eco de coexistencia. Verificarlo con datos reales antes de
       darlo por bueno.

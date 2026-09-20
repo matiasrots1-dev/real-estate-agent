@@ -18,7 +18,7 @@ import type { UltimoContactoStore } from "./ultimoContactoStore.js";
 import type { UltimoContacto } from "./ultimoContactoStore.js";
 import {
   decidirPlantilla,
-  plantillasFijas,
+  frasesDeEspera,
   type DecisionPlantilla,
 } from "./plantillaRepetida.js";
 import type { ResponseComposer } from "./composer.js";
@@ -147,32 +147,44 @@ function armarContexto(
 }
 
 /**
- * Decide si la plantilla fija sale o se suprime (docs/TASKS.md Bloque 31).
+ * Decide si la frase de espera sale o se suprime (docs/TASKS.md Bloques 31 y
+ * 38e). Se decide por el **texto** que iba a salir, no por el intent: todos
+ * los escalamientos mandan la misma frase, vengan del camino que vengan.
  *
  * **Falla cerrado**: si el historial no se pudo leer, se suprime. Decision del
  * dueno del repo — 16 repeticiones de la misma frase es peor que el silencio,
- * asi que ante la duda no se manda. El costo es perder una plantilla legitima
- * en el caso raro de que el audit log no se pueda leer.
+ * asi que ante la duda no se manda. El costo es perder una frase legitima en
+ * el caso raro de que el audit log no se pueda leer.
  */
-function decidirEnvioDePlantilla(
+async function decidirEnvioDePlantilla(
   deps: HandleMessageDeps,
-  intentId: string,
-  historial: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null,
+  message: IncomingWhatsAppMessage,
+  texto: string,
+  historialPrevio: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null | undefined,
   ahora: Date
-): DecisionPlantilla {
-  const fijas = plantillasFijas(deps.catalog);
-  if (!fijas.has(intentId)) return { suprimir: false };
+): Promise<DecisionPlantilla> {
+  // En el canal broker no se suprime: lo que destraba el silencio es que el
+  // broker responda, y eso se detecta por el eco de coexistencia sobre un
+  // lead conocido. Su propio número nunca aparece ahí, así que una orden
+  // ambigua suya quedaría sin respuesta hasta 7 días (revisión del PR #42).
+  if (esDelBroker(deps, message)) return { suprimir: false };
+  const esperas = frasesDeEspera(deps.catalog);
+  if (!esperas.has(texto)) return { suprimir: false };
+
+  // Los caminos que ya lo leyeron lo pasan; los demás (una continuación de un
+  // flujo de visitas) lo leen acá, que es cuando hace falta.
+  const historial = historialPrevio === undefined ? await leerHistorial(deps, message) : historialPrevio;
   if (!historial) {
     return {
       suprimir: true,
       motivo:
-        "No se pudo leer el historial para saber si la plantilla ya se habia enviado; " +
+        "No se pudo leer el historial para saber si ya se le habia mandado una frase de espera; " +
         "se suprime por las dudas. El cliente NO recibio nada (docs/TASKS.md Bloque 31).",
     };
   }
   return decidirPlantilla({
-    intentId,
-    fijas,
+    texto,
+    esperas,
     historial: historial.entradas,
     ultimoContacto: historial.ultimoContacto,
     ahora,
@@ -357,7 +369,6 @@ export async function handleIncomingMessage(
   if (decision.shouldEscalate) {
     // La plantilla de espera, nunca la del caso exitoso con huecos (Bloque 38c).
     const responseText = respuestaDeEspera(deps.catalog, intent);
-    const plantilla = decidirEnvioDePlantilla(deps, intent.id, historial, ahora);
     return finalizeEscalation(
       deps,
       message,
@@ -367,7 +378,7 @@ export async function handleIncomingMessage(
       responseText,
       decision.rule,
       decision.reason,
-      plantilla
+      { historial, ahora }
     );
   }
 
@@ -413,12 +424,12 @@ export async function handleIncomingMessage(
 
     case "agendar_visita": {
       const result = await startAgendarVisita(message, classification, intent, agendarVisitaDeps(deps, language));
-      return finalizeVisitStep(deps, message, intent, classification.confidence, result);
+      return finalizeVisitStep(deps, message, intent, classification.confidence, result, { historial, ahora });
     }
 
     case "reprogramar_cancelar_visita": {
       const result = await startReprogramarCancelarVisita(message, intent, reprogramarVisitaDeps(deps));
-      return finalizeVisitStep(deps, message, intent, classification.confidence, result);
+      return finalizeVisitStep(deps, message, intent, classification.confidence, result, { historial, ahora });
     }
 
     case "broker_resumen_agenda": {
@@ -500,7 +511,12 @@ async function finalizeVisitStep(
   message: IncomingWhatsAppMessage,
   intent: Intent,
   confidence: number | null,
-  result: AgendarVisitaStepResult | ReprogramarCancelarVisitaStepResult
+  result: AgendarVisitaStepResult | ReprogramarCancelarVisitaStepResult,
+  /** Lo que el camino principal ya leyó; una continuación no lo tiene. */
+  contexto?: {
+    historial?: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null;
+    ahora?: Date;
+  }
 ): Promise<HandleMessageResult> {
   if (result.escalate) {
     return finalizeEscalation(
@@ -511,7 +527,8 @@ async function finalizeVisitStep(
       result.toolsCalled,
       result.responseText,
       "requires_broker",
-      result.escalationReason
+      result.escalationReason,
+      contexto
     );
   }
   return finalizeNonEscalating(deps, message, intent, confidence, result.toolsCalled, result.responseText);
@@ -588,16 +605,43 @@ async function finalizeEscalation(
   rule: EscalationRule | undefined,
   reason: string | undefined,
   /**
-   * Supresion de plantilla repetida (docs/TASKS.md Bloque 31). Los caminos
-   * que no producen una plantilla fija del catalogo no la pasan: `intentId`
-   * no estaria en el conjunto y la decision seria la misma.
+   * El historial de la conversación y el reloj del mensaje, si el llamador ya
+   * los tiene. Los usa la supresión de la frase de espera repetida
+   * (docs/TASKS.md Bloques 31 y 38e). Sin historial se lee acá; sin reloj se
+   * toma uno, pero entonces el mensaje se evalúa contra dos relojes
+   * distintos (revisión del PR #42).
    */
-  plantilla: DecisionPlantilla = { suprimir: false }
+  contexto?: {
+    historial?: { entradas: AuditLogEntry[]; ultimoContacto: UltimoContacto | null } | null;
+    ahora?: Date;
+  }
 ): Promise<HandleMessageResult> {
   // Ya escala y ya avisa: la red solo cambia el texto (Bloque 38c).
   const responseText = tieneHuecoParaElCliente(deps, message, intent, respuestaDelHandler)
     ? plantillaDeEspera(deps.catalog)
     : respuestaDelHandler;
+  // Acá NO se usa `silenciarPara`: un escalamiento se calla también para el
+  // broker. Lo que saldría es la plantilla de espera del intent, y para una
+  // orden suya que no se entendió eso puede ser "Listo, {accion} para
+  // {alcance}." con los huecos sin llenar (Bloque 38c): leería que su orden
+  // se ejecutó. Le llega el aviso del escalamiento, con la confianza y el
+  // motivo (hallazgo de la revisión del PR #37).
+  const silencio = deps.modoSilencioso === true;
+
+  // La decisión se toma acá y no en cada llamador: por este cierre pasan
+  // todos los escalamientos, incluidos los de los flujos de visita, que antes
+  // mandaban la frase de espera sin contar para el cupo (Bloque 38e). En modo
+  // silencioso no se manda nada, así que no hay nada que suprimir ni que leer.
+  const plantilla = silencio
+    ? { suprimir: false }
+    : await decidirEnvioDePlantilla(
+        deps,
+        message,
+        responseText,
+        contexto?.historial,
+        contexto?.ahora ?? new Date()
+      );
+
   // El broker se entera SIEMPRE, se le responda al cliente o no. Es lo que
   // separa "el agente se calla" de "el mensaje se pierde".
   const aviso = await notifyBrokerBestEffort(deps, message, intent, confidence, reason);
@@ -607,17 +651,13 @@ async function finalizeEscalation(
   // misma frase. `responseSent` sin cargar a proposito — el audit log es el
   // registro de que recibio cada persona y no puede decir que se envio algo
   // que no se envio.
-  // Acá NO se usa `silenciarPara`: un escalamiento se calla también para el
-  // broker. Lo que saldría es la plantilla de espera del intent, y para una
-  // orden del broker que no se entendió eso puede ser "Listo, {accion} para
-  // {alcance}." con los huecos sin llenar (Bloque 38c): el broker leería que
-  // su orden se ejecutó. Le llega el aviso del escalamiento, que dice la
-  // confianza y el motivo (hallazgo de la revisión del PR #37).
-  const silencio = deps.modoSilencioso === true;
-  if (plantilla.suprimir && !silencio) {
+  if (plantilla.suprimir) {
     await appendAudit(deps, message, intent.id, confidence, toolsCalled, true, {
       escalationRule: rule,
-      escalationReason: plantilla.motivo,
+      // El motivo del escalamiento se conserva: la supresión va en su propio
+      // campo (hallazgo de la revisión del Bloque 31).
+      escalationReason: reason,
+      supresion: plantilla.motivo,
       aviso,
     });
     return { responseText: null, intentId: intent.id, confidence, escalatedToBroker: true };
@@ -638,6 +678,14 @@ async function finalizeEscalation(
     escalationRule: rule,
     escalationReason: reason,
     responseSent: envio.textoEnviado,
+    // Se marca lo que EFECTIVAMENTE salió, contra el catálogo de ahora: es lo
+    // que hace que el cupo de la conversación sobreviva a una edición del
+    // catálogo (Bloque 38e). Las frases de espera salen todas por acá — el
+    // schema exige `requires_broker: true` para marcar `espera: true`.
+    fraseDeEspera:
+      envio.textoEnviado !== undefined && frasesDeEspera(deps.catalog).has(envio.textoEnviado)
+        ? true
+        : undefined,
     aviso,
     envio: detalleDelEnvio(envio),
   });
@@ -712,8 +760,12 @@ interface ExtrasDeAuditoria {
   escalationReason?: string;
   /** Lo que efectivamente recibió el cliente. Sin cargar si no recibió nada. */
   responseSent?: string;
+  /** Lo que salió era una frase de espera del catálogo (Bloque 38e). */
+  fraseDeEspera?: boolean;
   aviso?: ResultadoDelAviso;
   envio?: { estado: "fallo" | "parcial"; motivo: string };
+  /** Por qué no salió la frase de espera, si se suprimió (Bloques 31 y 38e). */
+  supresion?: string;
 }
 
 async function appendAudit(
@@ -737,6 +789,7 @@ async function appendAudit(
     escalationRule: extras.escalationRule,
     escalationReason: extras.escalationReason,
     responseSent: extras.responseSent,
+    fraseDeEspera: extras.fraseDeEspera,
     // Vincula esta entrada con la `recibido` del mismo mensaje, que se escribió
     // al llegar (docs/TASKS.md Bloque 34).
     messageId: message.messageId,
@@ -744,6 +797,7 @@ async function appendAudit(
     avisoAlBrokerMotivo: extras.aviso?.motivo,
     envio: extras.envio?.estado,
     envioMotivo: extras.envio?.motivo,
+    supresion: extras.supresion,
   };
   await deps.auditLog.append(entry);
 }

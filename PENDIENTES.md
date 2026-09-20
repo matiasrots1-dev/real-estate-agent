@@ -79,8 +79,9 @@ haga que el bot le escriba a clientes, y borrar datos.
       con `{huecos}` sin llenar). Hecho, sin desplegar: 38d (si falla mandarle
       la respuesta a un cliente, queda registrado, te llega el aviso y
       `pendientes` lo muestra). Lo que **afecta hoy**: la ventana de 24 hs
-      (arriba). Falta, y muerde al apagar el modo silencioso: 38e (la
-      supresion de la plantilla repetida) y 38f (detectar que respondiste vos).
+      (arriba). Hecho, sin desplegar: 38e (la misma frase de espera no se
+      repite, venga del camino que venga). Falta, y muerde al apagar el modo
+      silencioso: 38f (detectar que respondiste vos).
 - [ ] **Tu calendario personal no cuenta para ofrecer horarios.** El bot mira
       un solo calendario, el dedicado a visitas. Para ofrecerle horarios a un
       cliente consulta "ocupado/libre" solo ahi, asi que con el modo silencioso

@@ -27,23 +27,25 @@ import type { UltimoContacto } from "./ultimoContactoStore.js";
 export const DIAS_TECHO_SILENCIO = 7;
 
 /**
- * Los intents cuya respuesta es texto fijo, derivados del catálogo en runtime
- * (CLAUDE.md secc. 7: nada de listas de intents hardcodeadas en TypeScript).
+ * Las frases de espera del catálogo, por TEXTO (docs/TASKS.md Bloque 38e).
  *
- * Una plantilla con `{variables}` queda AFUERA: su texto cambia en cada envío
- * porque lleva información real — la dirección, el horario, el clima. Repetir
- * eso no es lo que rompe la conversación.
+ * Antes esto eran ids de intent, y la supresión se decidía por el intent
+ * matcheado. No alcanza: desde el Bloque 38c, un escalamiento por baja
+ * confianza, un flujo de visitas o la red de última línea mandan la frase de
+ * espera del catálogo con el intent que sea. Mirando el texto, cuentan todos.
+ *
+ * Qué es una frase de espera lo dice el catálogo (`response.espera`), no una
+ * regla derivada: una despedida ("Gracias por avisarme...") también es texto
+ * fijo y no tiene por qué compartir el cupo.
  */
-export function plantillasFijas(catalog: IntentCatalog): ReadonlySet<string> {
-  const ids = new Set<string>();
+export function frasesDeEspera(catalog: IntentCatalog): ReadonlySet<string> {
+  const textos = new Set<string>();
   for (const intent of catalog.intents) {
-    if (intent.response.style !== "template") continue;
+    if (intent.response.espera !== true) continue;
     const template = intent.response.template;
-    if (!template) continue;
-    if (/\{[^}]+\}/.test(template)) continue;
-    ids.add(intent.id);
+    if (template) textos.add(template);
   }
-  return ids;
+  return textos;
 }
 
 export interface DecisionPlantilla {
@@ -55,36 +57,41 @@ export interface DecisionPlantilla {
 const NO_SUPRIMIR: DecisionPlantilla = { suprimir: false };
 
 export interface EntradaPrevia {
-  matchedIntentId: string;
   timestamp: string;
   responseSent?: string;
+  fraseDeEspera?: boolean;
 }
 
 /**
  * `historial` son las entradas **de esta conversación**, en cualquier orden.
  *
- * La supresión es por conversación en total, **no una por intent**: de las 7
- * plantillas fijas del catálogo, las 7 dicen lo mismo ("te paso con el
- * asesor"). Suprimir por intent le mandaría a la misma persona tres frases
- * distintas con el mismo contenido, que es el problema original con otra ropa.
+ * La supresión es por conversación en total, **no una por frase**: las frases
+ * de espera del catálogo dicen todas lo mismo ("te paso con el asesor").
+ * Suprimir por frase le mandaría a la misma persona tres versiones del mismo
+ * contenido, que es el problema original con otra ropa.
  */
 export function decidirPlantilla(args: {
-  intentId: string;
-  fijas: ReadonlySet<string>;
+  texto: string;
+  esperas: ReadonlySet<string>;
   historial: readonly EntradaPrevia[];
   ultimoContacto: UltimoContacto | null;
   ahora: Date;
 }): DecisionPlantilla {
-  const { intentId, fijas, historial, ultimoContacto, ahora } = args;
-  if (!fijas.has(intentId)) return NO_SUPRIMIR;
+  const { texto, esperas, historial, ultimoContacto, ahora } = args;
+  if (!esperas.has(texto)) return NO_SUPRIMIR;
 
   // La más reciente que EFECTIVAMENTE salió. `responseSent` vacío significa
-  // que no se envió nada (modo silencioso, o una supresión previa), y eso no
-  // gasta el único envío permitido.
+  // que no se envió nada (modo silencioso, una supresión previa, o un envío
+  // que falló), y eso no gasta el único envío permitido.
   let ultimaEnviada: number | undefined;
   for (const entrada of historial) {
-    if (!fijas.has(entrada.matchedIntentId)) continue;
     if (!entrada.responseSent) continue;
+    // El marcador lo escribió el envío, mirando el catálogo de ese momento.
+    // El texto es el respaldo para las entradas anteriores al Bloque 38e. Sin
+    // el marcador, editar una frase del catálogo le devolvería el cupo a toda
+    // conversación que tuviera la versión vieja en el historial, y la frase
+    // saldría de nuevo (revisión del PR #42).
+    if (entrada.fraseDeEspera !== true && !esperas.has(entrada.responseSent)) continue;
     const t = new Date(entrada.timestamp).getTime();
     if (Number.isNaN(t)) continue;
     if (ultimaEnviada === undefined || t > ultimaEnviada) ultimaEnviada = t;
@@ -110,7 +117,7 @@ export function decidirPlantilla(args: {
   return {
     suprimir: true,
     motivo:
-      `Plantilla fija ya enviada en esta conversación y el broker todavía no respondió: ` +
-      `el cliente NO recibió nada. Se escaló igual (docs/TASKS.md Bloque 31).`,
+      `Ya se le mandó una frase de espera en esta conversación y el broker todavía no ` +
+      `respondió: el cliente NO recibió nada. Se escaló igual (docs/TASKS.md Bloque 31).`,
   };
 }

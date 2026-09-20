@@ -55,4 +55,18 @@ export interface AuditLogEntry {
   envio?: "fallo" | "parcial";
   /** Por qué falló el envío, en una línea. */
   envioMotivo?: string;
+  /**
+   * Por qué no salió la frase de espera, si se suprimió (docs/TASKS.md
+   * Bloques 31 y 38e). Va aparte de `escalationReason`, que conserva el motivo
+   * real del escalamiento.
+   */
+  supresion?: string;
+  /**
+   * Lo que salió era una frase de espera del catálogo (docs/TASKS.md Bloque
+   * 38e). Lo escribe el envío, en el momento: así el cupo de una conversación
+   * no depende de que el texto del catálogo siga siendo el mismo mañana. Si
+   * falta —entradas anteriores a este bloque— se mira el texto de
+   * `responseSent` contra el catálogo vigente, que es lo que se hacía antes.
+   */
+  fraseDeEspera?: boolean;
 }
