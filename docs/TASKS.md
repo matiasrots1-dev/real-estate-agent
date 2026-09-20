@@ -4104,6 +4104,31 @@ nada lo muestra.
       con que uno caiga por debajo de 0.85 para que ese escale y salga la
       frase de espera. El historial ayuda, pero no lo garantiza.
 
+**Revision del PR (#53)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **Un "jaja" al final borraba un lead de la lista de pendientes.** La
+   seccion nueva de `pendientes` sacaba de la lista toda conversacion cuyo
+   **ultimo** mensaje fuera silencio. Si el cliente pregunto el precio y
+   despues mando un "jaja", la pregunta sigue sin responder y la conversacion
+   desaparecia igual. Ahora sale de la lista solo si **nada** en esa
+   conversacion fue una consulta concreta (`mejorIntent` con prioridad >= 3),
+   que es el dato que `pendientes` ya venia llevando.
+2. **Un resto del Bloque 38f que se me habia pasado.** `scripts/pendientes.mts`
+   seguia mirando `origen === "manual"` para saber si el broker habia
+   contestado a mano. Es exactamente el campo que el Bloque 38f saco de
+   circulacion porque un contacto del sistema se lo pisa: el dia que el
+   recontacto le escriba a alguien que el broker ya habia contestado, esa
+   conversacion volvia a aparecer como pendiente. Ahora usa
+   `contactoDelBroker`.
+
+**Pregunta que lo habria agarrado antes** (la del hallazgo 2, y es la misma
+que ya me habia hecho en la revision del #43): *¿quien mas lee este campo?* La
+respuesta fue incompleta porque busque solo en `apps/orchestrator/src` y los
+scripts de `scripts/` tambien lo leen. El grep tiene que cubrir el repo, no
+el paquete.
+
 **Pregunta que lo habria agarrado antes**: *¿que pasa si la respuesta correcta
 es no hacer nada?* El catalogo se diseno con la idea de que todo mensaje
 merece una respuesta, y por eso los dos unicos caminos —responder o escalar—
