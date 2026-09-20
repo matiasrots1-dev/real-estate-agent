@@ -3493,9 +3493,10 @@ como riesgo, y dejo el corpus de estilo todavia abierto.
       a la vez, dos corridas de recontacto. La cola de este bloque cubre solo
       el reporte. Va con el Bloque 40.
 
-## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora (PROPUESTO)
-Encontrado al disenar el Bloque 39; **no se toca en ese bloque** porque es el
-mismo camino. Espera la decision del dueno del repo.
+## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora
+Encontrado al disenar el Bloque 39; no se toco ahi porque es el mismo camino.
+El dueno del repo lo desbloqueo el 19/09, despues de desplegar el Bloque 38
+completo.
 
 - La retencion esta registrada en el scheduler, que corre cada 5 minutos
   (`SCHEDULER_INTERVAL_MS`). El reporte conserva las ultimas 12 corridas:
@@ -3511,6 +3512,59 @@ mismo camino. Espera la decision del dueno del repo.
   el reporte se conserva por tiempo (por ejemplo 90 dias), no por cantidad.
   Correr una vez por dia borra lo mismo, con hasta un dia de demora sobre los
   12 meses.
+
+**Lo que se midio antes de tocar nada (servidor, 19/09 23:0x)**
+- `retention_reports.jsonl`: 5265 bytes, **15 reportes, que cubren 72
+  minutos** (01:13 a 02:25 UTC). El recorte deja entre 12 y 24, asi que el
+  reporte de un borrado vive entre una y dos horas. El diagnostico del Bloque
+  39 queda confirmado con el archivo real.
+- **286 corridas en 24 hs**, todas con `dryRun: false` (el borrado real esta
+  habilitado en el servidor) y **0 registros borrados**: la entrada mas vieja
+  del audit log es del 26/07/2026, asi que el primer borrado real cae a fines
+  de julio de 2027.
+- **La superposicion no se dio nunca**: el intervalo entre corridas es 300 s
+  de mediana, minimo 300 s, y **ninguno por debajo de 290 s**. Hubo una vuelta
+  de 494 s — 194 s de trabajo extra en un tick — que igual no llego a
+  solaparse. O sea: el riesgo es de diseno, no un incidente.
+- Un reporte pesa 351 bytes. Una corrida por dia durante 90 dias son ~32 KB,
+  contra los ~100 KB **por dia** que generarian las 288 de hoy si se
+  conservaran.
+- El audit log pesa 253 KB y se **reescribe entero** en cada corrida que borra
+  algo. Pasar de 288 a 1 corrida por dia divide por 288 la ventana de la
+  carrera entre la purga y un `append` (riesgo abierto del Bloque 37).
+
+**Pre-mortem**
+
+**1. La retencion deja de correr y nadie se entera.** Al pasar de "en cada
+vuelta" a "una vez por dia", cualquier error en la condicion —la hora mal
+configurada, el proceso caido justo en la ventana, un cambio de huso— hace
+que no corra **nunca**, y el sintoma es silencio: exactamente lo mismo que se
+ve cuando corre y no borra nada. La politica de privacidad se incumple sin
+que nada lo muestre.
+   *Mitigacion*: la condicion no es "es tal hora" sino "ya paso la hora de hoy
+   y la ultima corrida es anterior a esa hora". Si el proceso estuvo caido
+   durante la ventana, corre en la primera vuelta despues de levantar, no al
+   dia siguiente. Tests de las dos cosas, y el arranque loguea cuando fue la
+   ultima corrida.
+
+**2. Corre varias veces el mismo dia y reescribe el audit log de mas.** Si la
+marca de "ya corri hoy" vive solo en memoria, cada deploy la borra (hubo dos
+el 19/09); si vive solo en el reporte, la borra un fallo al guardarlo — y ese
+`append` ya esta envuelto en un `catch` que lo deja pasar a proposito.
+   *Mitigacion*: la ultima corrida es el **maximo** entre la memoria del
+   proceso y la ultima del reporte. Un test por cada uno de los dos caminos.
+
+**3. El recorte por tiempo se lleva el reporte de un borrado.** Es lo que el
+bloque existe para evitar. Si el corte se calcula sobre fechas y una linea
+tiene la fecha ilegible, o el reloj de la maquina salta, el corte puede caer
+donde no debe y llevarse justo los reportes que importan.
+   *Mitigacion*: el corte sigue siendo **por posicion**, como en el Bloque 39
+   — se conserva desde el primer reporte dentro de la ventana, con las lineas
+   rotas que vengan despues; las anteriores a ese punto son mas viejas que lo
+   que se conserva. El reporte recien escrito siempre esta dentro de la
+   ventana, asi que el archivo nunca queda vacio. Test de que una linea rota
+   no arrastra a las posteriores.
+
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,
