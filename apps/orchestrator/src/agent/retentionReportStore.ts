@@ -67,13 +67,15 @@ function esReporte(valor: unknown): valor is RetentionReport {
 }
 
 /**
- * JSONL, igual que el audit log. Conserva las últimas corridas — suficiente
- * para comparar sin acumular para siempre un archivo con datos personales
- * (aunque sean enmascarados). Recorta recién cuando pasa el doble de
- * `maxCorridas`, y deja las últimas `maxCorridas`: recortar en cada corrida
- * reescribiría el archivo entero cada 5 minutos para agregar una línea.
- * (Ojo: la retención corre en cada vuelta del scheduler, así que hoy 12
- * corridas son una hora. Ver docs/TASKS.md Bloque 40.)
+ * JSONL, igual que el audit log. Conserva los reportes **por tiempo**, no por
+ * cantidad (docs/TASKS.md Bloque 40).
+ *
+ * Antes conservaba las últimas 12 corridas. Con la retención corriendo en
+ * cada vuelta del scheduler eso eran 72 minutos medidos en el servidor: desde
+ * julio de 2027, cuando empiece a borrar de verdad, el reporte de un borrado
+ * iba a desaparecer en poco más de una hora y el único rastro sería una línea
+ * de resumen en el journal, sin muestra. Con la retención corriendo una vez
+ * por día, 90 días de reportes son ~32 KB.
  *
  * **Una línea rota no lo frena** (docs/TASKS.md Bloque 39). Antes, `readAll`
  * tiraba: el recorte no se hacía nunca más, el archivo crecía, y el job moría
@@ -84,7 +86,8 @@ export class FileRetentionReportStore implements RetentionReportStore {
 
   constructor(
     private readonly filePath: string,
-    private readonly maxCorridas = 12
+    private readonly diasDeReportes = 90,
+    private readonly now: () => Date = () => new Date()
   ) {
     this.aviso = new AvisoDeIlegibles(ETIQUETA, filePath);
   }
@@ -129,21 +132,29 @@ export class FileRetentionReportStore implements RetentionReportStore {
 
   /**
    * Por posición, como la rotación misma (modo de fallo 3): se conserva todo
-   * desde el primer reporte que queda, líneas rotas incluidas. Las rotas
-   * anteriores a ese punto son más viejas que lo que se conserva y caen con
-   * la rotación, igual que caería un reporte legible.
+   * desde el primer reporte que entra en la ventana, líneas rotas incluidas.
+   * Las rotas anteriores a ese punto son más viejas que lo que se conserva y
+   * caen con la rotación, igual que caería un reporte legible. Una línea con
+   * la fecha ilegible no puede arrastrar a las posteriores: no define el
+   * corte, lo definen los reportes que sí se leen.
+   *
+   * Si **ningún** reporte entra en la ventana no se recorta nada. Pasa sólo
+   * si el reloj de la máquina salta hacia atrás — y ahí es preferible un
+   * archivo de más que borrar el único reporte de un borrado, que es
+   * justamente lo que este bloque existe para evitar.
    *
    * `protected` para que los tests puedan hacerlo fallar.
    */
   protected async recortar(): Promise<void> {
     const lineas = await leerArchivoJsonl(this.filePath, esReporte);
-    const posiciones = lineas.flatMap((l, i) => (l.valor ? [i] : []));
-    if (posiciones.length <= 2 * this.maxCorridas) {
+    const corte = this.now().getTime() - this.diasDeReportes * 24 * 60 * 60 * 1000;
+    const desde = lineas.findIndex(
+      (l) => l.valor !== undefined && new Date(l.valor.corridaAt).getTime() >= corte
+    );
+    if (desde <= 0) {
       this.aviso.avisar(ilegiblesDe(lineas));
       return;
     }
-
-    const desde = posiciones[posiciones.length - this.maxCorridas];
     const contenido = `${lineas
       .slice(desde)
       .map((l) => (l.valor ? JSON.stringify(l.valor) : l.ilegible.texto))

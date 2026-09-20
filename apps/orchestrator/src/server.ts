@@ -307,6 +307,7 @@ async function main() {
   // El purgado por retención va fuera del `if (sender)`: no manda mensajes, y
   // es una obligación de la política de privacidad publicada — tiene que
   // correr aunque WhatsApp no esté configurado (docs/TASKS.md Bloque 15).
+  const reportStore = new FileRetentionReportStore(config.retentionReportPath, config.retention.diasDeReportes);
   scheduler.register(
     createRetentionJob({
       auditLog,
@@ -314,11 +315,22 @@ async function main() {
       appointmentStore,
       recontactStateStore,
       lastInteractionStore,
-      reportStore: new FileRetentionReportStore(config.retentionReportPath),
+      reportStore,
       mesesMensajes: config.retention.mesesMensajes,
       mesesGestionComercial: config.retention.mesesGestionComercial,
       borradoHabilitado: config.retention.borradoHabilitado,
+      horaDeCorrida: config.retention.hora,
     })
+  );
+  // Que corra una vez por día significa que su silencio ya no es informativo:
+  // sin esta línea, "no corrió nunca" y "corrió y no borró nada" se ven igual
+  // (docs/TASKS.md Bloque 40, modo de fallo 1).
+  const corridas = await reportStore.readAll().catch(() => []);
+  const ultima = corridas.map((c) => c.corridaAt).sort().at(-1);
+  console.log(
+    `Retención: corre a las ${String(config.retention.hora).padStart(2, "0")}:00 (hora del servidor), ` +
+      `y conserva ${config.retention.diasDeReportes} días de reportes. ` +
+      (ultima ? `Última corrida: ${ultima}.` : "Sin corridas registradas todavía.")
   );
   if (!config.retention.borradoHabilitado) {
     console.warn(

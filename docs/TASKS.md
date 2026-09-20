@@ -3493,9 +3493,10 @@ como riesgo, y dejo el corpus de estilo todavia abierto.
       a la vez, dos corridas de recontacto. La cola de este bloque cubre solo
       el reporte. Va con el Bloque 40.
 
-## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora (PROPUESTO)
-Encontrado al disenar el Bloque 39; **no se toca en ese bloque** porque es el
-mismo camino. Espera la decision del dueno del repo.
+## Bloque 40 — La retencion corre cada 5 minutos y el reporte dura una hora
+Encontrado al disenar el Bloque 39; no se toco ahi porque es el mismo camino.
+El dueno del repo lo desbloqueo el 19/09, despues de desplegar el Bloque 38
+completo.
 
 - La retencion esta registrada en el scheduler, que corre cada 5 minutos
   (`SCHEDULER_INTERVAL_MS`). El reporte conserva las ultimas 12 corridas:
@@ -3511,6 +3512,146 @@ mismo camino. Espera la decision del dueno del repo.
   el reporte se conserva por tiempo (por ejemplo 90 dias), no por cantidad.
   Correr una vez por dia borra lo mismo, con hasta un dia de demora sobre los
   12 meses.
+
+**Lo que se midio antes de tocar nada (servidor, 19/09 23:0x)**
+- `retention_reports.jsonl`: 5265 bytes, **15 reportes, que cubren 72
+  minutos** (01:13 a 02:25 UTC). El recorte deja entre 12 y 24, asi que el
+  reporte de un borrado vive entre una y dos horas. El diagnostico del Bloque
+  39 queda confirmado con el archivo real.
+- **286 corridas en 24 hs**, todas con `dryRun: false` (el borrado real esta
+  habilitado en el servidor) y **0 registros borrados**: la entrada mas vieja
+  del audit log es del 26/07/2026, asi que el primer borrado real cae a fines
+  de julio de 2027.
+- **La superposicion no se dio nunca**: el intervalo entre corridas es 300 s
+  de mediana, minimo 300 s, y **ninguno por debajo de 290 s**. Hubo una vuelta
+  de 494 s — 194 s de trabajo extra en un tick — que igual no llego a
+  solaparse. O sea: el riesgo es de diseno, no un incidente.
+- Un reporte pesa 351 bytes. Una corrida por dia durante 90 dias son ~32 KB,
+  contra los ~100 KB **por dia** que generarian las 288 de hoy si se
+  conservaran.
+- El audit log pesa 253 KB y se **reescribe entero** en cada corrida que borra
+  algo. Pasar de 288 a 1 corrida por dia divide por 288 la ventana de la
+  carrera entre la purga y un `append` (riesgo abierto del Bloque 37).
+
+**Pre-mortem**
+
+**1. La retencion deja de correr y nadie se entera.** Al pasar de "en cada
+vuelta" a "una vez por dia", cualquier error en la condicion —la hora mal
+configurada, el proceso caido justo en la ventana, un cambio de huso— hace
+que no corra **nunca**, y el sintoma es silencio: exactamente lo mismo que se
+ve cuando corre y no borra nada. La politica de privacidad se incumple sin
+que nada lo muestre.
+   *Mitigacion*: la condicion no es "es tal hora" sino "ya paso la hora de hoy
+   y la ultima corrida es anterior a esa hora". Si el proceso estuvo caido
+   durante la ventana, corre en la primera vuelta despues de levantar, no al
+   dia siguiente. Tests de las dos cosas, y el arranque loguea cuando fue la
+   ultima corrida.
+
+**2. Corre varias veces el mismo dia y reescribe el audit log de mas.** Si la
+marca de "ya corri hoy" vive solo en memoria, cada deploy la borra (hubo dos
+el 19/09); si vive solo en el reporte, la borra un fallo al guardarlo — y ese
+`append` ya esta envuelto en un `catch` que lo deja pasar a proposito.
+   *Mitigacion*: la ultima corrida es el **maximo** entre la memoria del
+   proceso y la ultima del reporte. Un test por cada uno de los dos caminos.
+
+**3. El recorte por tiempo se lleva el reporte de un borrado.** Es lo que el
+bloque existe para evitar. Si el corte se calcula sobre fechas y una linea
+tiene la fecha ilegible, o el reloj de la maquina salta, el corte puede caer
+donde no debe y llevarse justo los reportes que importan.
+   *Mitigacion*: el corte sigue siendo **por posicion**, como en el Bloque 39
+   — se conserva desde el primer reporte dentro de la ventana, con las lineas
+   rotas que vengan despues; las anteriores a ese punto son mas viejas que lo
+   que se conserva. El reporte recien escrito siempre esta dentro de la
+   ventana, asi que el archivo nunca queda vacio. Test de que una linea rota
+   no arrastra a las posteriores.
+
+**Como quedo**
+- [x] La retencion corre **una vez por dia**, a la hora local del servidor que
+      diga `RETENTION_HORA` (default 4). El scheduler sigue pasando cada 5
+      minutos por los demas jobs; la retencion decide si le toca.
+- [x] La condicion es "ya paso la hora de hoy y la ultima corrida es anterior
+      a esa hora", **no** "es tal hora": si el proceso estuvo caido durante la
+      ventana, corre en la primera vuelta despues de levantar en vez de
+      saltearse el dia.
+- [x] "Cuando fue la ultima" es el **maximo** entre lo que recuerda el proceso
+      y lo que dice el reporte. Cada una sola falla en un caso real: la
+      memoria se borra en cada deploy (hubo dos el 19/09), y la del reporte
+      desaparece si el `append` falla — ese `catch` existe a proposito.
+- [x] Si el reporte no se puede leer, corre igual: purgar de mas es preferible
+      a no purgar nunca. Si se pudiera leer y estuviera al dia, no corre.
+- [x] El reporte se conserva **por tiempo** (`RETENTION_DIAS_DE_REPORTES`,
+      default 90 dias) y ya no por cantidad. El corte sigue siendo por
+      posicion, como en el Bloque 39, asi que una linea rota no define el
+      corte ni arrastra a las posteriores; y si ningun reporte entra en la
+      ventana —reloj de la maquina para atras— no se recorta nada.
+- [x] El scheduler **no arranca una vuelta si la anterior sigue corriendo**.
+      Una vuelta en la que un job falla no lo deja trabado.
+- [x] Una `RETENTION_HORA` que no sea una hora del dia (25, -1, 4.5, texto) se
+      ignora con un aviso y se usa el default. Con la hora rota la retencion
+      no correria nunca, y eso se ve igual que una corrida que no borro nada.
+- [x] El arranque loguea a que hora corre, cuantos dias de reportes conserva y
+      cuando fue la ultima corrida. Sin eso, "no corrio nunca" y "corrio y no
+      borro nada" se siguen viendo igual.
+- [x] 19 tests nuevos y los del reporte migrados del criterio por cantidad al
+      de por tiempo. Mutation testing, una por vez, las 11 mueren:
+      - P1. la retencion vuelve a correr en cada vuelta: 2 tests en rojo
+      - P2. la condicion es "es tal hora": 2 en rojo
+      - P3. no se mira lo que dice el reporte: 1 en rojo
+      - P4. no se recuerda en memoria: 1 en rojo
+      - P5. la memoria pisa al reporte en vez de tomarse el maximo: 1 en rojo
+      - P6. un reporte ilegible frena la retencion para siempre: 1 en rojo
+      - P7. el reporte se recorta por cantidad otra vez: 7 en rojo
+      - P8. el recorte borra todo si ningun reporte entra en la ventana: 1 en rojo
+      - P9. el scheduler vuelve a superponer vueltas: 1 en rojo
+      - P10. una vuelta que falla deja el scheduler trabado: 3 en rojo
+      - P11. una hora invalida en el env se propaga: **sobrevivio**, no habia
+        ningun test de la config. Se agregaron: 4 en rojo
+- [ ] Consecuencia asumida: el borrado puede demorar **hasta un dia** sobre el
+      plazo de 12 meses. La politica publicada dice "cumplido el plazo, los
+      datos se eliminan", sin frecuencia, asi que entra — pero queda escrito
+      para que sea una decision y no un descubrimiento.
+- [ ] Sigue abierto: la carrera entre la purga y un `append` (Bloque 37) no se
+      cierra, se achica. Pasa de 288 ventanas por dia a 1.
+
+**Revision del PR (#46)**
+
+Dos hallazgos, los dos arreglados en el mismo PR.
+
+1. **La hora se validaba y los plazos no.** El bloque agrego `horaValida`
+   porque una hora rota deja a la retencion sin correr en silencio — y dejo
+   `Number(env.RETENTION_MESES_MENSAJES)` y `Number(env.RETENTION_DIAS_DE_REPORTES)`
+   como estaban, a un par de lineas de distancia. `Number("abc")` es `NaN`, y
+   un `NaN` en los meses **apaga la purga sin decir nada** (las comparaciones
+   contra una fecha invalida dan todas falso); uno en los dias hace que el
+   reporte no se recorte nunca. Es exactamente el mismo modo de fallo que
+   motivo la guarda, en el campo de al lado. Ahora los tres pasan por la misma
+   validacion, con aviso.
+   **Lo que lo agarro**: preguntarse *que otro valor del mismo bloque entra
+   sin validar por el mismo camino*, en vez de dar por cerrado el campo que
+   motivo la guarda.
+2. **Dos instancias del store del reporte.** El log del arranque construia una
+   segunda `FileRetentionReportStore` **sin** los dias configurados. Hoy no
+   hace dano (esa instancia solo lee), pero es una bomba para el que manana le
+   agregue un `append`: recortaria con 90 dias aunque el env diga otra cosa.
+   Una sola instancia, compartida.
+
+Mutation testing de la revision (2 mas):
+
+      - P12. un plazo invalido apaga la purga en silencio: 3 en rojo
+      - P13. el arranque no dice cuando fue la ultima corrida: **sobrevive**
+
+**P13 queda sin test, y hay que decirlo**: el log del arranque vive en
+`server.ts`, que no se puede ejercitar sin levantar el servidor entero (MCPs y
+puerto incluidos), y no hay hoy ningun test que lo haga. Asi que la mitigacion
+**testeada** del modo de fallo 1 es la condicion de puesta al dia (P1, P2) y
+el maximo entre las dos marcas (P3, P4, P5), no el log: el log ayuda al que
+mire el journal, pero nada garantiza que siga saliendo.
+
+**Pregunta que lo habria agarrado antes**: *cuando agrego una validacion
+porque un valor roto falla en silencio, ¿que otros valores del mismo camino
+entran sin validar?*
+
+
 
 ## Bloque 33 — Persistencia real (Postgres), si el volumen ya lo justifica
 - [ ] Evaluar si los archivos JSON (`AuditLogStore`, `AppointmentStore`,

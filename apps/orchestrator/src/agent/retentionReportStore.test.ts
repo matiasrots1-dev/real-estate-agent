@@ -13,10 +13,14 @@ import { InMemoryRecontactStateStore } from "./recontactStateStore.js";
 import { InMemoryLastInteractionStore } from "./lastInteractionStore.js";
 import { createRetentionJob } from "../jobs/retention.js";
 
-function reporte(id: string): RetentionReport {
+const BASE = new Date("2027-08-01T07:00:00.000Z");
+/** Una fecha de corrida relativa a `BASE`, para probar el recorte por tiempo. */
+const enDias = (dias: number) => new Date(BASE.getTime() + dias * 24 * 60 * 60 * 1000).toISOString();
+
+function reporte(id: string, corridaAt = BASE.toISOString()): RetentionReport {
   return {
     id,
-    corridaAt: "2027-08-01T07:00:00.000Z",
+    corridaAt,
     dryRun: false,
     cutoffMensajes: "2026-08-01T07:00:00.000Z",
     cutoffGestionComercial: "2025-08-01T07:00:00.000Z",
@@ -51,16 +55,33 @@ describe("FileRetentionReportStore", () => {
     expect(await new FileRetentionReportStore(archivo).readAll()).toEqual([]);
   });
 
-  // Hallazgo de la revisión del PR: recortar en cada corrida reescribía el
-  // archivo entero cada 5 minutos para agregar una línea.
-  it("recorta recién al pasar el doble de N, y deja las últimas N", async () => {
-    const store = new FileRetentionReportStore(archivo, 3);
-    for (const id of ["r1", "r2", "r3", "r4", "r5", "r6"]) await store.append(reporte(id));
-    expect(await store.readAll()).toHaveLength(6);
+  // docs/TASKS.md Bloque 40: se conserva por TIEMPO, no por cantidad. Antes
+  // eran las últimas 12 corridas, y con la retención corriendo en cada vuelta
+  // del scheduler eso medía 72 minutos en el servidor.
+  it("conserva los reportes de los últimos N días y deja caer los más viejos", async () => {
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
 
-    await store.append(reporte("r7"));
+    for (const [id, dias] of [
+      ["r1", -10],
+      ["r2", -5],
+      ["r3", -2],
+      ["r4", -1],
+      ["r5", 0],
+    ] as const) {
+      await store.append(reporte(id, enDias(dias)));
+    }
 
-    expect((await store.readAll()).map((r) => r.id)).toEqual(["r5", "r6", "r7"]);
+    expect((await store.readAll()).map((r) => r.id)).toEqual(["r3", "r4", "r5"]);
+  });
+
+  // La cantidad de corridas ya no dice nada: con una por día, 90 reportes son
+  // 90 días; con una cada 5 minutos, 90 reportes eran 7 horas y media.
+  it("no recorta por cantidad: 20 corridas del mismo día quedan todas", async () => {
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
+
+    for (let i = 0; i < 20; i += 1) await store.append(reporte(`r${i}`, enDias(0)));
+
+    expect(await store.readAll()).toHaveLength(20);
   });
 });
 
@@ -93,39 +114,59 @@ describe("FileRetentionReportStore con una línea rota", () => {
   it("append no tira y sigue recortando aunque haya una línea rota", async () => {
     await writeFile(
       archivo,
-      linea(reporte("r1")) + "{rota\n" + linea(reporte("r2")) + linea(reporte("r3")) + linea(reporte("r4"))
+      linea(reporte("r1", enDias(-10))) +
+        "{rota\n" +
+        linea(reporte("r2", enDias(-5))) +
+        linea(reporte("r3", enDias(-2)))
     );
-    const store = new FileRetentionReportStore(archivo, 2);
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
 
-    await store.append(reporte("r5"));
+    await store.append(reporte("r4", enDias(0)));
 
-    expect((await store.readAll()).map((r) => r.id)).toEqual(["r4", "r5"]);
+    expect((await store.readAll()).map((r) => r.id)).toEqual(["r3", "r4"]);
   });
 
-  // Modo de fallo 3: el recorte es por posición, como la rotación.
-  it("el recorte conserva la línea rota que quedó dentro de las últimas N corridas", async () => {
+  // Modo de fallo 3: el recorte es por posición, como la rotación. Una línea
+  // rota no tiene fecha, así que no puede definir el corte — lo definen los
+  // reportes que sí se leen, y ella queda o cae según dónde esté.
+  it("el recorte conserva la línea rota que quedó dentro de la ventana", async () => {
     await writeFile(
       archivo,
-      linea(reporte("r1")) + linea(reporte("r2")) + linea(reporte("r3")) + linea(reporte("r4")) + "{rota-reciente\n"
+      linea(reporte("r1", enDias(-10))) + linea(reporte("r2", enDias(-2))) + "{rota-reciente\n"
     );
-    const store = new FileRetentionReportStore(archivo, 2);
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
 
-    await store.append(reporte("r5"));
+    await store.append(reporte("r3", enDias(0)));
 
-    // Quedan r4 y r5, y la línea rota que está entre los dos.
-    expect(await readFile(archivo, "utf-8")).toBe(linea(reporte("r4")) + "{rota-reciente\n" + linea(reporte("r5")));
+    expect(await readFile(archivo, "utf-8")).toBe(
+      linea(reporte("r2", enDias(-2))) + "{rota-reciente\n" + linea(reporte("r3", enDias(0)))
+    );
   });
 
   it("y deja caer, con la rotación, la línea rota anterior a lo que se conserva", async () => {
     await writeFile(
       archivo,
-      "{rota-vieja\n" + linea(reporte("r1")) + linea(reporte("r2")) + linea(reporte("r3")) + linea(reporte("r4"))
+      "{rota-vieja\n" + linea(reporte("r1", enDias(-10))) + linea(reporte("r2", enDias(-2)))
     );
-    const store = new FileRetentionReportStore(archivo, 2);
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
 
-    await store.append(reporte("r5"));
+    await store.append(reporte("r3", enDias(0)));
 
-    expect(await readFile(archivo, "utf-8")).toBe(linea(reporte("r4")) + linea(reporte("r5")));
+    expect(await readFile(archivo, "utf-8")).toBe(
+      linea(reporte("r2", enDias(-2))) + linea(reporte("r3", enDias(0)))
+    );
+  });
+
+  // El reporte recién escrito siempre está dentro de la ventana, así que esto
+  // sólo pasa si el reloj de la máquina salta hacia atrás. Preferimos un
+  // archivo de más antes que borrar el único rastro de un borrado.
+  it("si ningún reporte entra en la ventana, no recorta nada", async () => {
+    await writeFile(archivo, linea(reporte("r1", enDias(-100))) + linea(reporte("r2", enDias(-99))));
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
+
+    await store.append(reporte("r3", enDias(-98)));
+
+    expect((await store.readAll()).map((r) => r.id)).toEqual(["r1", "r2", "r3"]);
   });
 
   // Modo de fallo 1: el reporte siguiente se pegaba a la media línea y se perdía.
@@ -163,19 +204,20 @@ describe("FileRetentionReportStore con una línea rota", () => {
   // Hallazgo de la revisión del PR: el aviso salía con números de antes del
   // recorte, que ya no apuntaban a la línea rota.
   it("después de un recorte avisa de nuevo, con los números del archivo recortado", async () => {
-    const previos = ["r1", "r2", "r3", "r4", "r5"].map((id) => linea(reporte(id))).join("");
-    await writeFile(archivo, previos + "{rota\n");
-    const store = new FileRetentionReportStore(archivo, 3);
+    await writeFile(archivo, linea(reporte("r1", enDias(-2))) + linea(reporte("r2", enDias(-1))) + "{rota\n");
+    let ahora = BASE;
+    const store = new FileRetentionReportStore(archivo, 3, () => ahora);
 
-    await store.append(reporte("r6")); // 6 reportes: no recorta; la rota es la línea 6
-    await store.append(reporte("r7")); // 7: recorta desde r5; la rota pasa a la línea 2
+    await store.append(reporte("r3", enDias(0))); // todo entra: no recorta, la rota es la línea 3
+    ahora = new Date(BASE.getTime() + 2 * 24 * 60 * 60 * 1000);
+    await store.append(reporte("r4", enDias(2))); // r1 se cae: la rota pasa a la línea 2
 
     // El segundo aviso sale en el mismo append que recorta, no en el siguiente.
     expect(console.warn).toHaveBeenCalledTimes(2);
-    expect(String(vi.mocked(console.warn).mock.calls[0][0])).toContain("línea 6");
+    expect(String(vi.mocked(console.warn).mock.calls[0][0])).toContain("línea 3");
     expect(String(vi.mocked(console.warn).mock.calls[1][0])).toContain("línea 2");
 
-    await store.append(reporte("r8")); // no recorta: nada nuevo que avisar
+    await store.append(reporte("r5", enDias(2))); // no recorta: nada nuevo que avisar
     expect(console.warn).toHaveBeenCalledTimes(2);
   });
 
@@ -200,12 +242,22 @@ describe("FileRetentionReportStore con una línea rota", () => {
   // de nombre fijo, uno le renombraba el temporal al otro; en Windows, el
   // rename falla si el otro tiene el archivo abierto).
   it("appends simultáneos van de a uno: ninguno falla ni se pierde", async () => {
-    const store = new FileRetentionReportStore(archivo, 3);
+    const store = new FileRetentionReportStore(archivo, 3, () => BASE);
+    const corridas: Array<[string, number]> = [
+      ["a", -10],
+      ["b", -9],
+      ["c", -8],
+      ["d", -7],
+      ["e", -2],
+      ["f", -1],
+      ["g", 0],
+    ];
 
-    await Promise.all(["a", "b", "c", "d", "e", "f", "g"].map((id) => store.append(reporte(id))));
+    await Promise.all(corridas.map(([id, dias]) => store.append(reporte(id, enDias(dias)))));
 
     expect(console.error).not.toHaveBeenCalled();
-    // 7 pasa el doble de 3: se recortó una vez y quedaron los últimos, en orden.
+    // Los cuatro viejos se recortaron en el camino, y los tres de la ventana
+    // quedaron en orden.
     expect((await store.readAll()).map((r) => r.id)).toEqual(["e", "f", "g"]);
     expect((await readdir(dir)).filter((n) => n.endsWith(".tmp"))).toEqual([]);
   });
@@ -256,6 +308,7 @@ describe("el job de retención con una línea rota en el reporte", () => {
       mesesMensajes: 12,
       mesesGestionComercial: 24,
       borradoHabilitado: true,
+      horaDeCorrida: 4,
       now: () => new Date("2027-08-01T07:00:00.000Z"),
     });
 
@@ -285,6 +338,7 @@ describe("el job de retención con una línea rota en el reporte", () => {
       mesesMensajes: 12,
       mesesGestionComercial: 24,
       borradoHabilitado: true,
+      horaDeCorrida: 4,
       now: () => new Date("2027-08-01T07:00:00.000Z"),
     });
 
