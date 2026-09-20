@@ -1878,6 +1878,81 @@ cayeron en `fallback_low_confidence`** (74%).
 recibe la plantilla de espera y un escalamiento. Eso es aceptable como red,
 pero no como comportamiento del 39% de las conversaciones.
 
+### Lo que se midio al retomarlo (20/09) — el diagnostico cambia
+Con 430 mensajes resueltos y 71 conversaciones (contra los 250 y 41 de
+agosto), y cruzando con las **45 conversaciones que el dueno del repo ya
+etiqueto a mano** (L = lead, N = no es lead, D = dudosa):
+
+    conversaciones                                             71
+    etiquetadas                                                45
+    ---------------------------------------------------------------
+    L (lead) que matchearon algun intent concreto              11
+    L (lead) que SOLO cayeron en fallback                       5   <- el agujero real
+    N (no es lead) que SOLO cayeron en fallback                12   <- fallback ACERTO
+    N (no es lead) que matchearon un intent concreto           16   <- el riesgo real
+    sin etiquetar                                              26
+
+**1. El 68% de fallback no es lo que parecia.** De las 28 conversaciones que
+solo cayeron en fallback, **23 no son leads**: son conversaciones personales
+del broker, de la universidad, pagos, chistes con amigos, y mensajes de
+prueba. La linea del bot es la linea de trabajo real del broker, y por ahi
+entra todo. Para esas, **fallback es la respuesta correcta**, no un error del
+catalogo.
+
+**2. El riesgo esta al reves de como lo planteaba el bloque.** Hay **16
+conversaciones etiquetadas "no es lead" que SI matchearon un intent
+concreto**, contra 5 leads que no matchearon ninguno. Con el modo silencioso
+apagado, esas 16 reciben una respuesta del bot como si fueran clientes — un
+amigo del broker recibiendo "¿Querés que coordinemos una visita?". Un falso
+positivo le escribe a alguien; un falso negativo solo escala al broker. No
+son simetricos, y hoy los falsos positivos son **tres veces mas**.
+
+**3. El umbral de confianza queda descartado con datos.** De los 291 mensajes
+en fallback, **solo 4 tienen confianza >= 0.5** (mediana 0.15, minimo 0.02).
+Bajar el umbral no recupera nada: el clasificador no esta dudando, esta
+diciendo que no reconoce nada. El sub-item "revisar tambien los umbrales" se
+cierra: **medido, no es por ahi**.
+
+**4. Los 5 leads que se escaparon, uno por uno.** Son mas parecidos entre si
+de lo que se esperaba:
+- dos son **rechazos explicitos** ("gracias x escribir, pero no estoy
+  interesada", "no, gracias por la atencion"). El intent `rechazo_desinteres`
+  **existe** y no matcheo: es precision del catalogo, no un intent faltante.
+- dos piden **"el link"** ("recordame el link porfa", "tendras el link? me
+  perdi cual es"). Tambien hay intent (`pedido_ficha_multimedia`) y tampoco
+  matcheo.
+- uno es un **"dale" pelado** ("Hola. Dale!"), que responde a algo que el
+  broker mando por fuera del bot.
+
+**5. Lo que explica a los tres ultimos: el bot no ve lo que el broker
+escribio.** El contexto del clasificador incluye los mensajes previos **del
+cliente**, nunca los del broker. El eco de coexistencia trae ese texto —hoy
+se usa para el corpus de estilo— pero no llega al clasificador. Un "Dale!" o
+un "recordame el link" son imposibles de clasificar sin saber a que
+responden. Esto es un bloque aparte y **toca privacidad** (guardar lo que el
+broker escribe, no solo su forma anonimizada), asi que necesita una decision
+del dueno del repo.
+
+**Lo que queda para decidir, no para programar**
+- [ ] Que hacer con una conversacion que **no es del negocio**. Hoy el bot no
+      tiene forma de callarse: todo intent o escala (y manda la frase de
+      espera) o responde. Para un amigo del broker las dos cosas estan mal.
+      Opciones: un intent nuevo que no responde ni escala, o una decision
+      previa al catalogo ("¿esta persona es un contacto del negocio?") usando
+      lo que ya sabemos — si esta en Tokko, si hablo de propiedades antes.
+- [ ] Si se le pasa al clasificador lo que el broker escribio (punto 5).
+- [ ] Recien despues, afinar los triggers de `rechazo_desinteres` y
+      `pedido_ficha_multimedia`, con `npm run medir:clasificador` antes y
+      despues: es el criterio de aceptacion del catalogo y cuesta ~90 llamadas
+      a la API por corrida.
+
+**Pregunta que lo habria agarrado antes**: *¿el numero grande esta contando lo
+que creo?* El "39% de las conversaciones no matchean nada" era cierto y no
+significaba lo que parecia: la mayoria de ese 39% no tenia que matchear nada.
+Sin las etiquetas manuales, el bloque habria arrancado agregando intents para
+cubrir conversaciones que el bot no deberia contestar.
+
+
 ## Bloque 29 — Leads que llegan por WhatsApp y no quedan en el CRM
 No es un problema de codigo: es un agujero de la operacion, detectado por el
 sistema. Anotado a pedido del dueno del repo.
