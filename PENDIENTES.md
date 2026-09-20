@@ -6,7 +6,33 @@ en [docs/TASKS.md](docs/TASKS.md); esto solo ordena y apunta.
 **Se actualiza en el mismo PR que cierra un bloque o registra una decisión.**
 Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde quedó.
 
-Última actualización: 2026-09-19
+Última actualización: 2026-09-20
+
+## Dónde quedamos (20/09, 06:30)
+
+Lo último que se hizo, en orden: **Bloque 38 completo**, **Bloque 40**
+(retención diaria) y **Bloque 27** (recontacto seguro). Los tres están
+mergeados y **desplegados**. La suite está en 825 tests.
+
+**Lo que sigue, por orden de lo que bloquea apagar el modo silencioso:**
+
+1. **Bloque 28 — el catálogo no resiste el tráfico real.** Es el único
+   bloqueante que queda sin tocar: 39% de las conversaciones caen en
+   `fallback_low_confidence` y hay que revisar el catálogo contra las 38
+   conversaciones reales. Necesita decisiones tuyas sobre qué responder en
+   cada caso, así que conviene empezarlo juntos.
+2. **Tu calendario personal** para no ofrecer horarios encima de tus
+   compromisos: hay que compartirlo con la cuenta del bot (lo hacés vos) y
+   después sumar el calendario a la consulta de ocupado/libre (lo hago yo).
+3. **Habilitar el recontacto**: revisar varias corridas de
+   `npm run recontacto:simulacro` y decidir. Ojo: falta cablear una de las
+   tres fuentes de números internos (los teléfonos de los usuarios de Tokko),
+   y hasta que esté el job se queda en simulacro aunque lo habilites.
+
+**Para retomar en una sesión nueva**: leer `CLAUDE.md`, después este archivo,
+y después la sección del bloque que toque en `docs/TASKS.md` (cada bloque
+cerrado tiene "Lo que se midió", el pre-mortem, "Como quedó" y la revisión del
+PR). No hace falta nada más: todo lo decidido está en esos tres lugares.
 
 ## Estado ahora
 
@@ -40,6 +66,9 @@ Si un tema queda a medias porque se pasa a otra cosa, se anota acá dónde qued�
   pasa a correr **una vez por dia a las 04:00** del servidor, y su reporte se
   conserva 90 dias en vez de una hora. Verificado en el arranque: "Retención:
   corre a las 04:00 (hora del servidor), y conserva 90 días de reportes".
+- **Desplegado el 20/09 a las 06:23** (`c1cf821`): Bloque 27. El job de
+  recontacto ahora corre la misma política que el simulacro. Verificado: sigue
+  **sin registrarse** por el modo silencioso, que es lo esperado.
 - **`main` protegida desde el 19/09**: PR obligatorio, 0 aprobaciones, sin
   excepcion para administradores. Verificado por la API de GitHub.
 - **Los borradores al ...6699 llegan** (confirmado el 19/09). Ojo: todo lo que
